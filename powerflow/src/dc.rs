@@ -283,7 +283,7 @@ pub enum DcSolver {
     /// rules out.)
     Lu,
     /// No solve was needed: every connected bus is a reference bus.
-    None,
+    NoSolve,
 }
 
 impl DcModel {
@@ -341,7 +341,7 @@ impl DcModel {
             .copied()
             .collect();
         let solver = if unknown.is_empty() {
-            DcSolver::None
+            DcSolver::NoSolve
         } else {
             let b_unknown = self
                 .bbus
