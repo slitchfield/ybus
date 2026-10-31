@@ -93,12 +93,20 @@ fn main() -> Result<(), SparseError> {
   validates raw arrays. `into_raw_parts`, `pointers`, `indices` and `values` expose the arrays.
 - A fixed pattern: `values_mut` changes values in place, and a stored entry stays stored when
   its value is zero. `num_stored` counts the pattern and `num_nonzero` the nonzero values.
+- Slots in `values`, for refilling without searching: `outer(i)` and `outer_mut(i)` borrow a
+  CSR row or CSC column's indices and values without copying, `position(row, col)` finds an
+  entry's slot by binary search, and `diagonal_positions` gives the diagonal's slots, computed
+  once and cached, since the pattern can't change.
+- **Assembly maps:** `from_triplets_mapped` builds the same matrix as `from_triplets` along
+  with an `AssemblyMap` of each triplet's slot, and `refill` reassembles new values for the
+  same triplets in O(triplets), with no sorting or searching, bit for bit as `from_triplets`
+  would. For matrices rebuilt with new values, such as a Jacobian at every Newton iteration.
 - `transpose` returns the same arrays in the other orientation, in O(1); `to_csr` and `to_csc`
   reorient explicitly, in O(nnz); `to_sparse` converts back, dropping stored zeros.
 - Equality is mathematical: the same shape and nonzero entries, whatever the orientation or
   stored zeros, also against a `SparseMatrix`.
-- **Access:** `row(i)` and `row_iter` on CSR, `col(j)` and `col_iter` on CSC (where each is a
-  slice), and `iter`, `diagonal`, `submatrix`, `select` (arbitrary index lists in any order),
+- **Access:** `row(i)` and `row_iter` on CSR, `col(j)` and `col_iter` on CSC (copies of the
+  slices `outer` borrows), and `iter`, `diagonal`, `submatrix`, `select` (arbitrary index lists in any order),
   `permute` and `permute_symmetric` (P A Pᵀ) in either orientation.
 - **Products:** `mul_vec` (`&a * &x`), `vec_mul` (`&x * &a`), `mul_dense` and sparse × sparse
   `matmul` (`&a * &b`, Gustavson's algorithm, keeping every reachable position). Sums walk

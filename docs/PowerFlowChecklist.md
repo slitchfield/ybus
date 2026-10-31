@@ -217,13 +217,37 @@ Merged in PR #2.
       element edits and reads, `iter` (which now sorts on demand, so it works for any shape),
       transposes, `to_dense`, Matrix Market I/O, `serde`, and `to_csr`/`to_csc`. `from_csr` is
       gone in favour of `CsrMatrix::try_from_raw_parts`.
-- [ ] Zero-copy major-axis slices (a CSR row or a CSC column), `position(i, j)` by binary search,
-      and cached diagonal positions.
-- [ ] An assembly map built once from a triplet list's positions that records each triplet's
+- [x] Zero-copy major-axis slices (a CSR row or a CSC column), `position(i, j)` by binary search,
+      and cached diagonal positions. `outer(i)` borrows a row (CSR) or column (CSC) as its
+      index and value slices, and `outer_mut(i)` makes the values mutable for refills.
+      `position(row, col)` returns the entry's slot in `values()`, or `None` if it isn't
+      stored. `diagonal_positions()` computes the diagonal's slots on first use and caches
+      them in a `OnceLock`; a fixed pattern means the cache never goes stale, so values can
+      change freely, and `transpose` keeps it, since a diagonal entry keeps its slot.
+- [x] An assembly map built once from a triplet list's positions that records each triplet's
       slot in `values`, so a refill with new values is an O(nnz) write with no hashing. Test that
       a refill matches a fresh `from_triplets`.
-- [ ] Benchmark: refilling Ybus and Jacobian-sized patterns through the assembly map versus
+      `CompressedMatrix::from_triplets_mapped` returns the matrix and an `AssemblyMap<O>`, and
+      `refill(&map, &values)` takes one value per triplet. Each position's first triplet is
+      written and the rest added in input order, so a refill equals `from_triplets` bit for bit,
+      down to the sign of a zero (tested on 200 inexact triplets with repeats, in both
+      orientations). The map carries the orientation in its type, so it can't refill a matrix of
+      the other orientation, and checks the shape and stored count (`PatternMismatch`) and the
+      number of values (`LengthMismatch`, both new errors) before writing anything.
+- [x] Benchmark: refilling Ybus and Jacobian-sized patterns through the assembly map versus
       `from_triplets`.
+      `powerflow/benches/assembly.rs`, on case2383wp, on the maintainer's machine (medians):
+
+      | Pattern | Size, triplets | `from_triplets` | `refill` | Speedup |
+      |---|---|---|---|---|
+      | B stamps (Ybus-shaped) | 2,383², 11,584 | 69.0 µs | 5.39 µs | 12.8× |
+      | 2×2 blocks (Jacobian-shaped) | 4,766², 46,336 | 309.0 µs | 34.9 µs | 8.9× |
+
+      The block pattern expands each B stamp into the four quadrants, as the polar Jacobian's
+      blocks share Ybus's pattern. Its refill costs more per triplet: its map and values
+      (about 1.1 MB) outgrow the cache, so the scattered writes miss. Routing `from_triplets`
+      through the shared core left the DC model step unchanged (382.6 µs, against 387.7 µs
+      before).
 
 ## Phase 3: Factorization rewrite (the largest piece)
 

@@ -1,7 +1,7 @@
 // Tests for CompressedMatrix (CsrMatrix and CscMatrix): construction, validation, the fixed
 //   pattern and its stored zeros, transposing and reorienting, equality and formatting.
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
+use sparse_mat::compressed_matrix::{CompressedMatrix, CscMatrix, CsrMatrix};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::sparse_matrix::SparseMatrix;
 
@@ -916,6 +916,136 @@ fn diagonal_in_both_orientations() {
 }
 
 #[test]
+fn outer_borrows_a_row_or_column() {
+    let csr = sample_4x6();
+    assert_eq!(
+        csr.outer(2).unwrap(),
+        (&[2, 3, 4][..], &[50.0, 60.0, 70.0][..])
+    );
+    let csc = csr.to_csc();
+    assert_eq!(csc.outer(3).unwrap(), (&[1, 2][..], &[40.0, 60.0][..]));
+    // The slices are the arrays' own: entry k is slot pointers()[i] + k
+    for i in 0..4 {
+        let (indices, values) = csr.outer(i).unwrap();
+        let start = csr.pointers()[i];
+        assert_eq!(indices, &csr.indices()[start..start + indices.len()]);
+        assert_eq!(values.as_ptr(), csr.values()[start..].as_ptr());
+    }
+    // An empty row, and stored zeros
+    let empty: (&[usize], &[f64]) = (&[], &[]);
+    assert_eq!(
+        CsrMatrix::<f64>::from_triplets(2, 3, Vec::new())
+            .unwrap()
+            .outer(1)
+            .unwrap(),
+        empty
+    );
+    let with_zero = CsrMatrix::from_triplets(1, 3, vec![(0, 0, 1.0), (0, 2, 0.0)]).unwrap();
+    assert_eq!(with_zero.outer(0).unwrap(), (&[0, 2][..], &[1.0, 0.0][..]));
+
+    assert_eq!(
+        csr.outer(4).err(),
+        Some(SparseError::OutOfRange { index: 4, len: 4 })
+    );
+    assert_eq!(
+        csc.outer(6).err(),
+        Some(SparseError::OutOfRange { index: 6, len: 6 })
+    );
+}
+
+#[test]
+fn outer_mut_refills_in_place() {
+    let mut csr = sample_4x6();
+    {
+        let (indices, values) = csr.outer_mut(2).unwrap();
+        assert_eq!(indices, [2, 3, 4]);
+        for (value, &col) in values.iter_mut().zip(indices) {
+            *value = col as f64;
+        }
+    }
+    // Setting a value to zero keeps it stored
+    csr.outer_mut(0).unwrap().1[1] = 0.0;
+    assert_eq!(csr.indices(), sample_4x6().indices());
+    assert_eq!(csr.row(2).unwrap().values(), [2.0, 3.0, 4.0]);
+    assert_eq!(csr.num_stored(), 8);
+    assert_eq!(csr.num_nonzero(), 7);
+
+    let mut csc = sample_4x6().to_csc();
+    csc.outer_mut(3).unwrap().1.copy_from_slice(&[-1.0, -2.0]);
+    assert_eq!(csc.col(3).unwrap().values(), [-1.0, -2.0]);
+    assert_eq!(
+        csc.outer_mut(6).err(),
+        Some(SparseError::OutOfRange { index: 6, len: 6 })
+    );
+}
+
+#[test]
+fn position_finds_each_stored_entry() {
+    let csr = sample_4x6();
+    let csc = csr.to_csc();
+    let dense = csr.to_dense();
+    for (row, dense_row) in dense.iter().enumerate() {
+        for (col, &value) in dense_row.iter().enumerate() {
+            let stored = value != 0.0;
+            for (position, values) in [
+                (csr.position(row, col).unwrap(), csr.values()),
+                (csc.position(row, col).unwrap(), csc.values()),
+            ] {
+                assert_eq!(position.is_some(), stored, "({row}, {col})");
+                if let Some(p) = position {
+                    assert_eq!(values[p], value);
+                }
+            }
+        }
+    }
+    // A stored zero has a position
+    let with_zero = CscMatrix::from_triplets(2, 2, vec![(1, 0, 0.0)]).unwrap();
+    assert_eq!(with_zero.position(1, 0), Ok(Some(0)));
+    assert_eq!(with_zero.position(0, 0), Ok(None));
+
+    for (row, col) in [(4, 0), (0, 6)] {
+        let error = Some(SparseError::OutOfBounds {
+            row,
+            col,
+            shape: (4, 6),
+        });
+        assert_eq!(csr.position(row, col).err(), error);
+        assert_eq!(csc.position(row, col).err(), error);
+    }
+}
+
+#[test]
+fn diagonal_positions_are_cached_and_survive_refills() {
+    let mut csr = sample_4x6();
+    let expected = [Some(0), Some(2), Some(4), None];
+    assert_eq!(csr.diagonal_positions(), expected);
+    for (i, &position) in expected.iter().enumerate() {
+        assert_eq!(csr.position(i, i), Ok(position));
+    }
+    // The cache stays right after values change, including to zero
+    csr.values_mut()[2] = 0.0;
+    assert_eq!(csr.diagonal_positions(), expected);
+    assert_eq!(csr.diagonal().indices(), [0, 1, 2]);
+    assert_eq!(csr.diagonal().values(), [10.0, 0.0, 50.0]);
+
+    // A clone and a transpose keep it; reorienting finds the new slots
+    let clone = csr.clone();
+    assert_eq!(clone.diagonal_positions(), expected);
+    let transposed = csr.clone().transpose();
+    assert_eq!(transposed.diagonal_positions(), expected);
+    let csc = csr.to_csc();
+    let csc_expected: Vec<Option<usize>> = (0..4).map(|i| csc.position(i, i).unwrap()).collect();
+    assert_eq!(csc.diagonal_positions(), csc_expected);
+    assert_eq!(csc_expected, [Some(0), Some(2), Some(3), None]);
+    assert_eq!(csc.to_csr().diagonal_positions(), expected);
+
+    // Rectangular and empty matrices
+    let tall = CscMatrix::from_triplets(5, 2, vec![(1, 1, 7.0), (4, 1, 1.0)]).unwrap();
+    assert_eq!(tall.diagonal_positions(), [None, Some(0)]);
+    assert!(CsrMatrix::<f64>::default().diagonal_positions().is_empty());
+}
+
+#[test]
 fn submatrix_in_both_orientations() {
     let csr = sample_4x6();
     let expected = vec![vec![30.0, 0.0, 40.0], vec![0.0, 50.0, 60.0]];
@@ -1690,4 +1820,152 @@ fn integer_scalar_multiplication() {
     let a = CsrMatrix::from_dense(&[[1i32, 2], [0, 3]]).unwrap();
     assert_eq!((&a * 4).to_dense(), vec![vec![4, 8], vec![0, 12]]);
     assert_eq!((3i32 * &a).to_dense(), vec![vec![3, 6], vec![0, 9]]);
+}
+
+// Assembly maps
+
+/// `count` triplets at pseudo-random positions of a `rows x cols` matrix, drawn with
+/// replacement so many positions repeat, with inexact values, so summation order shows in the
+/// bits. `seed` picks the positions and `value_seed` the values, so two lists can share
+/// positions.
+fn random_triplets(
+    rows: usize,
+    cols: usize,
+    count: usize,
+    seed: u64,
+    value_seed: u64,
+) -> Vec<(usize, usize, f64)> {
+    let lcg = |state: &mut u64| {
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *state >> 33
+    };
+    let (mut positions, mut values) = (seed, value_seed);
+    (0..count)
+        .map(|_| {
+            let row = lcg(&mut positions) as usize % rows;
+            let col = lcg(&mut positions) as usize % cols;
+            (row, col, (lcg(&mut values) % 2001) as f64 / 7.3 - 137.0)
+        })
+        .collect()
+}
+
+fn bits(values: &[f64]) -> Vec<u64> {
+    values.iter().map(|value| value.to_bits()).collect()
+}
+
+/// Checks that `matrix` holds exactly the arrays `from_triplets` builds from `triplets`.
+fn assert_same_arrays<O: sparse_mat::compressed_matrix::Orientation>(
+    matrix: &CompressedMatrix<f64, O>,
+    triplets: &[(usize, usize, f64)],
+) {
+    let (rows, cols) = matrix.shape();
+    let fresh = CompressedMatrix::<f64, O>::from_triplets(rows, cols, triplets.to_vec()).unwrap();
+    assert_eq!(matrix.pointers(), fresh.pointers());
+    assert_eq!(matrix.indices(), fresh.indices());
+    assert_eq!(bits(matrix.values()), bits(fresh.values()));
+}
+
+fn refills_match_from_triplets<O: sparse_mat::compressed_matrix::Orientation>() {
+    let (rows, cols) = (13, 9);
+    let triplets = random_triplets(rows, cols, 200, 1, 2);
+    let (mut matrix, map) =
+        CompressedMatrix::<f64, O>::from_triplets_mapped(rows, cols, triplets.clone()).unwrap();
+    assert_same_arrays(&matrix, &triplets);
+    assert_eq!(map.len(), 200);
+    assert_eq!(map.shape(), (rows, cols));
+    assert!(matrix.num_stored() < 200, "the positions should repeat");
+    for (slot, &(row, col, _)) in map.slots().zip(&triplets) {
+        assert_eq!(matrix.position(row, col), Ok(Some(slot)));
+    }
+
+    // New values for the same positions, several times over
+    for value_seed in 3..8 {
+        let refilled = random_triplets(rows, cols, 200, 1, value_seed);
+        let values: Vec<f64> = refilled.iter().map(|triplet| triplet.2).collect();
+        matrix.refill(&map, &values).unwrap();
+        assert_same_arrays(&matrix, &refilled);
+    }
+}
+
+#[test]
+fn refills_match_from_triplets_bit_for_bit() {
+    refills_match_from_triplets::<sparse_mat::compressed_matrix::Csr>();
+    refills_match_from_triplets::<sparse_mat::compressed_matrix::Csc>();
+}
+
+#[test]
+fn refills_keep_the_pattern_and_signed_zeros() {
+    let triplets = vec![(0, 0, 1.0), (1, 1, 2.0), (0, 0, 3.0), (1, 0, 5.0)];
+    let (mut csr, map) = CsrMatrix::from_triplets_mapped(2, 2, triplets).unwrap();
+    assert_eq!(csr.to_dense(), vec![vec![4.0, 0.0], vec![5.0, 2.0]]);
+    assert_eq!(map.slots().collect::<Vec<_>>(), [0, 2, 0, 1]);
+
+    // Values that cancel, or are zero, stay stored
+    csr.refill(&map, &[1.0, 0.0, -1.0, 6.0]).unwrap();
+    assert_eq!(csr.num_stored(), 3);
+    assert_eq!(csr.num_nonzero(), 1);
+    assert_eq!(csr.values(), [0.0, 6.0, 0.0]);
+
+    // A position's first triplet is written, not added to zero, so -0.0 survives as it does in
+    //   from_triplets (0.0 + -0.0 would be +0.0)
+    csr.refill(&map, &[-0.0, -0.0, -0.0, 1.0]).unwrap();
+    let fresh = CsrMatrix::from_triplets(
+        2,
+        2,
+        vec![(0, 0, -0.0), (1, 1, -0.0), (0, 0, -0.0), (1, 0, 1.0)],
+    )
+    .unwrap();
+    assert_eq!(bits(csr.values()), bits(fresh.values()));
+    assert!(csr.values()[0].is_sign_negative());
+
+    // A clone refills with the same map
+    let mut clone = csr.clone();
+    clone.refill(&map, &[1.0, 2.0, 3.0, 4.0]).unwrap();
+    assert_eq!(clone.to_dense(), vec![vec![4.0, 0.0], vec![4.0, 2.0]]);
+}
+
+#[test]
+fn refill_errors_leave_the_matrix_unchanged() {
+    let (mut csc, map) =
+        CscMatrix::from_triplets_mapped(2, 3, vec![(0, 0, 1.0), (1, 2, 2.0)]).unwrap();
+    let before = csc.clone();
+
+    let error = csc.refill(&map, &[1.0]).unwrap_err();
+    assert_eq!(
+        error,
+        SparseError::LengthMismatch {
+            expected: 2,
+            found: 1
+        }
+    );
+    assert_eq!(error.to_string(), "expected 2 elements, found 1");
+
+    // Maps from matrices with another shape or another stored count
+    let (_, other_shape) =
+        CscMatrix::from_triplets_mapped(3, 2, vec![(0, 0, 1.0), (1, 1, 2.0)]).unwrap();
+    let (_, other_count) =
+        CscMatrix::from_triplets_mapped(2, 3, vec![(0, 0, 1.0), (1, 2, 2.0), (1, 1, 3.0)]).unwrap();
+    for other in [&other_shape, &other_count] {
+        let error = csc.refill(other, &[1.0, 2.0]).unwrap_err();
+        assert_eq!(error, SparseError::PatternMismatch);
+        assert_eq!(
+            error.to_string(),
+            "the assembly map was built for a different pattern"
+        );
+    }
+    assert_eq!(bits(csc.values()), bits(before.values()));
+
+    assert_eq!(
+        CsrMatrix::from_triplets_mapped(2, 2, vec![(0, 0, 1.0), (2, 0, 1.0)]).err(),
+        Some(SparseError::OutOfBounds {
+            row: 2,
+            col: 0,
+            shape: (2, 2)
+        })
+    );
+    let (mut empty, map) = CsrMatrix::<f64>::from_triplets_mapped(3, 3, Vec::new()).unwrap();
+    assert!(map.is_empty() && empty.num_stored() == 0);
+    empty.refill(&map, &[]).unwrap();
 }

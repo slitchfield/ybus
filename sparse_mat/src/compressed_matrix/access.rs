@@ -35,17 +35,82 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
     }
 
     /// The main diagonal as a sparse vector of length `min(rows, cols)`, holding the diagonal
-    /// positions in the pattern (stored zeros included). Each is found by binary search.
+    /// positions in the pattern (stored zeros included), found through `diagonal_positions`.
     pub fn diagonal(&self) -> SparseVector<T> {
-        let len = self.shape.0.min(self.shape.1);
-        let (indices, values) = (0..len)
-            .filter_map(|i| self.stored_value(i, i).map(|value| (i, value)))
+        let positions = self.diagonal_positions();
+        let (indices, values) = positions
+            .iter()
+            .enumerate()
+            .filter_map(|(i, position)| position.map(|p| (i, self.data[p])))
             .unzip();
         SparseVector {
-            len,
+            len: positions.len(),
             indices,
             values,
         }
+    }
+
+    /// The slot in `values()` of each diagonal entry `(i, i)`, for `i` in `0..min(rows, cols)`:
+    /// `Some(p)` if the entry is in the pattern (even if its value is zero), `None` if it isn't.
+    ///
+    /// Computed by binary search on the first call, in O(min(rows, cols) log(entries per
+    /// row or column)), and cached: the pattern is fixed, so later calls, on this matrix or on
+    /// its `transpose`, cost nothing, and a clone keeps the result. Lets solvers and
+    /// assembly code reach the diagonal without searching.
+    pub fn diagonal_positions(&self) -> &[Option<usize>] {
+        self.diagonal.get_or_init(|| {
+            (0..self.shape.0.min(self.shape.1))
+                .map(|i| self.slot(i, i))
+                .collect()
+        })
+    }
+
+    /// The slot in `values()` of the entry at `(row, col)`: `Ok(Some(p))` if the position is
+    /// in the pattern (even if its value is zero), `Ok(None)` if it isn't.
+    ///
+    /// Found by binary search among the stored indices of `row` (CSR) or `col` (CSC), in
+    /// O(log(entries in it)). Returns `SparseError::OutOfBounds` if the position lies outside
+    /// the matrix.
+    pub fn position(&self, row: usize, col: usize) -> Result<Option<usize>, SparseError> {
+        if row >= self.shape.0 || col >= self.shape.1 {
+            return Err(SparseError::OutOfBounds {
+                row,
+                col,
+                shape: self.shape,
+            });
+        }
+        Ok(self.slot(row, col))
+    }
+
+    /// Major index `major` (row `major` of a CSR matrix, column `major` of a CSC one) as
+    /// borrowed slices of the arrays, without copying: the minor indices of its stored entries,
+    /// strictly increasing, and their values, stored zeros included. Entry `k` of the slices is
+    /// slot `pointers()[major] + k` of `values()`.
+    ///
+    /// Returns `SparseError::OutOfRange` if `major` is not a row (CSR) or column (CSC) of the
+    /// matrix.
+    pub fn outer(&self, major: usize) -> Result<(&[usize], &[T]), SparseError> {
+        let range = self.outer_range(major)?;
+        Ok((&self.idx[range.clone()], &self.data[range]))
+    }
+
+    /// Like `outer`, but with the values mutable, so a row (CSR) or column (CSC) can be refilled
+    /// in place. The indices stay read-only, since the pattern is fixed.
+    ///
+    /// Returns `SparseError::OutOfRange` if `major` is not a row (CSR) or column (CSC) of the
+    /// matrix.
+    pub fn outer_mut(&mut self, major: usize) -> Result<(&[usize], &mut [T]), SparseError> {
+        let range = self.outer_range(major)?;
+        Ok((&self.idx[range.clone()], &mut self.data[range]))
+    }
+
+    /// The slots of major index `major`, or `SparseError::OutOfRange`.
+    fn outer_range(&self, major: usize) -> Result<Range<usize>, SparseError> {
+        let len = self.major_dim();
+        if major >= len {
+            return Err(SparseError::OutOfRange { index: major, len });
+        }
+        Ok(self.ptr[major]..self.ptr[major + 1])
     }
 
     /// Extracts the block `rows x cols` as a new matrix of shape `(rows.len(), cols.len())`

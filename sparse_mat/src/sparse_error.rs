@@ -93,6 +93,16 @@ pub enum SparseError {
         /// The shape `(rows, cols)` of the right operand.
         right: (usize, usize),
     },
+    /// A list has the wrong number of elements, such as new values for an assembly map.
+    LengthMismatch {
+        /// The number of elements needed.
+        expected: usize,
+        /// The number given.
+        found: usize,
+    },
+    /// An assembly map was used with a matrix whose shape or stored count differs from the
+    /// matrix it was built for.
+    PatternMismatch,
 }
 
 /// Formats a short, lowercase description of the error.
@@ -143,6 +153,12 @@ impl fmt::Display for SparseError {
             }
             SparseError::ShapeMismatch { left, right } => {
                 write!(f, "incompatible shapes {left:?} and {right:?}")
+            }
+            SparseError::LengthMismatch { expected, found } => {
+                write!(f, "expected {expected} elements, found {found}")
+            }
+            SparseError::PatternMismatch => {
+                write!(f, "the assembly map was built for a different pattern")
             }
         }
     }
