@@ -1,0 +1,27 @@
+# Benchmarks
+
+Recorded performance of the `powerflow` crate, so that later phases can measure what they
+change. Each record names the code, the machine and the method it used.
+
+| Record | What |
+|---|---|
+| [`dc-power-flow-2026-10-31.md`](dc-power-flow-2026-10-31.md) | The DC power flow on every MATPOWER 8.1 case, before Phase 2's fixed-pattern matrices and Phase 3's ordered LU: the Phase 1.5 baseline. The survey's raw output is in the `.csv` beside it. |
+
+## Measuring
+
+- **One case, repeatably:** `cargo bench -p powerflow --bench dc_power_flow` runs the criterion
+  benchmarks in `powerflow/benches/dc_power_flow.rs`, which time parsing, the model and the
+  solve on case2383wp. Criterion compares each run with the previous one on the same machine.
+- **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example
+  on each MATPOWER case in its own process, under a time and memory limit, and compares the
+  results with MATPOWER's own. Its header comment lists what it needs and its settings.
+
+Timings depend on the machine, so compare runs made on the same one, and record the machine
+with any new record.
+
+## What a record may hold
+
+Case names and sizes, the time and memory this crate's code takes on them, the backward error
+of its results, and how far they are from MATPOWER's. Never case data or power flow results: MATPOWER's license doesn't
+cover its case files, and only results from public-source cases are committed
+(`docs/PowerFlowChecklist.md`, Phase 1.5).

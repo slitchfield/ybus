@@ -1,9 +1,12 @@
-% Generates the DC power flow reference results in powerflow/tests/data/matpower-reference/
-%   by running MATPOWER's rundcpf. Run through scripts/generate-reference.sh, which fetches
-%   MATPOWER and passes its directory and the output directory as arguments.
+% Generates DC power flow reference results by running MATPOWER's rundcpf. Run through
+%   scripts/generate-reference.sh, which fetches MATPOWER and passes its directory, the output
+%   directory and any cases as arguments.
 %
-% Only cases derived from public sources are generated (see docs/PowerFlowChecklist.md,
-%   Phase 1.5), because the results are committed.
+% By default, generates the committed results in powerflow/tests/data/matpower-reference/,
+%   which are only for cases derived from public sources (see docs/PowerFlowChecklist.md,
+%   Phase 1.5). Cases named as arguments are for local comparisons, and their results are never
+%   committed. A case MATPOWER fails on is reported and skipped, and the script ends with an
+%   error after writing the others.
 %
 % For each case, writes:
 %   <case>_dcpf_bus.csv     bus number and voltage angle (degrees)
@@ -24,21 +27,33 @@ function write_csv(path, header, row_format, data)
 end
 
 args = argv();
-if numel(args) ~= 2
-    error('usage: generate_reference.m <matpower-dir> <output-dir>');
+if numel(args) < 2
+    error('usage: generate_reference.m <matpower-dir> <output-dir> [<case>...]');
 end
 [matpower_dir, out_dir] = deal(args{1}, args{2});
 addpath(genpath(matpower_dir));
 define_constants;
 
-cases = {'case14', 'case30', 'case118'};
+if numel(args) > 2
+    cases = args(3:end);
+else
+    cases = {'case14', 'case30', 'case118'};
+end
 mpopt = mpoption('verbose', 0, 'out.all', 0);
 
+failed = {};
 for k = 1:numel(cases)
     name = cases{k};
-    [result, success] = rundcpf(name, mpopt);
+    try
+        [result, success] = rundcpf(name, mpopt);
+    catch err
+        fprintf(2, '%s: %s\n', name, err.message);
+        success = false;
+    end
     if ~success
-        error('rundcpf failed on %s', name);
+        fprintf(2, 'rundcpf failed on %s\n', name);
+        failed{end + 1} = name;
+        continue;
     end
 
     write_csv(fullfile(out_dir, [name '_dcpf_bus.csv']), 'bus,va_deg', '%d,%.17g', ...
@@ -57,3 +72,8 @@ end
 fid = fopen(fullfile(out_dir, 'VERSIONS'), 'w');
 fprintf(fid, 'MATPOWER %s\nOctave %s\n', mpver, OCTAVE_VERSION);
 fclose(fid);
+
+if ~isempty(failed)
+    error('rundcpf failed on %d of %d cases: %s', numel(failed), numel(cases), ...
+        strjoin(failed, ', '));
+end

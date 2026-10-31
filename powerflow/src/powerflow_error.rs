@@ -72,6 +72,36 @@ pub enum PowerflowError {
         /// The length found.
         found: usize,
     },
+    /// An in-service branch has zero reactance, so its DC susceptance `1 / x` is infinite.
+    ZeroReactance {
+        /// The 1-based row in the branch table.
+        row: usize,
+    },
+    /// No bus can be the DC reference: there's no REF bus, and no PV bus with an in-service
+    /// generator to take its place.
+    NoReferenceBus,
+    /// A connected bus can't reach any reference bus through in-service branches, so its
+    /// island has no fixed angle and the DC solve is singular.
+    IslandWithoutReference {
+        /// The label of the first such bus, in case order.
+        bus_label: usize,
+    },
+    /// The DC system is singular although every bus reaches a reference bus, which takes
+    /// branch reactances that cancel out (for example a series capacitor in parallel with an
+    /// equal and opposite line).
+    SingularNetwork {
+        /// The label of the bus whose angle couldn't be determined: the elimination step that
+        /// failed, or the first angle that came out non-finite or over 10⁵ radians.
+        bus_label: usize,
+    },
+    /// A DC model was asked to solve a case whose tables don't match the case it was built
+    /// from.
+    CaseMismatch {
+        /// The model's case's table lengths: buses, generators, branches.
+        expected: (usize, usize, usize),
+        /// The given case's table lengths.
+        found: (usize, usize, usize),
+    },
 }
 
 impl fmt::Display for PowerflowError {
@@ -115,6 +145,26 @@ impl fmt::Display for PowerflowError {
                 expected,
                 found,
             } => write!(f, "{field} has {found} entries, but should have {expected}"),
+            PowerflowError::ZeroReactance { row } => {
+                write!(f, "branch row {row} is in service with zero reactance")
+            }
+            PowerflowError::NoReferenceBus => write!(
+                f,
+                "no reference bus: no REF bus, and no PV bus with an in-service generator"
+            ),
+            PowerflowError::IslandWithoutReference { bus_label } => write!(
+                f,
+                "bus {bus_label} is in an island with no reference bus, so its angle is undefined"
+            ),
+            PowerflowError::SingularNetwork { bus_label } => write!(
+                f,
+                "the DC system is singular: the angle at bus {bus_label} can't be determined"
+            ),
+            PowerflowError::CaseMismatch { expected, found } => write!(
+                f,
+                "the DC model was built for a case with (buses, generators, branches) = \
+                 {expected:?}, not {found:?}"
+            ),
         }
     }
 }

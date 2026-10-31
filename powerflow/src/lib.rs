@@ -5,4 +5,5 @@
 //! Phase 1.5 of the roadmap in `docs/PowerFlowChecklist.md`.
 
 pub mod case;
+pub mod dc;
 pub mod powerflow_error;

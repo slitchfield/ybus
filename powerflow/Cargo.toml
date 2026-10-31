@@ -11,3 +11,12 @@ rust-version.workspace = true
 
 [dependencies]
 sparse_mat = { path = "../sparse_mat" }
+
+[dev-dependencies]
+# The benchmarks in benches/, without plotting or parallel analysis, which keeps the dependency
+#   tree (and cargo-deny's license check) small; results are still printed and saved
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "dc_power_flow"
+harness = false

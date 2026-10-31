@@ -102,16 +102,58 @@ Merged in PR #2.
       - **Clearer errors:** version 1 files are reported as such. NaN in a read column, and a
         case with no buses, are errors.
       - **No regressions:** the same 52 MATPOWER files parse directly as before.
-- [ ] Bbus assembly with `from_triplets` (summing branch stamps), honoring branch status and
-      phase shifters.
-- [ ] DC power flow: drop the slack row and column with `select`, solve B′θ = P with
-      `cholesky`, then compute branch flows.
-- [ ] Reference results: MATPOWER `rundcpf` outputs for case14, case30 and case118 checked into
+- [x] Bbus assembly with `from_triplets` (summing branch stamps), honoring branch status and
+      phase shifters. `powerflow::dc::DcModel::new`, following MATPOWER's `ext2int`,
+      `bustypes` and `makeBdc`. Fields are private, with accessors (decided). Beyond the plan:
+      a case may have several reference buses, as in `bustypes`; and an island that can't
+      reach a reference bus is found by a breadth-first search and reported by bus
+      (`IslandWithoutReference`), rather than left to a singular factorization, which rounding
+      can hide. Zero reactance is an error (`ZeroReactance`), where MATPOWER gives `Inf`.
+      The case is validated first, since only `Case::parse` validates: in a review, a case
+      edited after parsing with an unknown generator bus label solved with that generator
+      silently dropped.
+- [x] DC power flow: drop the slack row and column with `select`, solve B′θ = P with
+      `cholesky`, then compute branch flows. `DcModel::solve` and `dc_power_flow`, following
+      `runpf` and `dcpf`; results indexed in case-table order (decided). Out-of-service and
+      disconnected generators and branches report 0.0, as `runpf.m` (lines 474–480) does,
+      confirmed with `rundcpf`; isolated buses keep their angle and their load is not served.
+      Cholesky falls back to LU when B′ isn't positive definite (negative reactances), which
+      19 of MATPOWER's 78 cases need. **Found:** without a fill-reducing ordering the solve is
+      slow on large cases (case13659pegase 83 s, case8387pegase 15 s in release; see
+      `docs/benchmarks/`), which Phase 3's orderings address. First recorded as 14 cases (of
+      65 surveyed), 166 s and 36 s, on a machine that wasn't recorded.
+- [x] Reference results: MATPOWER `rundcpf` outputs for case14, case30 and case118 checked into
       test data. Tests compare angles and flows within a stated tolerance. The results are
       generated and committed (`powerflow/tests/data/matpower-reference/`, by
       `scripts/generate-reference.sh`); the comparison tests come with the DC power flow.
-- [ ] Benchmark harness (criterion) running DC power flow on the largest available case, so
-      later phases have a baseline.
+      Done in `powerflow/tests/dc_reference_test.rs`, which also compares generator outputs.
+      Angles, flows and outputs agree within 1e-9 (degrees, MW); the largest differences
+      measured are 2.3e-13° and 3.6e-12 MW, on case118. The comparison first checks that the
+      results describe the case (buses, branch ends and statuses, generators), and a test shows
+      it fails on another case's results, a 1e-6 MW error or a NaN.
+- [x] Benchmark harness (criterion) running DC power flow on the largest available case, so
+      later phases have a baseline. Changed from the plan (decided): criterion benchmarks a
+      medium case, since sampling the largest repeatedly is impractical without a
+      fill-reducing ordering (nine cases took over 20 s each in a first pass), and a survey
+      times every case once.
+      - [x] Criterion harness, `powerflow/benches/dc_power_flow.rs`, on case2383wp (2,383
+            buses), the benchmark case named in the reference data's README. It times parsing,
+            the model (which Phase 2 targets) and the solve (which Phase 3 targets) separately.
+            Baseline on the maintainer's machine: parse 2.3 ms, model 0.50 ms, solve 317–330 ms
+            (two runs; the machine varies by about 4% between runs). Its numbering suits an
+            unordered factorization badly, so Phase 3's orderings will show: the Cholesky factor
+            has 40 times the entries of B′'s lower triangle.
+      - [x] Survey of every MATPOWER case, with the results recorded in
+            `docs/benchmarks/dc-power-flow-2026-10-31.md`. `scripts/benchmark-dc.sh` runs the
+            `dc_survey` example on each case in its own process, under a time and memory limit,
+            and compares the results with MATPOWER's, generated locally by
+            `scripts/generate-reference.sh`, which now takes an output directory and cases. All
+            78 cases solve in 18 minutes and agree with MATPOWER to within 1.1e-10 of each
+            quantity's largest value in its case, and every solve is backward stable (at most
+            10.7 ε, checked on six cases by `dc_backward_error_test.rs`). Run time follows
+            fill-in, not size: unordered factors hold up to 109 times the entries they would
+            without fill-in, and LU, which 19 cases need, costs about four times Cholesky at
+            similar fill.
 
 ## Phase 2: Fixed-pattern `CsrMatrix`
 
@@ -144,6 +186,13 @@ Merged in PR #2.
 - [ ] `solve_in_place` and `solve_many` (several right-hand sides).
 - [ ] AMD ordering for Cholesky, and COLAMD (or AMD on the pattern of AᵀA) for LU. Benchmark fill
       and time against RCM on the large case.
+- [ ] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward
+      error: unordered, ours was up to 30 times MATPOWER's on high-fill cases, and correlated
+      with fill where MATPOWER's, from an ordered solve, didn't. Rerun `scripts/benchmark-dc.sh`
+      with the orderings, and compare `backward_error` with `factor_entries` and
+      `matpower_backward_error` against the baseline in
+      `docs/benchmarks/dc-power-flow-2026-10-31.md`. Threshold partial pivoting trades some
+      stability for sparsity, so `dc_backward_error_test.rs` guards its limit meanwhile.
 - [ ] Cholesky after ordering, reusing the existing up-looking algorithm.
 
 ## Phase 4: Complex-capable solvers (migrating what Phase 3 didn't rewrite)
@@ -170,7 +219,8 @@ Merged in PR #2.
 - [ ] Fast-decoupled power flow (XB and BX variants), which factors B′ and B″ once.
 - [ ] Validation against MATPOWER `runpf` for case14, case30, case118 and a large case such as
       case2383wp: voltage magnitudes, angles and branch flows within a stated tolerance.
-- [ ] Benchmarks against the Phase 1.5 baseline.
+- [ ] Benchmarks against the Phase 1.5 baseline (`docs/benchmarks/`; rerun its tools on the same
+      machine to compare).
 
 ## Phase 5: DC studies
 

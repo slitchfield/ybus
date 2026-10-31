@@ -5,7 +5,7 @@ Sparse linear algebra and power flow for Rust. A Cargo workspace with two crates
 | Crate | Status | Contents |
 |---|---|---|
 | [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: construction, arithmetic, products, LU/Cholesky/CG solvers, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
-| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model and a MATPOWER case reader. Next: DC power flow, then Newton–Raphson and fast-decoupled AC power flow. |
+| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, and DC power flow, which agrees with MATPOWER on all 78 of its cases. Next: Newton–Raphson and fast-decoupled AC power flow. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
 formulation is built around.
@@ -38,7 +38,11 @@ API overview, and [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for
   - **Regenerating the results:** `scripts/generate-reference.sh` regenerates the committed DC
     power flow reference results in
     [`powerflow/tests/data/matpower-reference/`](powerflow/tests/data/matpower-reference/). It
-    needs Octave.
+    needs Octave. Given an output directory and cases, it generates MATPOWER's results for any
+    case instead, for local comparisons; never commit those.
+- **Benchmarks:** `cargo bench -p powerflow` times the DC power flow on case2383wp with
+  criterion, and `scripts/benchmark-dc.sh` surveys every MATPOWER case once, comparing the
+  results with MATPOWER's. [`docs/benchmarks/`](docs/benchmarks/) records the results.
 
 ## Documentation
 
@@ -46,6 +50,8 @@ API overview, and [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for
   flow.
 - [`docs/BaseFunctionalityChecklist.md`](docs/BaseFunctionalityChecklist.md) is the completed
   checklist of `sparse_mat`'s core functionality.
+- [`docs/benchmarks/`](docs/benchmarks/) records performance baselines, such as the DC power
+  flow on every MATPOWER case.
 - [`docs/ai-reports/`](docs/ai-reports/) holds implementation reports for past branches.
 - [`AI-DISCLAIMER.md`](AI-DISCLAIMER.md) describes how AI was used to build this repository and
   how to report missing attribution.
