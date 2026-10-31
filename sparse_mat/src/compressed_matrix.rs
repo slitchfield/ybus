@@ -27,6 +27,7 @@ use crate::sparse_matrix::{write_dense_grid, SparseMatrix};
 use crate::Scalar;
 
 mod access;
+mod assembly;
 mod blocks;
 mod ops;
 #[cfg(feature = "rayon")]
@@ -37,6 +38,7 @@ mod properties;
 mod serde_impl;
 mod solvers;
 
+pub use assembly::AssemblyMap;
 pub use solvers::Lu;
 
 mod sealed {
@@ -206,6 +208,18 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
         triplets: impl IntoIterator<Item = (usize, usize, T)>,
     ) -> Result<Self, SparseError> {
         let triplets: Vec<(usize, usize, T)> = triplets.into_iter().collect();
+        Self::assemble(rows, cols, &triplets, None)
+    }
+
+    /// `from_triplets` on collected triplets. With `slots`, also records each triplet's slot in
+    /// `data` and whether it was the first of its position, which a refill writes rather than
+    /// adds to (`assembly.rs`).
+    pub(crate) fn assemble(
+        rows: usize,
+        cols: usize,
+        triplets: &[(usize, usize, T)],
+        mut slots: Option<&mut [(usize, bool)]>,
+    ) -> Result<Self, SparseError> {
         if let Some(&(row, col, _)) = triplets
             .iter()
             .find(|&&(row, col, _)| row >= rows || col >= cols)
@@ -224,19 +238,20 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
         let major_minor =
             |row: usize, col: usize| if O::ROW_MAJOR { (row, col) } else { (col, row) };
 
-        // Group the triplets by major index with a counting sort, keeping their input order
+        // Group the triplets by major index with a counting sort, keeping their input order and
+        //   where each came from
         let mut start = zeroed_pointers(major_dim);
-        for &(row, col, _) in &triplets {
+        for &(row, col, _) in triplets {
             start[major_minor(row, col).0 + 1] += 1;
         }
         for i in 0..major_dim {
             start[i + 1] += start[i];
         }
         let mut cursor = start.clone();
-        let mut grouped = vec![(0, T::zero()); triplets.len()];
-        for &(row, col, value) in &triplets {
+        let mut grouped = vec![(0, 0, T::zero()); triplets.len()];
+        for (k, &(row, col, value)) in triplets.iter().enumerate() {
             let (major, minor) = major_minor(row, col);
-            grouped[cursor[major]] = (minor, value);
+            grouped[cursor[major]] = (minor, k, value);
             cursor[major] += 1;
         }
 
@@ -248,14 +263,18 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
         for major in 0..major_dim {
             let group = &mut grouped[start[major]..start[major + 1]];
             group.sort_by_key(|entry| entry.0);
-            for &(minor, value) in group.iter() {
+            for &(minor, k, value) in group.iter() {
                 // A duplicate of the previous entry in this group: add it in
-                if idx.len() > ptr[major] && idx.last() == Some(&minor) {
-                    let sum = data.last_mut().expect("idx and data have the same length");
-                    *sum = *sum + value;
-                } else {
+                let first = !(idx.len() > ptr[major] && idx.last() == Some(&minor));
+                if first {
                     idx.push(minor);
                     data.push(value);
+                } else {
+                    let sum = data.last_mut().expect("idx and data have the same length");
+                    *sum = *sum + value;
+                }
+                if let Some(slots) = slots.as_deref_mut() {
+                    slots[k] = (data.len() - 1, first);
                 }
             }
             ptr[major + 1] = idx.len();

@@ -224,9 +224,16 @@ Merged in PR #2.
       stored. `diagonal_positions()` computes the diagonal's slots on first use and caches
       them in a `OnceLock`; a fixed pattern means the cache never goes stale, so values can
       change freely, and `transpose` keeps it, since a diagonal entry keeps its slot.
-- [ ] An assembly map built once from a triplet list's positions that records each triplet's
+- [x] An assembly map built once from a triplet list's positions that records each triplet's
       slot in `values`, so a refill with new values is an O(nnz) write with no hashing. Test that
       a refill matches a fresh `from_triplets`.
+      `CompressedMatrix::from_triplets_mapped` returns the matrix and an `AssemblyMap<O>`, and
+      `refill(&map, &values)` takes one value per triplet. Each position's first triplet is
+      written and the rest added in input order, so a refill equals `from_triplets` bit for bit,
+      down to the sign of a zero (tested on 200 inexact triplets with repeats, in both
+      orientations). The map carries the orientation in its type, so it can't refill a matrix of
+      the other orientation, and checks the shape and stored count (`PatternMismatch`) and the
+      number of values (`LengthMismatch`, both new errors) before writing anything.
 - [ ] Benchmark: refilling Ybus and Jacobian-sized patterns through the assembly map versus
       `from_triplets`.
 

@@ -97,6 +97,10 @@ fn main() -> Result<(), SparseError> {
   CSR row or CSC column's indices and values without copying, `position(row, col)` finds an
   entry's slot by binary search, and `diagonal_positions` gives the diagonal's slots, computed
   once and cached, since the pattern can't change.
+- **Assembly maps:** `from_triplets_mapped` builds the same matrix as `from_triplets` along
+  with an `AssemblyMap` of each triplet's slot, and `refill` reassembles new values for the
+  same triplets in O(triplets), with no sorting or searching, bit for bit as `from_triplets`
+  would. For matrices rebuilt with new values, such as a Jacobian at every Newton iteration.
 - `transpose` returns the same arrays in the other orientation, in O(1); `to_csr` and `to_csc`
   reorient explicitly, in O(nnz); `to_sparse` converts back, dropping stored zeros.
 - Equality is mathematical: the same shape and nonzero entries, whatever the orientation or
