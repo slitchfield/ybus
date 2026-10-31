@@ -155,16 +155,38 @@ Merged in PR #2.
             without fill-in, and LU, which 19 cases need, costs about four times Cholesky at
             similar fill.
 
-## Phase 2: Fixed-pattern `CsrMatrix`
+## Phase 2: Fixed-pattern compressed matrices
 
-- [ ] **Decide:** whether `CsrMatrix` becomes the main type for numerical work, with
+- [x] **Decide:** whether `CsrMatrix` becomes the main type for numerical work, with
       `SparseMatrix` kept for editing and assembly. Recommended: yes.
-- [ ] Promote the internal `Compressed<T>` to a public `CsrMatrix<T>` with an immutable pattern
-      and `values()`/`values_mut()`. Build it from `SparseMatrix` and from validated raw arrays
-      (reusing `from_csr`'s checks), and convert back.
-- [ ] Zero-copy row access (`row(i)` returning column and value slices), `position(i, j)` by
-      binary search, and cached diagonal positions.
-- [ ] `mul_vec` on `CsrMatrix`, reusing `mul_vec_csr`, plus `par_mul_vec` under `rayon`.
+      Decided (2026-10-31):
+      - **Two types:** `SparseMatrix` builds and edits; a compressed type does the numerical
+        work.
+      - **The numerical methods move** to the compressed type, rather than staying on
+        `SparseMatrix` as forwarding methods. Breaking changes are acceptable at 0.1.
+      - **One compressed type, oriented either way, with the orientation in the type:**
+        `CompressedMatrix<T, O>`, with aliases `CsrMatrix<T>` and `CscMatrix<T>`. Each algorithm
+        states the orientation it needs, so a mismatch fails to compile and conversions are
+        always explicit. Chosen over a runtime orientation flag, which would hide conversions
+        inside algorithms.
+      - **Stored zeros are kept:** the pattern is fixed when the matrix is built, so refills,
+        refactorization and Newton's flat start (where some Jacobian entries are exactly zero)
+        keep one pattern. Equality is mathematical, ignoring stored zeros and orientation.
+- [ ] `CompressedMatrix<T, O>`, promoted from the internal `Compressed<T>`: a fixed pattern with
+      `values()`/`values_mut()` and stored zeros, built from `SparseMatrix`, from triplets and
+      from validated raw arrays (reusing `from_csr`'s checks), and converted back. Transposing
+      swaps the orientation in O(1); reorienting is an explicit O(nnz) conversion.
+- [ ] Move the numerical methods from `SparseMatrix` to the compressed type, each on the
+      orientation it needs, one group at a time:
+      - [ ] products, including `mul_vec` in both orientations and the `rayon` versions
+      - [ ] solvers, with factors returned as compressed matrices
+      - [ ] access, selection, permutation and properties
+      - [ ] arithmetic, block construction and complex parts
+- [ ] `powerflow` builds and stores its DC model's matrices as `CsrMatrix`.
+- [ ] `SparseMatrix` becomes the editing type only: its compressed caches, the cache API and the
+      moved methods are removed, and the README describes both types.
+- [ ] Zero-copy major-axis slices (a CSR row or a CSC column), `position(i, j)` by binary search,
+      and cached diagonal positions.
 - [ ] An assembly map built once from a triplet list's positions that records each triplet's
       slot in `values`, so a refill with new values is an O(nnz) write with no hashing. Test that
       a refill matches a fresh `from_triplets`.
