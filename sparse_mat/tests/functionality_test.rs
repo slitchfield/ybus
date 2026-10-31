@@ -780,42 +780,6 @@ fn sample_4x6() -> SparseMatrix {
 }
 
 #[test]
-fn sparsemat_row_extraction() {
-    let local = sample_4x6();
-    let row = local.row(2).unwrap();
-    assert!(row.len() == 6);
-    assert!(row.nnz() == 3);
-    assert!(row.indices() == [2, 3, 4]);
-    assert!(row.values() == [50.0, 60.0, 70.0]);
-    assert!(row.get(3) == Some(60.0));
-    assert!(row.get(0).is_none());
-    assert!(row.to_dense() == vec![0.0, 0.0, 50.0, 60.0, 70.0, 0.0]);
-    // An empty row
-    let empty = SparseMatrix::<f64>::empty_with_shape(2, 3).row(1).unwrap();
-    assert!(empty.nnz() == 0 && empty.len() == 3);
-}
-
-#[test]
-fn sparsemat_col_extraction() {
-    let mut local = sample_4x6();
-    let col = local.col(3).unwrap();
-    assert!(col.len() == 4);
-    assert!(col.indices() == [1, 2]);
-    assert!(col.values() == [40.0, 60.0]);
-
-    // Same answer from a fresh CSC cache
-    local.explicitly_compress_csc();
-    assert!(local.col(3).unwrap() == col);
-}
-
-#[test]
-fn sparsemat_row_col_out_of_range() {
-    let local = sample_4x6();
-    assert!(local.row(4).err() == Some(SparseError::OutOfRange { index: 4, len: 4 }));
-    assert!(local.col(6).err() == Some(SparseError::OutOfRange { index: 6, len: 6 }));
-}
-
-#[test]
 fn sparsemat_col_iter() {
     let local = sample_4x6();
     let cols: Vec<Vec<f64>> = local.col_iter().collect();
@@ -825,58 +789,6 @@ fn sparsemat_col_iter() {
     // Columns of a matrix are the rows of its transpose
     let transposed_rows: Vec<Vec<f64>> = local.create_transpose().row_iter().collect();
     assert!(cols == transposed_rows);
-}
-
-#[test]
-fn sparsemat_diagonal() {
-    let local = sample_4x6();
-    let diag = local.diagonal();
-    assert!(diag.len() == 4);
-    assert!(diag.indices() == [0, 1, 2]);
-    assert!(diag.values() == [10.0, 30.0, 50.0]);
-    assert!(diag.to_dense() == vec![10.0, 30.0, 50.0, 0.0]);
-
-    let identity = SparseMatrix::<f64>::identity(3);
-    assert!(identity.diagonal().to_dense() == vec![1.0, 1.0, 1.0]);
-    // Tall matrix: diagonal length is the smaller dimension
-    assert!(SparseMatrix::<f64>::empty_with_shape(5, 2).diagonal().len() == 2);
-}
-
-#[test]
-fn sparsemat_submatrix() {
-    let local = sample_4x6();
-    let block = local.submatrix(1..3, 1..4).unwrap();
-    assert!(block.shape == (2, 3));
-    assert!(block.to_dense() == vec![vec![30.0, 0.0, 40.0], vec![0.0, 50.0, 60.0]]);
-
-    let whole = local.submatrix(0..4, 0..6).unwrap();
-    assert!(whole.to_dense() == local.to_dense());
-
-    let empty = local.submatrix(2..2, 0..6).unwrap();
-    assert!(empty.shape == (0, 6));
-}
-
-#[test]
-fn sparsemat_submatrix_invalid_range() {
-    let local = sample_4x6();
-    assert!(
-        local.submatrix(0..5, 0..6).err()
-            == Some(SparseError::InvalidRange {
-                start: 0,
-                end: 5,
-                len: 4
-            })
-    );
-    #[allow(clippy::reversed_empty_ranges)]
-    let reversed = local.submatrix(0..4, 4..2);
-    assert!(
-        reversed.err()
-            == Some(SparseError::InvalidRange {
-                start: 4,
-                end: 2,
-                len: 6
-            })
-    );
 }
 
 #[test]
@@ -1297,69 +1209,6 @@ fn sparsemat_scalar_mul_still_works_alongside_matmul() {
     assert!((&a * &a).to_dense() == vec![vec![7.0, 10.0], vec![15.0, 22.0]]);
 }
 
-#[test]
-fn sparsemat_is_square_and_density() {
-    assert!(SparseMatrix::<f64>::identity(3).is_square());
-    assert!(!SparseMatrix::<f64>::empty_with_shape(2, 3).is_square());
-    assert!(SparseMatrix::<f64>::new().is_square());
-
-    assert!(SparseMatrix::<f64>::identity(4).density() == 0.25);
-    assert!(SparseMatrix::from([[1.0, 2.0], [3.0, 4.0]]).density() == 1.0);
-    assert!(SparseMatrix::<f64>::empty_with_shape(3, 3).density() == 0.0);
-    // No division by zero for an empty shape
-    assert!(SparseMatrix::<f64>::new().density() == 0.0);
-    assert!(SparseMatrix::<f64>::empty_with_shape(0, 5).density() == 0.0);
-}
-
-#[test]
-fn sparsemat_sum_and_trace() {
-    let a = SparseMatrix::from([[1.0, 2.0, 0.0], [0.0, 3.0, 4.0], [5.0, 0.0, 6.0]]);
-    assert!(a.sum() == 21.0);
-    assert!(a.trace() == Ok(10.0));
-    assert!(SparseMatrix::<f64>::empty_with_shape(2, 2).sum() == 0.0);
-
-    let ints = SparseMatrix::from([[1, 2], [3, 4]]);
-    assert!(ints.sum() == 10 && ints.trace() == Ok(5));
-}
-
-#[test]
-fn sparsemat_trace_not_square() {
-    let a = SparseMatrix::<f64>::empty_with_shape(2, 3);
-    assert!(a.trace() == Err(SparseError::NotSquare { shape: (2, 3) }));
-}
-
-#[test]
-fn sparsemat_is_symmetric() {
-    assert!(SparseMatrix::from([[1.0, 2.0], [2.0, 3.0]]).is_symmetric());
-    assert!(!SparseMatrix::from([[1.0, 2.0], [5.0, 3.0]]).is_symmetric());
-    // One side stored, the other not
-    assert!(!SparseMatrix::from([[0.0, 2.0], [0.0, 0.0]]).is_symmetric());
-    assert!(!SparseMatrix::<f64>::empty_with_shape(2, 3).is_symmetric());
-    assert!(SparseMatrix::<f64>::identity(5).is_symmetric());
-    assert!(SparseMatrix::<f64>::new().is_symmetric());
-
-    // A + Aᵀ is always symmetric
-    let a = pseudo_random(6, 6, 77, 40);
-    assert!((&a + &a.create_transpose()).is_symmetric());
-}
-
-#[test]
-fn sparsemat_norms() {
-    let a = SparseMatrix::from([[1.0, -2.0, 0.0], [0.0, 3.0, 4.0]]);
-    assert!((a.norm_frobenius() - 30.0f64.sqrt()).abs() < 1e-12);
-    // Column sums: 1, 5, 4 and row sums: 3, 7
-    assert!(a.norm_1() == 5.0);
-    assert!(a.norm_inf() == 7.0);
-
-    let empty = SparseMatrix::<f64>::empty_with_shape(3, 3);
-    assert!(empty.norm_frobenius() == 0.0 && empty.norm_1() == 0.0 && empty.norm_inf() == 0.0);
-
-    // f32 works too, and the norms of a transpose swap the 1- and infinity-norms
-    let b = SparseMatrix::from([[1.0f32, 2.0], [3.0, 4.0]]);
-    assert!(b.norm_1() == b.create_transpose().norm_inf());
-    assert!(b.norm_inf() == b.create_transpose().norm_1());
-}
-
 fn dense_kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let mut out = vec![];
     for a_row in a {
@@ -1482,12 +1331,6 @@ fn sparsemat_stack_errors_and_empty() {
             .shape
             == (4, 0)
     );
-}
-
-/// A strictly diagonally dominant (so non-singular) pseudo-random matrix.
-fn dominant(n: usize, seed: u64) -> SparseMatrix {
-    let shift = SparseMatrix::from_diagonal(vec![4.0 * n as f64 + 1.0; n]);
-    &pseudo_random(n, n, seed, 30) + &shift
 }
 
 const SAMPLE_MTX: &str = "%%MatrixMarket matrix coordinate real general
@@ -1804,137 +1647,6 @@ fn sparsemat_scale_rows_cols_shape_mismatch() {
                 right: (2, 2)
             })
     );
-}
-
-#[test]
-fn sparsemat_select_matches_submatrix_for_ranges() {
-    let a = pseudo_random(6, 7, 71, 45);
-    let rows: Vec<usize> = (1..5).collect();
-    let cols: Vec<usize> = (2..7).collect();
-    assert!(a.select(&rows, &cols).unwrap() == a.submatrix(1..5, 2..7).unwrap());
-}
-
-#[test]
-fn sparsemat_select_reorders_and_skips() {
-    let a = SparseMatrix::from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]);
-    // Rows 2 then 0, columns 2 then 1: non-contiguous and reversed
-    let picked = a.select(&[2, 0], &[2, 1]).unwrap();
-    assert!(picked.to_dense() == vec![vec![9.0, 8.0], vec![3.0, 2.0]]);
-}
-
-#[test]
-fn sparsemat_select_repeated_indices() {
-    let a = SparseMatrix::from([[1.0, 0.0], [0.0, 2.0]]);
-    let repeated = a.select(&[1, 1, 0], &[0, 1, 1]).unwrap();
-    assert!(
-        repeated.to_dense()
-            == vec![
-                vec![0.0, 2.0, 2.0],
-                vec![0.0, 2.0, 2.0],
-                vec![1.0, 0.0, 0.0]
-            ]
-    );
-}
-
-#[test]
-fn sparsemat_select_matches_dense_selection() {
-    let a = pseudo_random(8, 8, 72, 40);
-    let dense = a.to_dense();
-    // A PV/PQ-style split: an arbitrary subset in a scrambled order
-    let rows = [7, 1, 4, 2];
-    let cols = [3, 0, 6, 5, 1];
-    let expected: Vec<Vec<f64>> = rows
-        .iter()
-        .map(|&r| cols.iter().map(|&c| dense[r][c]).collect())
-        .collect();
-    assert!(a.select(&rows, &cols).unwrap().to_dense() == expected);
-}
-
-#[test]
-fn sparsemat_select_empty_and_out_of_range() {
-    let a = sample_4x6();
-    let none = a.select(&[], &[0, 1]).unwrap();
-    assert!(none.shape == (0, 2) && none.num_nonzero() == 0);
-    assert!(a.select(&[0, 4], &[0]).err() == Some(SparseError::OutOfRange { index: 4, len: 4 }));
-    assert!(a.select(&[0], &[9]).err() == Some(SparseError::OutOfRange { index: 9, len: 6 }));
-}
-
-fn inverse_of(perm: &[usize]) -> Vec<usize> {
-    let mut inverse = vec![0; perm.len()];
-    for (position, &index) in perm.iter().enumerate() {
-        inverse[index] = position;
-    }
-    inverse
-}
-
-#[test]
-fn sparsemat_permute_matches_select() {
-    let a = pseudo_random(5, 4, 81, 50);
-    let (rows, cols) = ([3, 0, 4, 1, 2], [2, 3, 0, 1]);
-    assert!(a.permute(&rows, &cols).unwrap() == a.select(&rows, &cols).unwrap());
-}
-
-#[test]
-fn sparsemat_permute_then_inverse_is_identity() {
-    let a = pseudo_random(6, 5, 82, 45);
-    let (rows, cols) = ([5, 2, 0, 4, 1, 3], [4, 0, 3, 1, 2]);
-    let permuted = a.permute(&rows, &cols).unwrap();
-    assert!(permuted != a);
-    let restored = permuted
-        .permute(&inverse_of(&rows), &inverse_of(&cols))
-        .unwrap();
-    assert!(restored == a);
-    // The identity permutation changes nothing
-    assert!(a.permute(&[0, 1, 2, 3, 4, 5], &[0, 1, 2, 3, 4]).unwrap() == a);
-}
-
-#[test]
-fn sparsemat_permute_symmetric_preserves_structure() {
-    let base = pseudo_random(7, 7, 83, 40);
-    let symmetric = &base + &base.create_transpose();
-    let perm = [6, 3, 0, 5, 1, 4, 2];
-    let permuted = symmetric.permute_symmetric(&perm).unwrap();
-    assert!(permuted.is_symmetric());
-    assert!(permuted.trace() == symmetric.trace());
-    let mut before = symmetric.diagonal().to_dense();
-    let mut after = permuted.diagonal().to_dense();
-    before.sort_by(f64::total_cmp);
-    after.sort_by(f64::total_cmp);
-    assert!(before == after);
-    // P A Pᵀ written with explicit permutation matrices
-    let p = SparseMatrix::from_triplets(7, 7, perm.iter().enumerate().map(|(i, &j)| (i, j, 1.0)))
-        .unwrap();
-    assert!(permuted == &(&p * &symmetric) * &p.create_transpose());
-}
-
-#[test]
-fn sparsemat_permute_rows_agrees_with_lu_permutation() {
-    let a = dominant(6, 84);
-    let lu = a.lu().unwrap();
-    let columns: Vec<usize> = (0..6).collect();
-    let pa = a.permute(lu.permutation(), &columns).unwrap();
-    assert!((&pa - &(lu.l() * lu.u()).to_sparse()).norm_frobenius() < 1e-9);
-}
-
-#[test]
-fn sparsemat_permute_errors() {
-    let a = SparseMatrix::<f64>::empty_with_shape(3, 2);
-    let reason = |result: Result<SparseMatrix, SparseError>| match result.err() {
-        Some(SparseError::InvalidPermutation { reason }) => reason,
-        other => panic!("expected InvalidPermutation, got {other:?}"),
-    };
-    assert!(
-        reason(a.permute(&[0, 1], &[0, 1])) == "length must equal the dimension being permuted"
-    );
-    assert!(reason(a.permute(&[0, 1, 3], &[0, 1])) == "index out of range");
-    assert!(reason(a.permute(&[0, 1, 1], &[0, 1])) == "index repeated");
-    assert!(reason(a.permute(&[0, 1, 2], &[1, 1])) == "index repeated");
-    assert!(
-        a.permute_symmetric(&[0, 1, 2]).err() == Some(SparseError::NotSquare { shape: (3, 2) })
-    );
-    // Empty matrices have exactly one permutation
-    let empty = SparseMatrix::<f64>::new();
-    assert!(empty.permute_symmetric(&[]).unwrap().shape == (0, 0));
 }
 
 fn pseudo_random_complex(

@@ -1,7 +1,6 @@
 //! Read access to a matrix's stored entries, rows and columns.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::ops::{Index, Range};
 
 use super::{Compressed, SparseMatrix};
@@ -10,12 +9,13 @@ use crate::Scalar;
 
 /// One row or column of a matrix, holding only its stored entries.
 ///
-/// Returned by `SparseMatrix::row`, `SparseMatrix::col` and `SparseMatrix::diagonal`.
+/// Returned by `CsrMatrix::row`, `CscMatrix::col` and `CompressedMatrix::diagonal`, which
+/// include any stored zeros.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SparseVector<T = f64> {
-    len: usize,
-    indices: Vec<usize>,
-    values: Vec<T>,
+    pub(crate) len: usize,
+    pub(crate) indices: Vec<usize>,
+    pub(crate) values: Vec<T>,
 }
 
 impl<T: Scalar> SparseVector<T> {
@@ -153,47 +153,17 @@ impl<T: Scalar> SparseMatrix<T> {
 }
 
 impl<T: Scalar> SparseMatrix<T> {
-    /// Extracts the compressed segment `major` as a sparse vector of length `len`.
-    fn segment(compressed: &Compressed<T>, major: usize, len: usize) -> SparseVector<T> {
-        let (start, end) = (compressed.ptr[major], compressed.ptr[major + 1]);
-        SparseVector {
-            len,
-            indices: compressed.idx[start..end].to_vec(),
-            values: compressed.data[start..end].to_vec(),
-        }
-    }
-
-    /// Returns row `i` as a sparse vector of length `shape.1`.
-    ///
-    /// Returns `SparseError::OutOfRange` if `i` is not a row of the matrix.
+    /// Row `i` as a sparse vector; forwards to `CsrMatrix::row`.
     pub fn row(&self, i: usize) -> Result<SparseVector<T>, SparseError> {
-        if i >= self.shape.0 {
-            return Err(SparseError::OutOfRange {
-                index: i,
-                len: self.shape.0,
-            });
-        }
-        Ok(Self::segment(&self.csr_cow(), i, self.shape.1))
+        self.to_csr().row(i)
     }
 
-    /// Returns column `j` as a sparse vector of length `shape.0`.
-    ///
-    /// Reads the CSC form, so call `explicitly_compress_csc` first when taking many columns.
-    /// Returns `SparseError::OutOfRange` if `j` is not a column of the matrix.
+    /// Column `j` as a sparse vector; forwards to `CscMatrix::col`.
     pub fn col(&self, j: usize) -> Result<SparseVector<T>, SparseError> {
-        if j >= self.shape.1 {
-            return Err(SparseError::OutOfRange {
-                index: j,
-                len: self.shape.1,
-            });
-        }
-        Ok(Self::segment(&self.csc_cow(), j, self.shape.0))
+        self.to_csc().col(j)
     }
 
-    /// Iterates over the columns of the matrix, yielding each as a dense `Vec<T>`.
-    ///
-    /// The column counterpart of `row_iter`; call `explicitly_compress_csc` first when
-    /// iterating repeatedly.
+    /// Iterates over the columns, yielding each as a dense `Vec<T>`.
     pub fn col_iter(&self) -> ColIterator<'_, T> {
         ColIterator {
             shape: self.shape,
@@ -202,96 +172,27 @@ impl<T: Scalar> SparseMatrix<T> {
         }
     }
 
-    /// Returns the main diagonal as a sparse vector of length `min(rows, cols)`.
+    /// The main diagonal; forwards to `CompressedMatrix::diagonal`.
     pub fn diagonal(&self) -> SparseVector<T> {
-        let len = self.shape.0.min(self.shape.1);
-        let mut indices = vec![];
-        let mut values = vec![];
-        for i in 0..len {
-            if let Some(&val) = self.values.get(&(i, i)) {
-                indices.push(i);
-                values.push(val);
-            }
-        }
-        SparseVector {
-            len,
-            indices,
-            values,
-        }
+        self.to_csr().diagonal()
     }
 
-    /// Extracts the block `rows x cols` as a new matrix of shape
-    /// `(rows.len(), cols.len())`, with indices shifted so the block starts at `(0, 0)`.
-    ///
-    /// Returns `SparseError::InvalidRange` if either range is reversed or ends past the
-    /// matrix.
+    /// A contiguous block; forwards to `CompressedMatrix::submatrix`.
     pub fn submatrix(
         &self,
         rows: Range<usize>,
         cols: Range<usize>,
     ) -> Result<SparseMatrix<T>, SparseError> {
-        for (range, len) in [(&rows, self.shape.0), (&cols, self.shape.1)] {
-            if range.start > range.end || range.end > len {
-                return Err(SparseError::InvalidRange {
-                    start: range.start,
-                    end: range.end,
-                    len,
-                });
-            }
-        }
-
-        let values = self
-            .values
-            .iter()
-            .filter(|((row, col), _)| rows.contains(row) && cols.contains(col))
-            .map(|((row, col), val)| ((row - rows.start, col - cols.start), *val))
-            .collect();
-        Ok(SparseMatrix::from_values((rows.len(), cols.len()), values))
+        self.to_csr()
+            .submatrix(rows, cols)
+            .map(|block| block.to_sparse())
     }
 
-    /// Extracts the rows and columns named by two index lists, as a new matrix of shape
-    /// `(rows.len(), cols.len())`: entry `(i, j)` of the result is entry `(rows[i], cols[j])`
-    /// of `self`.
-    ///
-    /// Unlike `submatrix`, the indices need not be contiguous or sorted, so this can pull out
-    /// any subset (such as the PV and PQ buses of a power system) in any order. An index may
-    /// appear more than once, which repeats that row or column, as multiplying by a selection
-    /// matrix would. Makes one pass over the stored entries. Returns `SparseError::OutOfRange`
-    /// for the first index that is not a row or column of the matrix.
+    /// Selected rows and columns; forwards to `CompressedMatrix::select`.
     pub fn select(&self, rows: &[usize], cols: &[usize]) -> Result<SparseMatrix<T>, SparseError> {
-        let row_positions = Self::positions_by_index(rows, self.shape.0)?;
-        let col_positions = Self::positions_by_index(cols, self.shape.1)?;
-
-        let mut values = HashMap::new();
-        for (&(row, col), &val) in self.values.iter() {
-            let (Some(out_rows), Some(out_cols)) =
-                (row_positions.get(&row), col_positions.get(&col))
-            else {
-                continue;
-            };
-            for &out_row in out_rows {
-                for &out_col in out_cols {
-                    values.insert((out_row, out_col), val);
-                }
-            }
-        }
-        Ok(SparseMatrix::from_values((rows.len(), cols.len()), values))
-    }
-
-    /// Maps each index in `indices` to the output positions it appears at, checking that every
-    /// index is below `len`.
-    fn positions_by_index(
-        indices: &[usize],
-        len: usize,
-    ) -> Result<HashMap<usize, Vec<usize>>, SparseError> {
-        let mut positions: HashMap<usize, Vec<usize>> = HashMap::with_capacity(indices.len());
-        for (position, &index) in indices.iter().enumerate() {
-            if index >= len {
-                return Err(SparseError::OutOfRange { index, len });
-            }
-            positions.entry(index).or_default().push(position);
-        }
-        Ok(positions)
+        self.to_csr()
+            .select(rows, cols)
+            .map(|selected| selected.to_sparse())
     }
 }
 

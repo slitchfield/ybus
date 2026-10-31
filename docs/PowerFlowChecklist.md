@@ -197,7 +197,11 @@ Merged in PR #2.
             every result bit-for-bit what it was: the DC survey's factor sizes, backward errors
             and differences from MATPOWER match the recorded ones exactly on case14, case300,
             case2383wp and case2848rte.
-      - [ ] access, selection, permutation and properties
+      - [x] access, selection, permutation and properties. `row` and `row_iter` are on CSR,
+            `col` and `col_iter` on CSC, where each is a slice; `diagonal`, `submatrix`,
+            `select`, the permutations, `density`, `sum`, `trace`, `is_symmetric` and the norms
+            work in either orientation. Stored zeros are carried along, count in `density`,
+            and don't break symmetry.
       - [ ] arithmetic, block construction and complex parts
 - [ ] `powerflow` builds and stores its DC model's matrices as `CsrMatrix`.
 - [ ] `SparseMatrix` becomes the editing type only: its compressed caches, the cache API and the

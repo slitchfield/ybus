@@ -816,3 +816,383 @@ fn conjugate_gradient_edge_cases() {
     );
     assert!(identity.conjugate_gradient(&[1.0], 1e-12, 10).is_err());
 }
+
+// Access, selection, permutation and properties
+
+fn sample_4x6() -> CsrMatrix<f64> {
+    CsrMatrix::from_triplets(
+        4,
+        6,
+        vec![
+            (0, 0, 10.0),
+            (0, 1, 20.0),
+            (1, 1, 30.0),
+            (2, 2, 50.0),
+            (1, 3, 40.0),
+            (2, 3, 60.0),
+            (2, 4, 70.0),
+            (3, 5, 80.0),
+        ],
+    )
+    .unwrap()
+}
+
+/// `A + Aᵀ`, built from triplets.
+fn symmetrized(a: &CsrMatrix<f64>) -> CsrMatrix<f64> {
+    let (rows, _) = a.shape();
+    let mirrored = a.iter().map(|(row, col, value)| (col, row, value));
+    CsrMatrix::from_triplets(rows, rows, a.iter().chain(mirrored)).unwrap()
+}
+
+fn inverse_of(perm: &[usize]) -> Vec<usize> {
+    let mut inverse = vec![0; perm.len()];
+    for (position, &index) in perm.iter().enumerate() {
+        inverse[index] = position;
+    }
+    inverse
+}
+
+#[test]
+fn row_and_column_extraction() {
+    let csr = sample_4x6();
+    let row = csr.row(2).unwrap();
+    assert_eq!(row.len(), 6);
+    assert_eq!(row.nnz(), 3);
+    assert_eq!(row.indices(), [2, 3, 4]);
+    assert_eq!(row.values(), [50.0, 60.0, 70.0]);
+    assert_eq!(row.get(3), Some(60.0));
+    assert!(row.get(0).is_none());
+    assert_eq!(row.to_dense(), vec![0.0, 0.0, 50.0, 60.0, 70.0, 0.0]);
+    let empty = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new())
+        .unwrap()
+        .row(1)
+        .unwrap();
+    assert!(empty.nnz() == 0 && empty.len() == 3);
+
+    let col = csr.to_csc().col(3).unwrap();
+    assert_eq!(col.len(), 4);
+    assert_eq!(col.indices(), [1, 2]);
+    assert_eq!(col.values(), [40.0, 60.0]);
+
+    // Stored zeros come along
+    let with_zero = CsrMatrix::from_triplets(1, 3, vec![(0, 0, 1.0), (0, 2, 0.0)]).unwrap();
+    assert_eq!(with_zero.row(0).unwrap().indices(), [0, 2]);
+
+    assert_eq!(
+        csr.row(4).err(),
+        Some(SparseError::OutOfRange { index: 4, len: 4 })
+    );
+    assert_eq!(
+        csr.to_csc().col(6).err(),
+        Some(SparseError::OutOfRange { index: 6, len: 6 })
+    );
+}
+
+#[test]
+fn dense_row_and_column_iterators() {
+    let csr = sample_4x6();
+    let rows: Vec<Vec<f64>> = csr.row_iter().collect();
+    assert_eq!(rows, csr.to_dense());
+    let columns: Vec<Vec<f64>> = csr.to_csc().col_iter().collect();
+    assert_eq!(columns.len(), 6);
+    assert_eq!(columns[3], vec![0.0, 40.0, 60.0, 0.0]);
+}
+
+#[test]
+fn diagonal_in_both_orientations() {
+    for diag in [sample_4x6().diagonal(), sample_4x6().to_csc().diagonal()] {
+        assert_eq!(diag.len(), 4);
+        assert_eq!(diag.indices(), [0, 1, 2]);
+        assert_eq!(diag.values(), [10.0, 30.0, 50.0]);
+        assert_eq!(diag.to_dense(), vec![10.0, 30.0, 50.0, 0.0]);
+    }
+    assert_eq!(
+        CsrMatrix::<f64>::identity(3).diagonal().to_dense(),
+        vec![1.0; 3]
+    );
+    // Tall matrix: diagonal length is the smaller dimension
+    let tall = CscMatrix::<f64>::from_triplets(5, 2, Vec::new()).unwrap();
+    assert_eq!(tall.diagonal().len(), 2);
+}
+
+#[test]
+fn submatrix_in_both_orientations() {
+    let csr = sample_4x6();
+    let expected = vec![vec![30.0, 0.0, 40.0], vec![0.0, 50.0, 60.0]];
+    let block = csr.submatrix(1..3, 1..4).unwrap();
+    assert_eq!(block.shape(), (2, 3));
+    assert_eq!(block.to_dense(), expected);
+    assert_eq!(
+        csr.to_csc().submatrix(1..3, 1..4).unwrap().to_dense(),
+        expected
+    );
+    assert_eq!(csr.submatrix(0..4, 0..6).unwrap(), csr);
+    assert_eq!(csr.submatrix(2..2, 0..6).unwrap().shape(), (0, 6));
+}
+
+#[test]
+fn submatrix_invalid_range() {
+    let csr = sample_4x6();
+    assert_eq!(
+        csr.submatrix(0..5, 0..6).err(),
+        Some(SparseError::InvalidRange {
+            start: 0,
+            end: 5,
+            len: 4
+        })
+    );
+    #[allow(clippy::reversed_empty_ranges)]
+    let reversed = csr.submatrix(0..4, 4..2);
+    assert_eq!(
+        reversed.err(),
+        Some(SparseError::InvalidRange {
+            start: 4,
+            end: 2,
+            len: 6
+        })
+    );
+}
+
+#[test]
+fn density_counts_the_pattern() {
+    assert_eq!(CsrMatrix::<f64>::identity(4).density(), 0.25);
+    assert_eq!(
+        CscMatrix::from_dense(&[[1.0, 2.0], [3.0, 4.0]])
+            .unwrap()
+            .density(),
+        1.0
+    );
+    let stored_zero = CsrMatrix::from_triplets(2, 2, vec![(0, 1, 0.0)]).unwrap();
+    assert_eq!(stored_zero.density(), 0.25);
+    // No division by zero for an empty shape
+    assert_eq!(CsrMatrix::<f64>::default().density(), 0.0);
+    assert_eq!(
+        CsrMatrix::<f64>::from_triplets(0, 5, Vec::new())
+            .unwrap()
+            .density(),
+        0.0
+    );
+}
+
+#[test]
+fn sum_and_trace() {
+    let a = CsrMatrix::from_dense(&[[1.0, 2.0, 0.0], [0.0, 3.0, 4.0], [5.0, 0.0, 6.0]]).unwrap();
+    for (sum, trace) in [(a.sum(), a.trace()), (a.to_csc().sum(), a.to_csc().trace())] {
+        assert_eq!(sum, 21.0);
+        assert_eq!(trace, Ok(10.0));
+    }
+    let ints = CsrMatrix::from_dense(&[[1, 2], [3, 4]]).unwrap();
+    assert!(ints.sum() == 10 && ints.trace() == Ok(5));
+    let rect = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    assert_eq!(rect.trace(), Err(SparseError::NotSquare { shape: (2, 3) }));
+}
+
+#[test]
+fn is_symmetric() {
+    let check = |dense: [[f64; 2]; 2]| {
+        let csr = CsrMatrix::from_dense(&dense).unwrap();
+        assert_eq!(csr.is_symmetric(), csr.to_csc().is_symmetric());
+        csr.is_symmetric()
+    };
+    assert!(check([[1.0, 2.0], [2.0, 3.0]]));
+    assert!(!check([[1.0, 2.0], [5.0, 3.0]]));
+    // One side stored, the other not
+    assert!(!check([[0.0, 2.0], [0.0, 0.0]]));
+    // A stored zero opposite a missing entry is still symmetric
+    assert!(CsrMatrix::from_triplets(2, 2, vec![(0, 1, 0.0)])
+        .unwrap()
+        .is_symmetric());
+    assert!(!CsrMatrix::<f64>::from_triplets(2, 3, Vec::new())
+        .unwrap()
+        .is_symmetric());
+    assert!(CsrMatrix::<f64>::identity(5).is_symmetric());
+    assert!(CsrMatrix::<f64>::default().is_symmetric());
+    assert!(symmetrized(&pseudo_random(6, 6, 77, 40)).is_symmetric());
+}
+
+#[test]
+fn norms_in_both_orientations() {
+    let a = CsrMatrix::from_dense(&[[1.0, -2.0, 0.0], [0.0, 3.0, 4.0]]).unwrap();
+    for (frobenius, one, inf) in [
+        (a.norm_frobenius(), a.norm_1(), a.norm_inf()),
+        (
+            a.to_csc().norm_frobenius(),
+            a.to_csc().norm_1(),
+            a.to_csc().norm_inf(),
+        ),
+    ] {
+        assert!((frobenius - 30.0f64.sqrt()).abs() < 1e-12);
+        // Column sums: 1, 5, 4 and row sums: 3, 7
+        assert_eq!((one, inf), (5.0, 7.0));
+    }
+    let empty = CsrMatrix::<f64>::from_triplets(3, 3, Vec::new()).unwrap();
+    assert!(empty.norm_frobenius() == 0.0 && empty.norm_1() == 0.0 && empty.norm_inf() == 0.0);
+
+    // f32 works too, and transposing swaps the 1- and infinity-norms
+    let b = CsrMatrix::from_dense(&[[1.0f32, 2.0], [3.0, 4.0]]).unwrap();
+    assert_eq!(b.norm_1(), b.clone().transpose().norm_inf());
+    assert_eq!(b.norm_inf(), b.clone().transpose().norm_1());
+}
+
+#[test]
+fn select_matches_submatrix_for_ranges() {
+    let a = pseudo_random(6, 7, 71, 45);
+    let rows: Vec<usize> = (1..5).collect();
+    let cols: Vec<usize> = (2..7).collect();
+    assert_eq!(
+        a.select(&rows, &cols).unwrap(),
+        a.submatrix(1..5, 2..7).unwrap()
+    );
+}
+
+#[test]
+fn select_reorders_skips_and_repeats() {
+    let a = CsrMatrix::from_dense(&[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]).unwrap();
+    // Rows 2 then 0, columns 2 then 1: non-contiguous and reversed
+    let expected = vec![vec![9.0, 8.0], vec![3.0, 2.0]];
+    assert_eq!(a.select(&[2, 0], &[2, 1]).unwrap().to_dense(), expected);
+    assert_eq!(
+        a.to_csc().select(&[2, 0], &[2, 1]).unwrap().to_dense(),
+        expected
+    );
+
+    let b = CsrMatrix::from_dense(&[[1.0, 0.0], [0.0, 2.0]]).unwrap();
+    let repeated = vec![
+        vec![0.0, 2.0, 2.0],
+        vec![0.0, 2.0, 2.0],
+        vec![1.0, 0.0, 0.0],
+    ];
+    assert_eq!(
+        b.select(&[1, 1, 0], &[0, 1, 1]).unwrap().to_dense(),
+        repeated
+    );
+    assert_eq!(
+        b.to_csc()
+            .select(&[1, 1, 0], &[0, 1, 1])
+            .unwrap()
+            .to_dense(),
+        repeated
+    );
+}
+
+#[test]
+fn select_matches_dense_selection_and_keeps_stored_zeros() {
+    let a = pseudo_random(8, 8, 72, 40);
+    let dense = a.to_dense();
+    // A PV/PQ-style split: an arbitrary subset in a scrambled order
+    let rows = [7, 1, 4, 2];
+    let cols = [3, 0, 6, 5, 1];
+    let expected: Vec<Vec<f64>> = rows
+        .iter()
+        .map(|&r| cols.iter().map(|&c| dense[r][c]).collect())
+        .collect();
+    assert_eq!(a.select(&rows, &cols).unwrap().to_dense(), expected);
+    assert_eq!(
+        a.to_csc().select(&rows, &cols).unwrap().to_dense(),
+        expected
+    );
+
+    let stored_zero = CsrMatrix::from_triplets(2, 2, vec![(1, 0, 0.0), (0, 0, 1.0)]).unwrap();
+    assert_eq!(stored_zero.select(&[1], &[0]).unwrap().num_stored(), 1);
+}
+
+#[test]
+fn select_empty_and_out_of_range() {
+    let a = sample_4x6();
+    let none = a.select(&[], &[0, 1]).unwrap();
+    assert!(none.shape() == (0, 2) && none.num_stored() == 0);
+    assert_eq!(
+        a.select(&[0, 4], &[0]).err(),
+        Some(SparseError::OutOfRange { index: 4, len: 4 })
+    );
+    assert_eq!(
+        a.to_csc().select(&[0], &[9]).err(),
+        Some(SparseError::OutOfRange { index: 9, len: 6 })
+    );
+}
+
+#[test]
+fn permute_matches_select_and_inverts() {
+    let a = pseudo_random(5, 4, 81, 50);
+    let (rows, cols) = ([3, 0, 4, 1, 2], [2, 3, 0, 1]);
+    assert_eq!(
+        a.permute(&rows, &cols).unwrap(),
+        a.select(&rows, &cols).unwrap()
+    );
+
+    let b = pseudo_random(6, 5, 82, 45);
+    let (rows, cols) = ([5, 2, 0, 4, 1, 3], [4, 0, 3, 1, 2]);
+    for permuted in [
+        b.permute(&rows, &cols).unwrap(),
+        b.to_csc().permute(&rows, &cols).unwrap().to_csr(),
+    ] {
+        assert_ne!(permuted, b);
+        let restored = permuted
+            .permute(&inverse_of(&rows), &inverse_of(&cols))
+            .unwrap();
+        assert_eq!(restored, b);
+    }
+    // The identity permutation changes nothing
+    assert_eq!(b.permute(&[0, 1, 2, 3, 4, 5], &[0, 1, 2, 3, 4]).unwrap(), b);
+}
+
+#[test]
+fn permute_symmetric_preserves_structure() {
+    let symmetric = symmetrized(&pseudo_random(7, 7, 83, 40));
+    let perm = [6, 3, 0, 5, 1, 4, 2];
+    let permuted = symmetric.permute_symmetric(&perm).unwrap();
+    assert!(permuted.is_symmetric());
+    assert_eq!(permuted.trace(), symmetric.trace());
+    let mut before = symmetric.diagonal().to_dense();
+    let mut after = permuted.diagonal().to_dense();
+    before.sort_by(f64::total_cmp);
+    after.sort_by(f64::total_cmp);
+    assert_eq!(before, after);
+    // P A Pᵀ written with explicit permutation matrices
+    let p =
+        CsrMatrix::from_triplets(7, 7, perm.iter().enumerate().map(|(i, &j)| (i, j, 1.0))).unwrap();
+    assert_eq!(
+        permuted,
+        &(&p * &symmetric) * &p.clone().transpose().to_csr()
+    );
+}
+
+#[test]
+fn permute_rows_agrees_with_lu_permutation() {
+    let a = dominant(6, 84);
+    let lu = a.lu().unwrap();
+    let columns: Vec<usize> = (0..6).collect();
+    let pa = a.permute(lu.permutation(), &columns).unwrap().to_dense();
+    let product = (lu.l() * lu.u()).to_dense();
+    for (got, want) in product.iter().zip(&pa) {
+        assert_vec_close(got, want, 1e-9);
+    }
+}
+
+#[test]
+fn permute_errors() {
+    let a = CsrMatrix::<f64>::from_triplets(3, 2, Vec::new()).unwrap();
+    let reason = |result: Result<CsrMatrix<f64>, SparseError>| match result.err() {
+        Some(SparseError::InvalidPermutation { reason }) => reason,
+        other => panic!("expected InvalidPermutation, got {other:?}"),
+    };
+    assert_eq!(
+        reason(a.permute(&[0, 1], &[0, 1])),
+        "length must equal the dimension being permuted"
+    );
+    assert_eq!(reason(a.permute(&[0, 1, 3], &[0, 1])), "index out of range");
+    assert_eq!(reason(a.permute(&[0, 1, 1], &[0, 1])), "index repeated");
+    assert_eq!(reason(a.permute(&[0, 1, 2], &[1, 1])), "index repeated");
+    assert_eq!(
+        a.permute_symmetric(&[0, 1, 2]).err(),
+        Some(SparseError::NotSquare { shape: (3, 2) })
+    );
+    // Empty matrices have exactly one permutation
+    assert_eq!(
+        CsrMatrix::<f64>::default()
+            .permute_symmetric(&[])
+            .unwrap()
+            .shape(),
+        (0, 0)
+    );
+}

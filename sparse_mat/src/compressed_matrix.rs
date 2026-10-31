@@ -25,9 +25,11 @@ use crate::sparse_error::SparseError;
 use crate::sparse_matrix::{write_dense_grid, SparseMatrix};
 use crate::Scalar;
 
+mod access;
 #[cfg(feature = "rayon")]
 mod parallel;
 pub(crate) mod product;
+mod properties;
 #[cfg(feature = "serde")]
 mod serde_impl;
 mod solvers;
