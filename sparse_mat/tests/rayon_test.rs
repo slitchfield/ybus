@@ -1,10 +1,10 @@
 #![cfg(feature = "rayon")]
 
+use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
 use sparse_mat::sparse_error::SparseError;
-use sparse_mat::sparse_matrix::SparseMatrix;
 
-/// Deterministic pseudo-random sparse matrix with small integer-valued entries.
-fn pseudo_random(rows: usize, cols: usize, seed: u64, fill_percent: u64) -> SparseMatrix {
+/// Deterministic pseudo-random sparse matrix with small entries.
+fn pseudo_random(rows: usize, cols: usize, seed: u64, fill_percent: u64) -> CsrMatrix<f64> {
     let mut state = seed;
     let mut next = || {
         state = state
@@ -20,7 +20,15 @@ fn pseudo_random(rows: usize, cols: usize, seed: u64, fill_percent: u64) -> Spar
             }
         }
     }
-    SparseMatrix::from_triplets(rows, cols, triplets).unwrap()
+    CsrMatrix::from_triplets(rows, cols, triplets).unwrap()
+}
+
+/// The same arrays, so the comparison covers the pattern and stored zeros too.
+fn assert_same_arrays(a: &CsrMatrix<f64>, b: &CsrMatrix<f64>) {
+    assert_eq!(a.shape(), b.shape());
+    assert_eq!(a.pointers(), b.pointers());
+    assert_eq!(a.indices(), b.indices());
+    assert_eq!(a.values(), b.values());
 }
 
 #[test]
@@ -35,33 +43,35 @@ fn par_mul_vec_equals_sequential_exactly() {
 #[test]
 fn par_vec_mul_equals_sequential_exactly() {
     for seed in 1..=5 {
-        let a = pseudo_random(45, 60, seed, 20);
+        let a = pseudo_random(45, 60, seed, 20).to_csc();
         let x: Vec<f64> = (0..45).map(|i| (i as f64).cos()).collect();
         assert_eq!(a.par_vec_mul(&x).unwrap(), a.vec_mul(&x).unwrap());
     }
 }
 
 #[test]
-fn par_matmul_equals_sequential() {
+fn par_matmul_equals_sequential_exactly() {
     for seed in 1..=4 {
         let a = pseudo_random(40, 30, seed, 15);
         let b = pseudo_random(30, 50, seed + 50, 15);
-        assert!(a.par_matmul(&b).unwrap() == a.matmul(&b).unwrap());
+        assert_same_arrays(&a.par_matmul(&b).unwrap(), &a.matmul(&b).unwrap());
+        let by_columns = a.to_csc().par_matmul(&b.to_csc()).unwrap();
+        assert_same_arrays(&by_columns.to_csr(), &a.matmul(&b).unwrap());
     }
 }
 
 #[test]
-fn par_matmul_drops_cancellations() {
-    let a = SparseMatrix::from([[1, -1], [0, 2]]);
-    let b = SparseMatrix::from([[1, 0], [1, 5]]);
+fn par_matmul_keeps_cancellations_as_stored_zeros() {
+    let a = CsrMatrix::from_dense(&[[1.0, -1.0], [0.0, 2.0]]).unwrap();
+    let b = CsrMatrix::from_dense(&[[1.0, 0.0], [1.0, 5.0]]).unwrap();
     let product = a.par_matmul(&b).unwrap();
-    assert!(product == a.matmul(&b).unwrap());
-    assert_eq!(product.num_nonzero(), 3);
+    assert_same_arrays(&product, &a.matmul(&b).unwrap());
+    assert_eq!((product.num_stored(), product.num_nonzero()), (4, 3));
 }
 
 #[test]
 fn par_products_report_shape_mismatches() {
-    let a = SparseMatrix::<f64>::empty_with_shape(2, 3);
+    let a = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
     assert_eq!(
         a.par_mul_vec(&[1.0]).err(),
         Some(SparseError::ShapeMismatch {
@@ -70,7 +80,7 @@ fn par_products_report_shape_mismatches() {
         })
     );
     assert_eq!(
-        a.par_vec_mul(&[1.0, 2.0, 3.0]).err(),
+        a.to_csc().par_vec_mul(&[1.0, 2.0, 3.0]).err(),
         Some(SparseError::ShapeMismatch {
             left: (1, 3),
             right: (2, 3)
@@ -87,8 +97,11 @@ fn par_products_report_shape_mismatches() {
 
 #[test]
 fn par_products_on_empty_matrices() {
-    let a = SparseMatrix::<f64>::new();
+    let a = CsrMatrix::<f64>::default();
     assert_eq!(a.par_mul_vec(&[]).unwrap(), Vec::<f64>::new());
-    assert_eq!(a.par_vec_mul(&[]).unwrap(), Vec::<f64>::new());
-    assert_eq!(a.par_matmul(&a).unwrap().shape, (0, 0));
+    assert_eq!(
+        CscMatrix::<f64>::default().par_vec_mul(&[]).unwrap(),
+        Vec::<f64>::new()
+    );
+    assert_eq!(a.par_matmul(&a).unwrap().shape(), (0, 0));
 }

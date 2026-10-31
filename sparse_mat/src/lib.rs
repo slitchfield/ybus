@@ -1,7 +1,10 @@
 //! A sparse matrix library.
 //!
-//! See [`sparse_matrix::SparseMatrix`] for the matrix type and [`sparse_error::SparseError`]
-//! for its errors.
+//! [`sparse_matrix::SparseMatrix`] builds and edits a matrix, and
+//! [`compressed_matrix::CompressedMatrix`] (as `CsrMatrix` or `CscMatrix`) does the numerical
+//! work; [`sparse_error::SparseError`] is the error type.
+
+pub mod compressed_matrix;
 
 /// The `SparseMatrix` type and its iterators.
 pub mod sparse_matrix;

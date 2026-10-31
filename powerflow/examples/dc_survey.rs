@@ -142,11 +142,11 @@ fn entries(model: &DcModel, solver: DcSolver) -> Result<(usize, usize, usize), S
             .count(),
         DcSolver::Lu => {
             let lu = bprime.lu().map_err(|err| err.to_string())?;
-            lu.l().iter().count() + lu.u().iter().count() - unknown.len()
+            lu.l().num_stored() + lu.u().num_stored() - unknown.len()
         }
         DcSolver::NoSolve => 0,
     };
-    Ok((unknown.len(), bprime.iter().count(), factor))
+    Ok((unknown.len(), bprime.num_stored(), factor))
 }
 
 /// Runs `step` until `BUDGET` has passed or it has run `MAX_RUNS` times, and returns its median

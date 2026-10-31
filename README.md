@@ -4,7 +4,7 @@ Sparse linear algebra and power flow for Rust. A Cargo workspace with two crates
 
 | Crate | Status | Contents |
 |---|---|---|
-| [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: construction, arithmetic, products, LU/Cholesky/CG solvers, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
+| [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, LU/Cholesky/CG solvers, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
 | [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, and DC power flow, which agrees with MATPOWER on all 78 of its cases. Next: Newton–Raphson and fast-decoupled AC power flow. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow

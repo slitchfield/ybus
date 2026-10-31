@@ -20,8 +20,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::f64::consts::PI;
 
+use sparse_mat::compressed_matrix::CsrMatrix;
 use sparse_mat::sparse_error::SparseError;
-use sparse_mat::sparse_matrix::SparseMatrix;
 
 use crate::case::{BusType, Case};
 use crate::powerflow_error::PowerflowError;
@@ -34,8 +34,8 @@ use crate::powerflow_error::PowerflowError;
 #[derive(Debug, Clone)]
 pub struct DcModel {
     base_mva: f64,
-    bbus: SparseMatrix<f64>,
-    bf: SparseMatrix<f64>,
+    bbus: CsrMatrix<f64>,
+    bf: CsrMatrix<f64>,
     pbusinj_pu: Vec<f64>,
     pfinj_pu: Vec<f64>,
     bus_rows: Vec<usize>,
@@ -109,7 +109,8 @@ impl DcModel {
 
         // makeBdc. Each branch's (from, to) and (to, from) stamps are pushed together, so both
         //   positions sum the same values in the same order and Bbus is exactly symmetric,
-        //   which cholesky requires.
+        //   which cholesky requires. Every stamped position stays stored even if its stamps
+        //   cancel, so the pattern depends only on the topology.
         let nl = branch_rows.len();
         let mut bbus_triplets = Vec::with_capacity(4 * nl);
         let mut bf_triplets = Vec::with_capacity(2 * nl);
@@ -125,9 +126,9 @@ impl DcModel {
             pbusinj_pu[from] += pfinj;
             pbusinj_pu[to] -= pfinj;
         }
-        let bbus = SparseMatrix::from_triplets(nb, nb, bbus_triplets)
+        let bbus = CsrMatrix::from_triplets(nb, nb, bbus_triplets)
             .expect("internal bus indices are below nb");
-        let bf = SparseMatrix::from_triplets(nl, nb, bf_triplets)
+        let bf = CsrMatrix::from_triplets(nl, nb, bf_triplets)
             .expect("internal branch and bus indices are in range");
 
         // bustypes
@@ -200,14 +201,15 @@ impl DcModel {
         self.base_mva
     }
 
-    /// The bus susceptance matrix, connected buses × connected buses (p.u.).
-    pub fn bbus(&self) -> &SparseMatrix<f64> {
+    /// The bus susceptance matrix, connected buses × connected buses (p.u.), in CSR form with
+    /// one stored entry for every position a branch stamps.
+    pub fn bbus(&self) -> &CsrMatrix<f64> {
         &self.bbus
     }
 
     /// The branch susceptance matrix, in-service branches × connected buses (p.u.), which maps
-    /// bus angles to from-end branch flows.
-    pub fn bf(&self) -> &SparseMatrix<f64> {
+    /// bus angles to from-end branch flows, in CSR form.
+    pub fn bf(&self) -> &CsrMatrix<f64> {
         &self.bf
     }
 

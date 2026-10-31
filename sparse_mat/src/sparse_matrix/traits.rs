@@ -7,7 +7,7 @@ use super::SparseMatrix;
 use crate::sparse_error::SparseError;
 use crate::Scalar;
 
-/// Shows the shape and the stored entries in row-major order, without the caches.
+/// Shows the shape and the stored entries in row-major order.
 impl<T: Scalar + fmt::Debug> fmt::Debug for SparseMatrix<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let entries: Vec<(usize, usize, T)> = self.iter().collect();
@@ -18,8 +18,8 @@ impl<T: Scalar + fmt::Debug> fmt::Debug for SparseMatrix<T> {
     }
 }
 
-/// Two matrices are equal when they have the same shape and the same stored entries.
-/// Whether their compressed caches are built does not matter.
+/// Two matrices are equal when they have the same shape and the same stored entries, whatever
+/// order they were inserted in.
 ///
 /// Like floats themselves this is only a partial equivalence: a matrix holding `NaN` is not
 /// equal to itself.
@@ -30,9 +30,9 @@ impl<T: Scalar> PartialEq for SparseMatrix<T> {
 }
 
 /// Iterates over the stored entries by reference; equivalent to `SparseMatrix::iter`.
-impl<'a, T: Scalar> IntoIterator for &'a SparseMatrix<T> {
+impl<T: Scalar> IntoIterator for &SparseMatrix<T> {
     type Item = (usize, usize, T);
-    type IntoIter = Entries<'a, T>;
+    type IntoIter = Entries<T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
@@ -43,10 +43,10 @@ impl<'a, T: Scalar> IntoIterator for &'a SparseMatrix<T> {
 /// order.
 impl<T: Scalar> IntoIterator for SparseMatrix<T> {
     type Item = (usize, usize, T);
-    type IntoIter = std::vec::IntoIter<(usize, usize, T)>;
+    type IntoIter = Entries<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.iter().collect::<Vec<_>>().into_iter()
+        self.iter()
     }
 }
 

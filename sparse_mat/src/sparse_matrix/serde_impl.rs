@@ -1,8 +1,8 @@
 //! `serde` support (feature `serde`).
 //!
 //! A matrix serializes as `{"shape": [rows, cols], "entries": [[row, col, value], ...]}`
-//! with entries in row-major order, so the output does not depend on insertion order or on
-//! whether compressed caches are built. Deserializing validates the entries like
+//! with entries in row-major order, so the output does not depend on insertion order.
+//! Deserializing validates the entries like
 //! `SparseMatrix::from_triplets`: out-of-bounds entries are an error, duplicates are summed
 //! and zeros are dropped.
 

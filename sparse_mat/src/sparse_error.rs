@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-/// Errors returned by `SparseMatrix` operations.
+/// Errors returned by `SparseMatrix` and `CompressedMatrix` operations.
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
 pub enum SparseError {
@@ -39,8 +39,9 @@ pub enum SparseError {
         /// The number of rows or columns the range was checked against.
         len: usize,
     },
-    /// Raw CSR arrays are inconsistent with each other or with the requested shape.
-    InvalidCsr {
+    /// Raw compressed (CSR or CSC) arrays are inconsistent with each other or with the
+    /// requested shape.
+    InvalidCompressed {
         /// What is wrong with the arrays.
         reason: &'static str,
     },
@@ -114,8 +115,8 @@ impl fmt::Display for SparseError {
             SparseError::InvalidRange { start, end, len } => {
                 write!(f, "range {start}..{end} invalid for length {len}")
             }
-            SparseError::InvalidCsr { reason } => {
-                write!(f, "invalid CSR arrays: {reason}")
+            SparseError::InvalidCompressed { reason } => {
+                write!(f, "invalid compressed arrays: {reason}")
             }
             SparseError::InvalidPermutation { reason } => {
                 write!(f, "invalid permutation: {reason}")
