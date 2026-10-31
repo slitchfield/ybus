@@ -251,19 +251,42 @@ Merged in PR #2.
 
 ## Phase 3: Factorization rewrite (the largest piece)
 
+- [x] **Decide:** the shape of the ordered factorizations, where AMD comes from, whether to
+      implement COLAMD, and the LU's pivot threshold.
+      Decided (2026-10-31):
+      - **Symbolic/numeric split:** `analyze_cholesky`/`analyze_lu` return a symbolic object
+        (ordering, elimination tree, counts), whose `factor(&A)` returns `Cholesky`/`Lu` factor
+        types that carry their permutations. `Lu::refactor` reuses a factorization's pivots and
+        patterns. `cholesky()`, `lu()`, `solve` and `solve_spd` stay as one-call front ends,
+        ordered by default, and return the new types; breaking changes are acceptable.
+      - **AMD is written from the papers** (Amestoy, Davis and Duff, 1996; Davis, 2006, ch. 7),
+        not ported, so `sparse_mat` stays written from published descriptions only.
+      - **COLAMD is deferred.** LU orders with AMD on the pattern of A+Aᵀ, which suits every
+        matrix power flow factors (B′, B″, Ybus and the polar Jacobian are structurally
+        symmetric), as KLU does by default.
+      - **The pivot threshold defaults to 0.1** and is configurable: a pivot on the diagonal is
+        kept if its magnitude is at least 0.1 times the column's largest.
 - [ ] Reverse Cuthill–McKee ordering, with a test that bandwidth doesn't increase on banded and
       grid matrices.
-- [ ] Symbolic analysis, `analyze(pattern)`: ordering, plus the elimination tree for Cholesky.
+- [ ] Symbolic analysis, `analyze_cholesky`: ordering, the elimination tree and L's column
+      counts.
+- [ ] Cholesky after ordering, reusing the existing up-looking algorithm, with the elimination
+      tree's reach in place of its `BTreeMap` work row. Moved up from the end of the phase: it
+      costs little once an ordering exists, and gives the first measurement.
+- [ ] The DC power flow solves with ordered Cholesky, and the survey can choose its ordering.
+      Rerun the survey with RCM and make a first check of the hypothesis below on the Cholesky
+      cases.
+- [ ] AMD ordering, for Cholesky and (on the pattern of A+Aᵀ) for LU. Benchmark fill and time
+      against RCM on the large case.
+- [ ] Keep the current `BTreeMap` LU as a test-only reference implementation, and compare the
+      two on pseudo-random and power flow matrices.
 - [ ] Gilbert–Peierls left-looking LU with threshold partial pivoting, generic over
       `ComplexFloat` from the start (review note 2). Keep the current `Lu` API (`solve`,
       `determinant`, `l`, `u`, `permutation`) as the front end.
 - [ ] `refactor(values)`, which reuses the analysis and pivot sequence when only values change.
       If a pivot becomes too small, fall back to a full factorization and report that.
-- [ ] Keep the current `BTreeMap` LU as a test-only reference implementation, and compare the
-      two on pseudo-random and power flow matrices.
+- [ ] The DC power flow's LU fallback uses the new LU.
 - [ ] `solve_in_place` and `solve_many` (several right-hand sides).
-- [ ] AMD ordering for Cholesky, and COLAMD (or AMD on the pattern of AᵀA) for LU. Benchmark fill
-      and time against RCM on the large case.
 - [ ] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward
       error: unordered, ours was up to 30 times MATPOWER's on high-fill cases, and correlated
       with fill where MATPOWER's, from an ordered solve, didn't. Rerun `scripts/benchmark-dc.sh`
@@ -271,7 +294,8 @@ Merged in PR #2.
       `matpower_backward_error` against the baseline in
       `docs/benchmarks/dc-power-flow-2026-10-31.md`. Threshold partial pivoting trades some
       stability for sparsity, so `dc_backward_error_test.rs` guards its limit meanwhile.
-- [ ] Cholesky after ordering, reusing the existing up-looking algorithm.
+- [ ] Deferred: COLAMD, for LU of a matrix whose pattern is far from symmetric. Nothing in power
+      flow needs it yet.
 
 ## Phase 4: Complex-capable solvers (migrating what Phase 3 didn't rewrite)
 
