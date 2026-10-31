@@ -1,6 +1,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use crate::compressed_matrix::{
+    zeroed_pointers, CompressedMatrix, CscMatrix, CsrMatrix, Orientation,
+};
 use crate::sparse_error::SparseError;
 use crate::Scalar;
 
@@ -138,7 +141,7 @@ impl<T: Scalar> SparseMatrix<T> {
         let major_of = |&(row, col): &(usize, usize)| if by_col { col } else { row };
 
         // Count entries per major index, then prefix-sum into segment pointers
-        let mut ptr = Self::zeroed_pointers(major_dim);
+        let mut ptr = zeroed_pointers(major_dim);
         for key in self.values.keys() {
             ptr[major_of(key) + 1] += 1;
         }
@@ -169,24 +172,34 @@ impl<T: Scalar> SparseMatrix<T> {
         Compressed { ptr, idx, data }
     }
 
-    /// Allocates the `dim + 1` zeroed segment pointers of a compressed form.
-    ///
-    /// Compressed storage costs O(dim) memory however sparse the matrix is, so a dimension
-    /// near `usize::MAX` cannot have one. Panics with a message naming the dimension, instead
-    /// of overflowing `dim + 1` (which wraps silently in release builds) or failing inside the
-    /// allocator.
-    fn zeroed_pointers(dim: usize) -> Vec<usize> {
-        let len = dim.checked_add(1).unwrap_or_else(|| {
-            panic!(
-                "compressed storage for dimension {dim} needs dim + 1 pointers, overflowing usize"
-            )
-        });
-        let mut ptr = Vec::new();
-        ptr.try_reserve_exact(len).unwrap_or_else(|err| {
-            panic!("compressed storage for dimension {dim} needs {len} pointers: {err}")
-        });
-        ptr.resize(len, 0);
-        ptr
+    /// The matrix in compressed sparse row form, storing exactly its entries (none of them
+    /// zero), with a fixed pattern for numerical work. Costs O(nnz) plus sorting each row,
+    /// unless a fresh CSR cache exists, which is copied.
+    pub fn to_csr(&self) -> CsrMatrix<T> {
+        self.to_compressed()
+    }
+
+    /// The matrix in compressed sparse column form, storing exactly its entries (none of them
+    /// zero), with a fixed pattern for numerical work. Costs O(nnz) plus sorting each column,
+    /// unless a fresh CSC cache exists, which is copied.
+    pub fn to_csc(&self) -> CscMatrix<T> {
+        self.to_compressed()
+    }
+
+    /// The matrix compressed along `O`'s axis; `to_csr` and `to_csc` name the two cases.
+    pub fn to_compressed<O: Orientation>(&self) -> CompressedMatrix<T, O> {
+        let compressed = if O::ROW_MAJOR {
+            self.csr_cow()
+        } else {
+            self.csc_cow()
+        }
+        .into_owned();
+        CompressedMatrix::from_parts_unchecked(
+            self.shape,
+            compressed.ptr,
+            compressed.idx,
+            compressed.data,
+        )
     }
 
     /// Drops the cached compressed copies; call after any change to `values` or `shape`.
@@ -281,7 +294,10 @@ impl<T: Scalar> SparseMatrix<T> {
 
     /// Wraps an existing entry map in a matrix of the given shape, with a stale cache.
     /// The caller guarantees every key is in bounds and no value is zero.
-    fn from_values(shape: (usize, usize), values: HashMap<(usize, usize), T>) -> SparseMatrix<T> {
+    pub(crate) fn from_values(
+        shape: (usize, usize),
+        values: HashMap<(usize, usize), T>,
+    ) -> SparseMatrix<T> {
         Self {
             shape,
             values,
@@ -369,8 +385,9 @@ impl<T: Scalar> SparseMatrix<T> {
     /// column indices in range.
     ///
     /// Zero values are dropped. When there are none, the arrays become the matrix's CSR cache
-    /// directly, so `compressed` is `Some` straight away. Returns `SparseError::InvalidCsr`
-    /// if the arrays are inconsistent.
+    /// directly, so `compressed` is `Some` straight away. Returns
+    /// `SparseError::InvalidCompressed` if the arrays are inconsistent, as
+    /// `CsrMatrix::try_from_raw_parts` does.
     #[allow(dead_code)]
     pub fn from_csr(
         rows: usize,
@@ -379,49 +396,12 @@ impl<T: Scalar> SparseMatrix<T> {
         col_idx: Vec<usize>,
         data: Vec<T>,
     ) -> Result<SparseMatrix<T>, SparseError> {
-        let invalid = |reason| Err(SparseError::InvalidCsr { reason });
-        // Checked: rows + 1 overflows for rows == usize::MAX, and no row_ptr can be that long
-        if rows.checked_add(1) != Some(row_ptr.len()) {
-            return invalid("row_ptr must have rows + 1 entries");
-        }
-        if col_idx.len() != data.len() {
-            return invalid("col_idx and data must have the same length");
-        }
-        if row_ptr[0] != 0 || row_ptr[rows] != col_idx.len() {
-            return invalid("row_ptr must start at 0 and end at the entry count");
-        }
-
-        let mut values = HashMap::with_capacity(data.len());
-        for (row, bounds) in row_ptr.windows(2).enumerate() {
-            if bounds[0] > bounds[1] {
-                return invalid("row_ptr must be non-decreasing");
-            }
-            let mut previous: Option<usize> = None;
-            for (&col, &val) in col_idx[bounds[0]..bounds[1]]
-                .iter()
-                .zip(&data[bounds[0]..bounds[1]])
-            {
-                if col >= cols {
-                    return invalid("column index out of range");
-                }
-                if previous.is_some_and(|prev| prev >= col) {
-                    return invalid("column indices must be strictly increasing within a row");
-                }
-                previous = Some(col);
-                if val != T::zero() {
-                    values.insert((row, col), val);
-                }
-            }
-        }
-
-        let no_zeros = values.len() == data.len();
-        let mut local = Self::from_values((rows, cols), values);
-        if no_zeros {
-            local.csr = Some(Compressed {
-                ptr: row_ptr,
-                idx: col_idx,
-                data,
-            });
+        let csr = CsrMatrix::try_from_raw_parts(rows, cols, row_ptr, col_idx, data)?;
+        let mut local = csr.to_sparse();
+        if local.values.len() == csr.num_stored() {
+            // No zeros were dropped, so the arrays serve as the CSR cache as they are
+            let (_, ptr, idx, data) = csr.into_raw_parts();
+            local.csr = Some(Compressed { ptr, idx, data });
         }
         Ok(local)
     }
@@ -614,28 +594,37 @@ use std::fmt;
 /// Formats the matrix as a bracketed grid of dense rows, one per line.
 impl<T: Scalar + fmt::Display> fmt::Display for SparseMatrix<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let inner_line_width = 8 * self.shape.1; // 6 chars per col + comma + space + leading space
-        write!(f, "\t/")?;
-        for _ in 0..inner_line_width {
-            write!(f, " ")?;
-        }
-        writeln!(f, "\\")?;
-        // TODO: Account for variable number of digits in cols
-        for row in self.row_iter() {
-            write!(f, "\t| ")?;
-            for (idx, elem) in row.iter().enumerate() {
-                if idx != 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "{:>6.2}", elem)?; // TODO: dynamic precision based on longest values
-            }
-            writeln!(f, " |")?;
-        }
-        write!(f, "\t\\")?;
-        for _ in 0..inner_line_width {
-            write!(f, " ")?;
-        }
-        write!(f, "/")?;
-        writeln!(f)
+        write_dense_grid(f, self.shape.1, self.row_iter())
     }
+}
+
+/// Writes dense rows of `cols` values as the bracketed grid both matrix types display as.
+pub(crate) fn write_dense_grid<T: fmt::Display>(
+    f: &mut fmt::Formatter,
+    cols: usize,
+    rows: impl IntoIterator<Item = Vec<T>>,
+) -> fmt::Result {
+    let inner_line_width = 8 * cols; // 6 chars per col + comma + space + leading space
+    write!(f, "\t/")?;
+    for _ in 0..inner_line_width {
+        write!(f, " ")?;
+    }
+    writeln!(f, "\\")?;
+    // TODO: Account for variable number of digits in cols
+    for row in rows {
+        write!(f, "\t| ")?;
+        for (idx, elem) in row.iter().enumerate() {
+            if idx != 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{:>6.2}", elem)?; // TODO: dynamic precision based on longest values
+        }
+        writeln!(f, " |")?;
+    }
+    write!(f, "\t\\")?;
+    for _ in 0..inner_line_width {
+        write!(f, " ")?;
+    }
+    write!(f, "/")?;
+    writeln!(f)
 }

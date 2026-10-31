@@ -1041,20 +1041,20 @@ fn sparsemat_from_csr_round_trip() {
 #[test]
 fn sparsemat_from_csr_invalid() {
     let reason = |result: Result<SparseMatrix, SparseError>| match result.err() {
-        Some(SparseError::InvalidCsr { reason }) => reason,
-        other => panic!("expected InvalidCsr, got {other:?}"),
+        Some(SparseError::InvalidCompressed { reason }) => reason,
+        other => panic!("expected InvalidCompressed, got {other:?}"),
     };
     assert!(
         reason(SparseMatrix::from_csr(2, 2, vec![0, 1], vec![0], vec![1.0]))
-            == "row_ptr must have rows + 1 entries"
+            == "pointers must have rows + 1 entries"
     );
     assert!(
         reason(SparseMatrix::from_csr(1, 2, vec![0, 1], vec![0], vec![]))
-            == "col_idx and data must have the same length"
+            == "indices and values must have the same length"
     );
     assert!(
         reason(SparseMatrix::from_csr(1, 2, vec![0, 2], vec![0], vec![1.0]))
-            == "row_ptr must start at 0 and end at the entry count"
+            == "pointers must start at 0 and end at the entry count"
     );
     assert!(
         reason(SparseMatrix::from_csr(
@@ -1063,7 +1063,7 @@ fn sparsemat_from_csr_invalid() {
             vec![0, 2, 1, 2],
             vec![0, 1],
             vec![1.0, 2.0]
-        )) == "row_ptr must be non-decreasing"
+        )) == "pointers must be non-decreasing"
     );
     assert!(
         reason(SparseMatrix::from_csr(1, 2, vec![0, 1], vec![2], vec![1.0]))
@@ -2109,8 +2109,8 @@ fn sparsemat_from_csr_rows_overflow_is_an_error() {
     let result = SparseMatrix::<f64>::from_csr(usize::MAX, 1, vec![0], vec![], vec![]);
     assert!(
         result.err()
-            == Some(SparseError::InvalidCsr {
-                reason: "row_ptr must have rows + 1 entries"
+            == Some(SparseError::InvalidCompressed {
+                reason: "pointers must have rows + 1 entries"
             })
     );
 }

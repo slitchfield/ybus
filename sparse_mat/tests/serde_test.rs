@@ -50,3 +50,43 @@ fn serde_deserialize_validates_entries() {
     assert!(serde_json::from_str::<SparseMatrix<f64>>(r#"{"shape":[2,2]}"#).is_err());
     assert!(serde_json::from_str::<SparseMatrix<f64>>("[]").is_err());
 }
+
+#[test]
+fn compressed_round_trips_with_its_arrays_and_stored_zeros() {
+    use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
+
+    let csr = CsrMatrix::from_triplets(2, 3, vec![(1, 0, 2.0), (0, 2, 1.5), (0, 1, 0.0)]).unwrap();
+    let json = serde_json::to_string(&csr).unwrap();
+    assert_eq!(
+        json,
+        r#"{"shape":[2,3],"orientation":"CSR","pointers":[0,2,3],"indices":[1,2,0],"values":[0.0,1.5,2.0]}"#
+    );
+    let back: CsrMatrix<f64> = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.num_stored(), 3);
+    assert_eq!(back.values(), csr.values());
+
+    let csc = csr.to_csc();
+    let back: CscMatrix<f64> = serde_json::from_str(&serde_json::to_string(&csc).unwrap()).unwrap();
+    assert_eq!(back.pointers(), csc.pointers());
+}
+
+#[test]
+fn compressed_deserialize_validates_arrays_and_orientation() {
+    use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
+
+    let csr =
+        r#"{"shape":[1,1],"orientation":"CSR","pointers":[0,1],"indices":[0],"values":[1.0]}"#;
+    let err = serde_json::from_str::<CscMatrix<f64>>(csr).unwrap_err();
+    assert!(
+        err.to_string().contains("expected a CSC matrix, found CSR"),
+        "{err}"
+    );
+
+    let bad =
+        r#"{"shape":[1,1],"orientation":"CSR","pointers":[0,1],"indices":[3],"values":[1.0]}"#;
+    let err = serde_json::from_str::<CsrMatrix<f64>>(bad).unwrap_err();
+    assert!(
+        err.to_string().contains("column index out of range"),
+        "{err}"
+    );
+}

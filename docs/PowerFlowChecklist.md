@@ -172,10 +172,14 @@ Merged in PR #2.
       - **Stored zeros are kept:** the pattern is fixed when the matrix is built, so refills,
         refactorization and Newton's flat start (where some Jacobian entries are exactly zero)
         keep one pattern. Equality is mathematical, ignoring stored zeros and orientation.
-- [ ] `CompressedMatrix<T, O>`, promoted from the internal `Compressed<T>`: a fixed pattern with
+- [x] `CompressedMatrix<T, O>`, promoted from the internal `Compressed<T>`: a fixed pattern with
       `values()`/`values_mut()` and stored zeros, built from `SparseMatrix`, from triplets and
       from validated raw arrays (reusing `from_csr`'s checks), and converted back. Transposing
       swaps the orientation in O(1); reorienting is an explicit O(nnz) conversion.
+      Done in `sparse_mat/src/compressed_matrix.rs`, with mathematical equality (across
+      orientations and with `SparseMatrix`), formatting and `serde`. `SparseError::InvalidCsr`
+      became `InvalidCompressed`, since raw arrays can now be either orientation, and `from_csr`
+      validates through `CsrMatrix::try_from_raw_parts`.
 - [ ] Move the numerical methods from `SparseMatrix` to the compressed type, each on the
       orientation it needs, one group at a time:
       - [ ] products, including `mul_vec` in both orientations and the `rayon` versions

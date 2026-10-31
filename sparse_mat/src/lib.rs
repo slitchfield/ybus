@@ -3,6 +3,8 @@
 //! See [`sparse_matrix::SparseMatrix`] for the matrix type and [`sparse_error::SparseError`]
 //! for its errors.
 
+pub mod compressed_matrix;
+
 /// The `SparseMatrix` type and its iterators.
 pub mod sparse_matrix;
 
