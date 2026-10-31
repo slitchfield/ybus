@@ -1,8 +1,12 @@
 // Tests for Phase 3's factorization machinery: fill-reducing orderings, symbolic analysis and
 //   the ordered factorizations.
 
+mod common;
+
 use sparse_mat::compressed_matrix::{CsrMatrix, Ordering};
 use sparse_mat::sparse_error::SparseError;
+
+use common::{reference_cholesky, reference_solve_spd};
 
 /// Deterministic pseudo-random numbers (a linear congruential generator).
 struct Lcg(u64);
@@ -259,7 +263,7 @@ fn analysis_matches_brute_force_elimination() {
             // With values that never cancel exactly, the factor stores the whole pattern
             let reordered = a.permute_symmetric(symbolic.permutation()).unwrap();
             assert_eq!(
-                reordered.cholesky().unwrap().num_stored(),
+                reference_cholesky(&reordered).unwrap().num_stored(),
                 symbolic.predicted_entries()
             );
         }
@@ -340,4 +344,195 @@ fn analysis_uses_the_symmetrized_pattern_and_counts_stored_zeros() {
             .dim(),
         0
     );
+}
+
+// Ordered Cholesky
+
+/// Whether two matrices hold the same values bit for bit, except that a zero may be stored in
+/// one and absent from (or of the other sign in) the other.
+fn same_bits(a: &CsrMatrix<f64>, b: &CsrMatrix<f64>) -> bool {
+    a.to_dense()
+        .iter()
+        .flatten()
+        .zip(b.to_dense().iter().flatten())
+        .all(|(x, y)| x == y && (*x == 0.0 || x.to_bits() == y.to_bits()))
+}
+
+fn assert_close(actual: &[f64], expected: &[f64], tolerance: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
+        assert!((a - e).abs() <= tolerance, "entry {i}: {a} vs {e}");
+    }
+}
+
+#[test]
+fn ordered_cholesky_reconstructs_the_reordered_matrix() {
+    let mut rng = Lcg(11);
+    let shuffled_grid = grid_laplacian(8)
+        .permute_symmetric(&rng.permutation(64))
+        .unwrap();
+    for a in [random_spd(1, 0, 1), random_spd(25, 15, 2), shuffled_grid] {
+        for ordering in [Ordering::Natural, Ordering::Rcm] {
+            let symbolic = a.analyze_cholesky(ordering).unwrap();
+            let factor = symbolic.factor(&a).unwrap();
+            let l = factor.l();
+            assert_eq!(factor.permutation(), symbolic.permutation());
+            assert_eq!(l.num_stored(), symbolic.predicted_entries());
+            assert!(l.iter().all(|(row, col, _)| col <= row));
+            assert!(l.diagonal().values().iter().all(|&d| d > 0.0));
+            let reordered = a.permute_symmetric(factor.permutation()).unwrap();
+            let product = l * &l.clone().transpose().to_csr();
+            for (got, want) in product.to_dense().iter().zip(reordered.to_dense()) {
+                assert_close(got, &want, 1e-12);
+            }
+        }
+    }
+}
+
+#[test]
+fn natural_ordering_matches_the_unordered_cholesky_bit_for_bit() {
+    let mut rng = Lcg(5);
+    let shuffled_grid = grid_laplacian(9)
+        .permute_symmetric(&rng.permutation(81))
+        .unwrap();
+    for a in [random_spd(40, 10, 6), random_spd(30, 40, 7), shuffled_grid] {
+        let n = a.shape().0;
+        let factor = a
+            .analyze_cholesky(Ordering::Natural)
+            .unwrap()
+            .factor(&a)
+            .unwrap();
+        assert!(same_bits(factor.l(), &reference_cholesky(&a).unwrap()));
+        let b: Vec<f64> = (0..n).map(|i| (i as f64 * 0.7).sin()).collect();
+        let x = factor.solve(&b).unwrap();
+        let reference = reference_solve_spd(&a, &b).unwrap();
+        assert!(x
+            .iter()
+            .zip(&reference)
+            .all(|(x, r)| x.to_bits() == r.to_bits()));
+    }
+}
+
+#[test]
+fn ordered_solves_match_the_true_solution() {
+    let mut rng = Lcg(9);
+    let a = grid_laplacian(12)
+        .permute_symmetric(&rng.permutation(144))
+        .unwrap();
+    let x: Vec<f64> = (0..144).map(|i| (i as f64).cos()).collect();
+    let b = a.mul_vec(&x).unwrap();
+    assert_close(&a.solve_spd(&b).unwrap(), &x, 1e-12);
+    assert_close(&a.cholesky().unwrap().solve(&b).unwrap(), &x, 1e-12);
+    // RCM cuts the shuffled grid's fill (2,091 entries) below even that of the grid's own row
+    //   by row numbering (1,739), whose factor fills its band
+    let natural = a.analyze_cholesky(Ordering::Natural).unwrap();
+    let rcm = a.analyze_cholesky(Ordering::Rcm).unwrap();
+    let row_by_row = grid_laplacian(12)
+        .analyze_cholesky(Ordering::Natural)
+        .unwrap();
+    assert!(rcm.predicted_entries() < row_by_row.predicted_entries());
+    assert!(row_by_row.predicted_entries() < natural.predicted_entries());
+    assert_eq!(
+        a.cholesky().unwrap().solve(&b[..3]).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (144, 144),
+            right: (3, 1)
+        })
+    );
+}
+
+#[test]
+fn one_analysis_factors_every_matrix_with_its_pattern() {
+    let a = random_spd(20, 20, 3);
+    let symbolic = a.analyze_cholesky(Ordering::Rcm).unwrap();
+    // Same pattern, new values (here: a stored zero appears in place of a value)
+    let mut b = a.clone();
+    for (k, value) in b.values_mut().iter_mut().enumerate() {
+        if k % 7 == 3 && *value < 0.0 {
+            *value = 0.0;
+        }
+    }
+    let mut fixed = b.clone();
+    // Keep the matrix symmetric: zero the mirror images too
+    for (row, col, value) in b.iter() {
+        if value == 0.0 {
+            let p = fixed.position(col, row).unwrap().unwrap();
+            fixed.values_mut()[p] = 0.0;
+        }
+    }
+    let factor = symbolic.factor(&fixed).unwrap();
+    assert_eq!(factor.l().num_stored(), symbolic.predicted_entries());
+    let x: Vec<f64> = (0..20).map(|i| i as f64).collect();
+    assert_close(
+        &factor.solve(&fixed.mul_vec(&x).unwrap()).unwrap(),
+        &x,
+        1e-10,
+    );
+
+    // Another pattern is refused, even with the same shape and count
+    let other = random_spd(20, 20, 4);
+    assert_eq!(
+        symbolic.factor(&other).err(),
+        Some(SparseError::PatternMismatch)
+    );
+}
+
+#[test]
+fn cholesky_errors() {
+    let not_symmetric = CsrMatrix::from_dense(&[[2.0, 1.0], [0.0, 2.0]]).unwrap();
+    assert_eq!(
+        not_symmetric.cholesky().err(),
+        Some(SparseError::NotSymmetric)
+    );
+    // Symmetry is mathematical: a stored zero opposite a missing entry doesn't break it
+    let stored_zero =
+        CsrMatrix::from_triplets(2, 2, vec![(0, 0, 4.0), (0, 1, 0.0), (1, 1, 9.0)]).unwrap();
+    let factor = stored_zero.cholesky().unwrap();
+    assert_eq!(
+        factor.l().num_stored(),
+        3,
+        "the stored zero's position is kept"
+    );
+    let rect = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    assert_eq!(
+        rect.cholesky().err(),
+        Some(SparseError::NotSquare { shape: (2, 3) })
+    );
+
+    // Indefinite (eigenvalues 3 and -1): the failing pivot is named by its row of A, so the
+    //   ordering decides which row that is
+    let indefinite = CsrMatrix::from_dense(&[[1.0, 2.0], [2.0, 1.0]]).unwrap();
+    for ordering in [Ordering::Natural, Ordering::Rcm] {
+        let symbolic = indefinite.analyze_cholesky(ordering).unwrap();
+        assert_eq!(
+            symbolic.factor(&indefinite).err(),
+            Some(SparseError::NotPositiveDefinite {
+                pivot: symbolic.permutation()[1]
+            })
+        );
+    }
+    // Here only row 1 has a non-positive diagonal, wherever it's ordered
+    let negative = CsrMatrix::from_diagonal(vec![1.0, -1.0, 2.0]);
+    assert_eq!(
+        negative.cholesky().err(),
+        Some(SparseError::NotPositiveDefinite { pivot: 1 })
+    );
+    let zero = CsrMatrix::<f64>::from_triplets(2, 2, Vec::new()).unwrap();
+    assert!(matches!(
+        zero.cholesky().err(),
+        Some(SparseError::NotPositiveDefinite { .. })
+    ));
+}
+
+#[test]
+fn cholesky_keeps_a_diagonal_matrix_diagonal() {
+    let factor = CsrMatrix::from_diagonal(vec![4.0, 9.0, 16.0])
+        .cholesky()
+        .unwrap();
+    assert_eq!(factor.l().num_stored(), 3);
+    let mut diagonal = vec![0.0; 3];
+    for (i, &row) in factor.permutation().iter().enumerate() {
+        diagonal[row] = factor.l().diagonal().values()[i];
+    }
+    assert_eq!(diagonal, [2.0, 3.0, 4.0]);
 }

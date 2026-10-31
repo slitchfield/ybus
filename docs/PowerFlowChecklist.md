@@ -281,9 +281,18 @@ Merged in PR #2.
       column counts and `predicted_entries()`. It reads only the pattern of A+Aᵀ, stored zeros
       included. Tested against dense symbolic elimination on random patterns, under both
       orderings.
-- [ ] Cholesky after ordering, reusing the existing up-looking algorithm, with the elimination
+- [x] Cholesky after ordering, reusing the existing up-looking algorithm, with the elimination
       tree's reach in place of its `BTreeMap` work row. Moved up from the end of the phase: it
       costs little once an ordering exists, and gives the first measurement.
+      `SymbolicCholesky::factor` returns a `Cholesky` (`l`, `permutation`, `solve`) of P A Pᵀ,
+      filling the analyzed pattern with a dense work vector, so the factor stores its whole
+      symbolic pattern (numerical zeros included) and its memory is known in advance. Each row
+      still takes its entries in increasing column order, so under `Ordering::Natural` the
+      factor and solve match the old algorithm bit for bit, apart from the sign of a zero
+      (tested against it, kept in `tests/common`). `cholesky()` and `solve_spd` order by RCM
+      until AMD arrives, and `NotPositiveDefinite` names the failing row of A in its own
+      numbering. The factor keeps Lᵀ in CSR form as well, for a back substitution in the same
+      order as before, at twice the factor's memory.
 - [ ] The DC power flow solves with ordered Cholesky, and the survey can choose its ordering.
       Rerun the survey with RCM and make a first check of the hypothesis below on the Cholesky
       cases.

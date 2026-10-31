@@ -138,8 +138,8 @@ fn entries(model: &DcModel, solver: DcSolver) -> Result<(usize, usize, usize), S
         DcSolver::Cholesky => bprime
             .cholesky()
             .map_err(|err| err.to_string())?
-            .iter()
-            .count(),
+            .l()
+            .num_stored(),
         DcSolver::Lu => {
             let lu = bprime.lu().map_err(|err| err.to_string())?;
             lu.l().num_stored() + lu.u().num_stored() - unknown.len()

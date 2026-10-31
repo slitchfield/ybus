@@ -41,7 +41,7 @@ mod serde_impl;
 mod solvers;
 
 pub use assembly::AssemblyMap;
-pub use cholesky::SymbolicCholesky;
+pub use cholesky::{Cholesky, SymbolicCholesky};
 pub use ordering::Ordering;
 pub use solvers::Lu;
 
