@@ -53,7 +53,6 @@ API overview, and [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for
   checklist of `sparse_mat`'s core functionality.
 - [`docs/benchmarks/`](docs/benchmarks/) records performance baselines, such as the DC power
   flow on every MATPOWER case.
-- [`docs/ai-reports/`](docs/ai-reports/) holds implementation reports for past branches.
 - [`AI-DISCLAIMER.md`](AI-DISCLAIMER.md) describes how AI was used to build this repository and
   how to report missing attribution.
 - API documentation: `cargo doc --workspace --open --all-features`.

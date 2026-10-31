@@ -25,9 +25,10 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
   AI involvement, not exclusive AI authorship.
 - **Maintainer's role:** the maintainer directed the work, made the design decisions, wrote parts
   of the code, and reviewed every pull request before merging it.
-- **Reports:** implementation reports written for each AI-assisted branch are kept in
-  [`docs/ai-reports/`](docs/ai-reports/). They record what was changed, the decisions made, and
-  the mistakes caught along the way.
+- **Reports:** the description of each AI-assisted pull request is an implementation report,
+  recording what was changed, the decisions made, and the mistakes caught along the way. Until
+  October 2026 the reports were also committed, under `docs/ai-reports/`, and they remain in the
+  commit history.
 
 ### How AI-generated code was checked
 
@@ -94,7 +95,7 @@ licensing follows current best practices for AI-assisted software development:
 - **Compatible dependencies:** every dependency, including transitive ones, is under a compatible
   permissive license (MIT, Apache-2.0, Unlicense or Unicode-3.0).
 - **Transparency:** AI involvement is disclosed in this document, in commit trailers and in the
-  implementation reports, and sources are attributed as described above.
+  pull requests' implementation reports, and sources are attributed as described above.
 
 The legal treatment of AI-generated code is still developing, for example the extent to which it
 is protected by copyright, which varies by jurisdiction. The licenses grant rights to this
