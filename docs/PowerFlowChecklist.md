@@ -119,7 +119,7 @@ Merged in PR #2.
       confirmed with `rundcpf`; isolated buses keep their angle and their load is not served.
       Cholesky falls back to LU when B′ isn't positive definite (negative reactances), which
       19 of MATPOWER's 78 cases need. **Found:** without a fill-reducing ordering the solve is
-      slow on large cases (case13659pegase 89 s, case8387pegase 17 s in release; see
+      slow on large cases (case13659pegase 83 s, case8387pegase 15 s in release; see
       `docs/benchmarks/`), which Phase 3's orderings address. First recorded as 14 cases (of
       65 surveyed), 166 s and 36 s, on a machine that wasn't recorded.
 - [x] Reference results: MATPOWER `rundcpf` outputs for case14, case30 and case118 checked into
@@ -149,9 +149,11 @@ Merged in PR #2.
             and compares the results with MATPOWER's, generated locally by
             `scripts/generate-reference.sh`, which now takes an output directory and cases. All
             78 cases solve in 18 minutes and agree with MATPOWER to within 1.1e-10 of each
-            quantity's largest value in its case. Run time follows fill-in, not size: unordered
-            factors hold up to 109 times the entries they would without fill-in, and LU, which
-            19 cases need, costs about four times Cholesky at similar fill.
+            quantity's largest value in its case, and every solve is backward stable (at most
+            10.7 ε, checked on six cases by `dc_backward_error_test.rs`). Run time follows
+            fill-in, not size: unordered factors hold up to 109 times the entries they would
+            without fill-in, and LU, which 19 cases need, costs about four times Cholesky at
+            similar fill.
 
 ## Phase 2: Fixed-pattern `CsrMatrix`
 
@@ -184,6 +186,13 @@ Merged in PR #2.
 - [ ] `solve_in_place` and `solve_many` (several right-hand sides).
 - [ ] AMD ordering for Cholesky, and COLAMD (or AMD on the pattern of AᵀA) for LU. Benchmark fill
       and time against RCM on the large case.
+- [ ] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward
+      error: unordered, ours was up to 30 times MATPOWER's on high-fill cases, and correlated
+      with fill where MATPOWER's, from an ordered solve, didn't. Rerun `scripts/benchmark-dc.sh`
+      with the orderings, and compare `backward_error` with `factor_entries` and
+      `matpower_backward_error` against the baseline in
+      `docs/benchmarks/dc-power-flow-2026-10-31.md`. Threshold partial pivoting trades some
+      stability for sparsity, so `dc_backward_error_test.rs` guards its limit meanwhile.
 - [ ] Cholesky after ordering, reusing the existing up-looking algorithm.
 
 ## Phase 4: Complex-capable solvers (migrating what Phase 3 didn't rewrite)

@@ -21,7 +21,7 @@ with any new record.
 
 ## What a record may hold
 
-Case names and sizes, the time and memory this crate's code takes on them, and how far its
-results are from MATPOWER's. Never case data or power flow results: MATPOWER's license doesn't
+Case names and sizes, the time and memory this crate's code takes on them, the backward error
+of its results, and how far they are from MATPOWER's. Never case data or power flow results: MATPOWER's license doesn't
 cover its case files, and only results from public-source cases are committed
 (`docs/PowerFlowChecklist.md`, Phase 1.5).

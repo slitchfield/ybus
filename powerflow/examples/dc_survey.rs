@@ -7,11 +7,14 @@
 //! Prints one CSV line, with the columns in `HEADER`. Each step (parse, model, solve) is timed
 //! by its median over repeated runs, for up to `BUDGET` or `MAX_RUNS` runs, so small cases get
 //! stable figures and large ones run once. After timing, it factors B′ once more, as the solve
-//! did, to count the factor's entries, which unlike the times don't depend on the machine.
-//! Given a directory of MATPOWER's results from `scripts/generate-reference.sh`, it also prints
-//! the largest differences from them; those columns are empty when the directory has no results
-//! for the case.
+//! did, to count the factor's entries, which unlike the times don't depend on the machine, and
+//! it measures the solve's backward error. Given a directory of MATPOWER's results from
+//! `scripts/generate-reference.sh`, it also prints the backward error of MATPOWER's angles and
+//! the largest differences from MATPOWER's results; those columns are empty when the directory
+//! has no results for the case.
 
+#[path = "../tests/common/accuracy.rs"]
+mod accuracy;
 #[allow(dead_code)]
 #[path = "../tests/common/reference.rs"]
 mod reference;
@@ -27,10 +30,14 @@ use powerflow::dc::{DcModel, DcSolver};
 /// `negative_branches` counts the in-service branches with a negative series susceptance,
 /// which can make B′ indefinite. `bprime_dimension` and `bprime_entries` give B′'s size and
 /// stored entries, and `factor_entries` counts those of the factor the solve used: L for
-/// Cholesky, or L and U for LU, counting their diagonal once.
+/// Cholesky, or L and U for LU, counting their diagonal once. `backward_error` is the
+/// normwise backward error of the solve's angles (`tests/common/accuracy.rs`), and
+/// `matpower_backward_error` that of MATPOWER's angles for the same system: a control, since
+/// MATPOWER's solve reorders B′ to limit fill-in.
 const HEADER: &str = "case,buses,branches,generators,connected_buses,in_service_branches,\
                       negative_branches,parse_ms,model_ms,solve_ms,solve_runs,solver,\
                       bprime_dimension,bprime_entries,factor_entries,\
+                      backward_error,matpower_backward_error,\
                       va_deviation_deg,pf_deviation_mw,pg_deviation_mw";
 
 /// How long to keep repeating a step for its median time
@@ -82,21 +89,26 @@ fn survey(path: &Path, references: Option<&Path>) -> Result<String, String> {
         .filter(|&&row| case.branch[row].x * case.branch[row].effective_tap() < 0.0)
         .count();
     let (bprime_dimension, bprime_entries, factor_entries) = entries(&model, solution.solver)?;
+    let backward_error = accuracy::backward_error(&case, &model, &solution.va_deg);
 
-    let deviation = match references {
+    let comparison = match references {
         Some(dir) if dir.join(format!("{name}_dcpf_bus.csv")).is_file() => {
             let reference = reference::read(dir, name)?;
             let deviation = reference::deviation(&case, &solution, &reference)?;
+            let matpower_va_deg: Vec<f64> = reference.bus.iter().map(|bus| bus.1).collect();
             format!(
-                "{:e},{:e},{:e}",
-                deviation.va_deg, deviation.pf_mw, deviation.pg_mw
+                "{:e},{:e},{:e},{:e}",
+                accuracy::backward_error(&case, &model, &matpower_va_deg),
+                deviation.va_deg,
+                deviation.pf_mw,
+                deviation.pg_mw
             )
         }
-        _ => ",,".to_string(),
+        _ => ",,,".to_string(),
     };
     Ok(format!(
         "{name},{},{},{},{},{},{negative_branches},{:.3},{:.3},{:.3},{solve_runs},{:?},\
-         {bprime_dimension},{bprime_entries},{factor_entries},{deviation}",
+         {bprime_dimension},{bprime_entries},{factor_entries},{backward_error:e},{comparison}",
         case.bus.len(),
         case.branch.len(),
         case.generator.len(),
