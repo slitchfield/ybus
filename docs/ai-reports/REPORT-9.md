@@ -1,18 +1,19 @@
 # Implementation report: `dev/dc-power-flow`
 
 This branch adds the DC power flow and finishes Phase 1.5: the model, the solve, the comparison
-with MATPOWER's results, and benchmarks. It has seven commits on top of `main` at `b7b2f36`,
-then this report and its corrections. The first two are from an earlier session, which ended
-before writing a report. This session
-reviewed them against MATPOWER's source, fixed the one problem the review found, and added the
-rest. This report covers the whole branch.
+with MATPOWER's results, and benchmarks. It has nine commits of work on top of `main` at
+`b7b2f36`, and this report with its updates. The first two are from an earlier session, which
+ended before writing a report. This session reviewed them against MATPOWER's source, fixed the
+one problem the review found, and added the rest. The last two, on backward error, answer a
+question the maintainer asked about the first version of this report. This report covers the
+whole branch.
 
 | | `main` | `dev/dc-power-flow` |
 |---|---|---|
-| `powerflow` tests | 62 | 94 (adds 13 DC model, 15 DC solve and 4 reference comparison) |
-| MATPOWER 8.1 cases the DC power flow solves | none | all 78, within 1.1e-10 of MATPOWER's results relative to each quantity's largest value |
+| `powerflow` tests | 62 | 97 (adds 13 DC model, 15 DC solve, 4 reference comparison and 3 backward error) |
+| MATPOWER 8.1 cases the DC power flow solves | none | all 78, within 1.1e-10 of MATPOWER's results relative to each quantity's largest value, and backward stable (at most 10.7 ε) |
 | Benchmarks | none | criterion on case2383wp, and a recorded survey of all 78 cases |
-| Diff, without this report | | 20 files, +2,024 / −24: 481 lines of library code, 875 of tests, 356 of benchmark code, scripts and manifest, and 312 of documentation |
+| Diff, without this report | | 22 files, +2,245 / −24: 481 lines of library code, 1,043 of tests, 368 of benchmark code, scripts and manifest, and 353 of documentation |
 
 ## Commits
 
@@ -25,7 +26,9 @@ rest. This report covers the whole branch.
 | `0e31586` | Criterion benchmarks on case2383wp |
 | `da2b907` | A survey of every MATPOWER case, and the recorded results |
 | `97a1648` | The README |
-| `4fd2918` and later | This report, and corrections to its figures |
+| `2659525` | Tests the solve's backward error on six MATPOWER cases |
+| `0b9eb18` | Records the backward error in the survey, and tracks its link to fill-in |
+| `4fd2918` and later | This report, with corrections and updates |
 
 ## How the work was driven
 
@@ -38,6 +41,10 @@ rest. This report covers the whole branch.
    tools and informed the choice of benchmark case. Claims about fill-in rest on counted factor
    entries, and the survey was rerun with the final tool so that the committed tool reproduces
    the record.
+4. **Separating the solver from the problem.** Asked whether differences from MATPOWER that grow
+   with the case were acceptable, I measured backward errors and condition numbers before
+   answering, and the guess that came out of it is recorded with a baseline, to be tested
+   rather than assumed.
 
 ## Details
 
@@ -105,7 +112,7 @@ rest. This report covers the whole branch.
   - 59 by Cholesky and 19 by LU, which all have negative series susceptances
   - run time follows fill-in, not size: unordered factors hold up to 109 times the entries
     they would without fill-in, and case_ACTIVSg10k solves in 1.2 s where the similarly sized
-    case9241pegase takes 74 s
+    case9241pegase takes 69 s
   - for Phase 3: a fill-reducing ordering is the main gain; LU costs about four times Cholesky
     at similar fill, and its pivot search visits every remaining row at every step; the failed
     Cholesky attempt before LU costs nothing
@@ -113,11 +120,32 @@ rest. This report covers the whole branch.
   results byte for byte under Octave 8.4. That settles the handoff's open question about the
   6.4 they were made with.
 
+### Backward error (`2659525`, `0b9eb18`)
+
+- **Why:** the differences from MATPOWER grow with the case, from 8e-16 relative on case14 to
+  1e-10 on case_SyntheticUSA, and a comparison alone can't tell a solver that loses accuracy
+  from an ill-conditioned problem. The normwise backward error can: a backward-stable solve
+  keeps it within a small multiple of ε whatever the conditioning. On nine cases measured with
+  condition estimates, both solvers were backward stable, and every difference was 30 to 7,000
+  times below what conditioning allows, so the growth comes from the problems.
+- **The test,** `tests/dc_backward_error_test.rs`, requires at most 100 ε on four Cholesky and
+  two LU cases, which measure 0.07–0.38 ε, and shows that a 1e-9° error in one angle
+  (3,700 ε) and a NaN fail it. The measure itself, in `tests/common/accuracy.rs`, derives P′
+  independently of `DcModel::solve`.
+- **The survey** records our backward error and MATPOWER's for every case. Ours is at most
+  10.7 ε (case2383wp) and MATPOWER's 1.4 ε, but ours is up to 30 times MATPOWER's on the cases
+  whose factors fill in most, and it correlates with fill (Spearman 0.46) where MATPOWER's
+  doesn't (−0.03).
+- **Tracked:** the record states the guess that fill-in drives our backward error, with this as
+  its baseline. Size rises with fill when nothing is ordered, so only an ordering can test it,
+  and a new Phase 3 item asks for that comparison.
+
 ## Tests
 
-- **`powerflow`:** 94 tests, from 62. `dc_model_test.rs` has 13 (the earlier session's 12, plus
-  the validation test), `dc_solve_test.rs` 15 and `dc_reference_test.rs` 4. The other 62 are
-  unchanged: 23 data model, 18 locator, 4 fuzz, 8 syntax and 9 normalized cases.
+- **`powerflow`:** 97 tests, from 62. `dc_model_test.rs` has 13 (the earlier session's 12, plus
+  the validation test), `dc_solve_test.rs` 15, `dc_reference_test.rs` 4 and
+  `dc_backward_error_test.rs` 3. The other 62 are unchanged: 23 data model, 18 locator, 4 fuzz,
+  8 syntax and 9 normalized cases.
 - **The benchmark** runs once as a test under `cargo test --all-targets`. In debug that takes
   about 6 s per pass locally and 10.5 s on CI's runners, until Phase 3 makes the solve fast.
 - **`sparse_mat`:** unchanged.
@@ -133,8 +161,9 @@ rest. This report covers the whole branch.
   256 MiB.
 - **CI:** Check, MSRV and Dependencies pass on this pull request, on both its push and pull
   request runs, so `cargo-deny` accepts criterion's dependencies. The Check logs show the
-  reference tests and the benchmark's test runs in all four passes, with nothing skipped; the
-  MSRV log shows the benchmark skipping, since that job doesn't fetch MATPOWER.
+  reference tests, the backward-error tests and the benchmark's test runs in all four passes,
+  with nothing skipped. The MSRV job doesn't fetch MATPOWER, so there those tests return early,
+  and its log shows the benchmark skipping.
 
 ## Mistakes caught
 
@@ -145,9 +174,13 @@ rest. This report covers the whole branch.
   them skip, but the locator still found the fetched cases. I didn't count it as verification;
   CI's MSRV job, which has no MATPOWER, exercises the skip.
 - **Stale figures from the earlier session:** the checklist said 14 cases need LU, and gave 36 s
-  and 166 s for case8387pegase and case13659pegase. The survey finds 19 of 78 cases, 17 s and
-  89 s. The earlier count covered 65 cases, and its machine wasn't recorded. The checklist is
+  and 166 s for case8387pegase and case13659pegase. The survey finds 19 of 78 cases, 15 s and
+  83 s. The earlier count covered 65 cases, and its machine wasn't recorded. The checklist is
   corrected.
+- **An overstated summary:** in conversation I summarized the agreement with MATPOWER as about
+  ten digits everywhere. Small cases agree to about 15 digits and the largest to about 10,
+  because the condition number grows with the case. The committed text, a bound, was right;
+  checking the claim led to the backward-error work.
 - **A local figure given as CI's:** the report first said the benchmark's test runs cost CI
   about 6 s per pass, which I'd measured locally. CI's logs show about 10.5 s, so I corrected it
   after the first CI run.
@@ -162,10 +195,11 @@ rest. This report covers the whole branch.
   ("nothing derived from case2383wp is committed") as covering case data and results, not facts
   like these, which reveal nothing about the grid. Say if you'd rather drop those rows.
 - **CI time.** The benchmark's test-mode run takes about 10.5 s in each of the four test passes
-  in CI's `check.sh` step, about 42 s per Check run, until Phase 3 makes the solve fast. This
-  pull request's Check runs took 3m51s and 3m55s, against 1m36s for this branch before this
-  session's commits. One run can't separate the rest: new targets compiled after only a partial
-  cache hit, and runners vary (PR #13's two Check runs took 1m35s and 2m30s). The obvious
+  in CI's `check.sh` step, about 42 s per Check run, until Phase 3 makes the solve fast. With a
+  warm cache, the `check.sh` step took 185–187 s on this pull request, against 81 s for this
+  branch before this session's commits. I can't attribute the rest from these runs: there are
+  new targets to compile in each pass, and runners vary (PR #13's two Check runs took 1m35s and
+  2m30s). The obvious
   alternative case, case_ACTIVSg2000, solves in 0.44 s in a local debug build, against
   case2383wp's 5.0 s, but it would show less of Phase 3's gains.
 - **`DcSolver::None`** hides `Option::None` wherever someone writes `use DcSolver::*`. A name
@@ -176,3 +210,4 @@ rest. This report covers the whole branch.
 Phase 2 (a fixed-pattern `CsrMatrix`) and Phase 3 (a Gilbert–Peierls LU with orderings and
 refactorization). The survey shows where Phase 3's gains are: a fill-reducing ordering for the
 PEGASE and RTE cases, and a pivot search that only looks at nonzeros for the largest cases.
+Once the orderings land, rerunning the survey tests whether fill-in drives the backward error.
