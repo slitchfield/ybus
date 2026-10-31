@@ -239,7 +239,7 @@ fn cancelling_reactances_are_a_singular_network() {
 fn only_reference_buses_need_no_solve() {
     let tables = (vec![B(1, 3, 12.0, 3.0, 4.0)], vec![G(1, 0.0, true)], vec![]);
     let solution = run(&tables).unwrap();
-    assert_eq!(solution.solver, DcSolver::None);
+    assert_eq!(solution.solver, DcSolver::NoSolve);
     assert_eq!(solution.va_deg, [4.0]);
     assert_close(&solution.pg_mw, &[15.0]);
 }
