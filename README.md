@@ -75,8 +75,15 @@ any additional terms or conditions.
 
 ## References
 
-The algorithms in this repository were written from the standard published descriptions below. No
-source code from other libraries was copied or ported.
+The sparse matrix algorithms in `sparse_mat` were written from the standard published
+descriptions below; no source code from other libraries was copied or ported.
+
+`powerflow` reproduces MATPOWER's behaviour, so that its results can be checked against
+MATPOWER's to within 1e-9. Its DC power flow (`powerflow::dc`) was written from MATPOWER's
+documentation and with reference to its BSD-licensed source code (`ext2int`, `bustypes`,
+`makeBdc`, `dcpf` and `runpf`), to match its handling of every case, including isolated
+buses, out-of-service elements and phase shifters. It is a reimplementation in Rust, not a
+translation, and the module documentation names the MATPOWER functions each step follows.
 
 ### Implemented
 
