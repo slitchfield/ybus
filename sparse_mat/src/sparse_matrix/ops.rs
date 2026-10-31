@@ -1,5 +1,5 @@
-//! Arithmetic on `SparseMatrix`: checked methods returning `Result`, and the operator impls
-//! that panic on incompatible shapes.
+//! Arithmetic on `SparseMatrix`, which forwards to `CompressedMatrix` until Phase 2 removes it
+//! from `SparseMatrix`. Results drop entries that are zero, as `SparseMatrix` never stores one.
 
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
@@ -8,94 +8,63 @@ use crate::sparse_error::SparseError;
 use crate::Scalar;
 
 impl<T: Scalar> SparseMatrix<T> {
-    /// A copy of the shape and entries without the compressed caches, which the copy is about
-    /// to invalidate anyway.
-    fn clone_entries(&self) -> SparseMatrix<T> {
-        SparseMatrix::from_values(self.shape, self.values.clone())
-    }
-
-    /// Replaces each entry `a` of `self` that also appears in `other` (as `b`) with
-    /// `combine(a, b)`, and entries only in `other` with `combine(0, b)`. Results that are
-    /// exactly zero are removed. Entries only in `self` are left alone, which is correct for
-    /// `+` and `-` because `combine(a, 0) == a`.
-    fn merge_in_place(
-        &mut self,
-        other: &SparseMatrix<T>,
-        combine: impl Fn(T, T) -> T,
-    ) -> Result<(), SparseError> {
-        if self.shape != other.shape {
-            return Err(SparseError::ShapeMismatch {
-                left: self.shape,
-                right: other.shape,
-            });
-        }
-
-        for (&key, &val) in other.values.iter() {
-            let current = self.values.get(&key).copied().unwrap_or(T::zero());
-            let merged = combine(current, val);
-            if merged == T::zero() {
-                self.values.remove(&key);
-            } else {
-                self.values.insert(key, merged);
-            }
-        }
-        self.invalidate();
-        Ok(())
-    }
-
-    /// Element-wise sum of two matrices, returned as a new matrix.
-    ///
-    /// Entries that cancel to exactly zero are not stored in the result. Returns
-    /// `SparseError::ShapeMismatch` if the shapes differ; `+` panics in that case instead.
+    /// Element-wise sum; forwards to `CompressedMatrix::try_add`.
     pub fn try_add(&self, other: &SparseMatrix<T>) -> Result<SparseMatrix<T>, SparseError> {
-        let mut sum = self.clone_entries();
-        sum.merge_in_place(other, |a, b| a + b)?;
-        Ok(sum)
+        self.to_csr()
+            .try_add(&other.to_csr())
+            .map(|sum| sum.to_sparse())
     }
 
-    /// Element-wise difference `self - other`, returned as a new matrix.
-    ///
-    /// Entries that cancel to exactly zero are not stored in the result. Returns
-    /// `SparseError::ShapeMismatch` if the shapes differ; `-` panics in that case instead.
-    /// Arithmetic follows `T`'s own rules, so for unsigned integers subtracting a larger
-    /// value from a smaller one overflows.
+    /// Element-wise difference; forwards to `CompressedMatrix::try_sub`.
     pub fn try_sub(&self, other: &SparseMatrix<T>) -> Result<SparseMatrix<T>, SparseError> {
-        let mut difference = self.clone_entries();
-        difference.merge_in_place(other, |a, b| a - b)?;
-        Ok(difference)
+        self.to_csr()
+            .try_sub(&other.to_csr())
+            .map(|difference| difference.to_sparse())
     }
 
-    /// Multiplies every entry by `factor`, returned as a new matrix.
-    ///
-    /// A zero factor (or any product that is exactly zero) leaves no stored entry.
+    /// Multiplies every entry by `factor`; forwards to `CompressedMatrix::scale`.
     pub fn scale(&self, factor: T) -> SparseMatrix<T> {
-        let mut scaled = self.clone_entries();
-        scaled.scale_in_place(factor);
-        scaled
+        self.to_csr().scale(factor).to_sparse()
     }
 
-    /// Multiplies every entry by `factor` in place.
-    fn scale_in_place(&mut self, factor: T) {
-        self.values.retain(|_, val| {
-            *val = *val * factor;
-            *val != T::zero()
-        });
-        self.invalidate();
+    /// Element-wise product; forwards to `CompressedMatrix::hadamard`.
+    pub fn hadamard(&self, other: &SparseMatrix<T>) -> Result<SparseMatrix<T>, SparseError> {
+        self.to_csr()
+            .hadamard(&other.to_csr())
+            .map(|product| product.to_sparse())
+    }
+
+    /// Applies `f` to every stored entry; forwards to `CompressedMatrix::map`.
+    pub fn map<U: Scalar>(&self, f: impl Fn(T) -> U) -> SparseMatrix<U> {
+        self.to_csr().map(f).to_sparse()
+    }
+
+    /// Applies `f` to every stored entry in place; forwards to `CompressedMatrix::apply`.
+    pub fn apply(&mut self, f: impl Fn(T) -> T) {
+        let mut compressed = self.to_csr();
+        compressed.apply(f);
+        *self = compressed.to_sparse();
+    }
+
+    /// `diag(factors) · A`; forwards to `CompressedMatrix::scale_rows`.
+    pub fn scale_rows(&self, factors: &[T]) -> Result<SparseMatrix<T>, SparseError> {
+        self.to_csr()
+            .scale_rows(factors)
+            .map(|scaled| scaled.to_sparse())
+    }
+
+    /// `A · diag(factors)`; forwards to `CompressedMatrix::scale_cols`.
+    pub fn scale_cols(&self, factors: &[T]) -> Result<SparseMatrix<T>, SparseError> {
+        self.to_csr()
+            .scale_cols(factors)
+            .map(|scaled| scaled.to_sparse())
     }
 }
 
-/// Implements a binary operator for every combination of owned and borrowed operands. An
-/// owned left operand is updated in place instead of copied.
+/// Implements a binary operator for every combination of owned and borrowed operands.
 macro_rules! impl_matrix_binary_op {
-    ($trait:ident, $method:ident, $try_method:ident, $verb:literal, $combine:expr) => {
-        #[doc = concat!("Element-wise ", $verb, " of two matrices, returned as a new matrix.")]
-        ///
-        /// Entries that cancel to exactly zero are not stored in the result.
-        ///
-        /// # Panics
-        ///
-        /// Panics if the two matrices have different shapes. Use the matching `try_` method to
-        /// get an error instead.
+    ($trait:ident, $method:ident, $try_method:ident) => {
+        /// Forwards to the matching `try_` method, panicking on different shapes.
         impl<T: Scalar> $trait<&SparseMatrix<T>> for &SparseMatrix<T> {
             type Output = SparseMatrix<T>;
 
@@ -116,10 +85,8 @@ macro_rules! impl_matrix_binary_op {
         impl<T: Scalar> $trait<&SparseMatrix<T>> for SparseMatrix<T> {
             type Output = SparseMatrix<T>;
 
-            fn $method(mut self, other: &SparseMatrix<T>) -> SparseMatrix<T> {
-                self.merge_in_place(other, $combine)
-                    .unwrap_or_else(|err| panic!("{err}"));
-                self
+            fn $method(self, other: &SparseMatrix<T>) -> SparseMatrix<T> {
+                (&self).$method(other)
             }
         }
 
@@ -127,68 +94,49 @@ macro_rules! impl_matrix_binary_op {
             type Output = SparseMatrix<T>;
 
             fn $method(self, other: SparseMatrix<T>) -> SparseMatrix<T> {
-                self.$method(&other)
+                (&self).$method(&other)
             }
         }
     };
 }
 
-impl_matrix_binary_op!(Add, add, try_add, "sum", |a, b| a + b);
-impl_matrix_binary_op!(Sub, sub, try_sub, "difference", |a, b| a - b);
+impl_matrix_binary_op!(Add, add, try_add);
+impl_matrix_binary_op!(Sub, sub, try_sub);
 
-/// Adds `other` into `self` element-wise.
-///
-/// # Panics
-///
-/// Panics if the two matrices have different shapes.
+/// Adds `other` into `self` element-wise. Panics if the shapes differ.
 impl<T: Scalar> AddAssign<&SparseMatrix<T>> for SparseMatrix<T> {
     fn add_assign(&mut self, other: &SparseMatrix<T>) {
-        self.merge_in_place(other, |a, b| a + b)
-            .unwrap_or_else(|err| panic!("{err}"));
+        *self = &*self + other;
     }
 }
 
-/// Adds `other` into `self` element-wise.
-///
-/// # Panics
-///
-/// Panics if the two matrices have different shapes.
+/// Adds `other` into `self` element-wise. Panics if the shapes differ.
 impl<T: Scalar> AddAssign<SparseMatrix<T>> for SparseMatrix<T> {
     fn add_assign(&mut self, other: SparseMatrix<T>) {
         *self += &other;
     }
 }
 
-/// Subtracts `other` from `self` element-wise.
-///
-/// # Panics
-///
-/// Panics if the two matrices have different shapes.
+/// Subtracts `other` from `self` element-wise. Panics if the shapes differ.
 impl<T: Scalar> SubAssign<&SparseMatrix<T>> for SparseMatrix<T> {
     fn sub_assign(&mut self, other: &SparseMatrix<T>) {
-        self.merge_in_place(other, |a, b| a - b)
-            .unwrap_or_else(|err| panic!("{err}"));
+        *self = &*self - other;
     }
 }
 
-/// Subtracts `other` from `self` element-wise.
-///
-/// # Panics
-///
-/// Panics if the two matrices have different shapes.
+/// Subtracts `other` from `self` element-wise. Panics if the shapes differ.
 impl<T: Scalar> SubAssign<SparseMatrix<T>> for SparseMatrix<T> {
     fn sub_assign(&mut self, other: SparseMatrix<T>) {
         *self -= &other;
     }
 }
 
-/// Negates every entry, returned as a new matrix.
+/// Negates every entry.
 impl<T: Scalar + Neg<Output = T>> Neg for &SparseMatrix<T> {
     type Output = SparseMatrix<T>;
 
     fn neg(self) -> SparseMatrix<T> {
-        let values = self.values.iter().map(|(&key, &val)| (key, -val)).collect();
-        SparseMatrix::from_values(self.shape, values)
+        (-self.to_csr()).to_sparse()
     }
 }
 
@@ -196,12 +144,8 @@ impl<T: Scalar + Neg<Output = T>> Neg for &SparseMatrix<T> {
 impl<T: Scalar + Neg<Output = T>> Neg for SparseMatrix<T> {
     type Output = SparseMatrix<T>;
 
-    fn neg(mut self) -> SparseMatrix<T> {
-        for val in self.values.values_mut() {
-            *val = -*val;
-        }
-        self.invalidate();
-        self
+    fn neg(self) -> SparseMatrix<T> {
+        -&self
     }
 }
 
@@ -214,25 +158,23 @@ impl<T: Scalar> Mul<T> for &SparseMatrix<T> {
     }
 }
 
-/// Multiplies every entry by a scalar in place.
+/// Multiplies every entry by a scalar.
 impl<T: Scalar> Mul<T> for SparseMatrix<T> {
     type Output = SparseMatrix<T>;
 
-    fn mul(mut self, factor: T) -> SparseMatrix<T> {
-        self.scale_in_place(factor);
-        self
+    fn mul(self, factor: T) -> SparseMatrix<T> {
+        self.scale(factor)
     }
 }
 
 /// Multiplies every entry by a scalar in place.
 impl<T: Scalar> MulAssign<T> for SparseMatrix<T> {
     fn mul_assign(&mut self, factor: T) {
-        self.scale_in_place(factor);
+        *self = self.scale(factor);
     }
 }
 
-/// Lets a scalar stand on the left of `*`, as in `2.0 * &matrix`. A blanket impl over `T` is
-/// not allowed for a foreign type, so each primitive scalar gets its own.
+/// Lets a scalar stand on the left of `*`, as in `2.0 * &matrix`.
 macro_rules! impl_scalar_on_left {
     ($($scalar:ty),*) => {$(
         impl Mul<&SparseMatrix<$scalar>> for $scalar {
@@ -247,113 +189,10 @@ macro_rules! impl_scalar_on_left {
             type Output = SparseMatrix<$scalar>;
 
             fn mul(self, matrix: SparseMatrix<$scalar>) -> SparseMatrix<$scalar> {
-                matrix * self
+                matrix.scale(self)
             }
         }
     )*};
 }
 
 impl_scalar_on_left!(f32, f64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
-
-impl<T: Scalar> SparseMatrix<T> {
-    /// Element-wise (Hadamard) product of two matrices, returned as a new matrix.
-    ///
-    /// Only positions stored in both operands can be non-zero, so this visits the entries of
-    /// the sparser operand. Returns `SparseError::ShapeMismatch` if the shapes differ.
-    pub fn hadamard(&self, other: &SparseMatrix<T>) -> Result<SparseMatrix<T>, SparseError> {
-        if self.shape != other.shape {
-            return Err(SparseError::ShapeMismatch {
-                left: self.shape,
-                right: other.shape,
-            });
-        }
-
-        let (smaller, larger) = if self.values.len() <= other.values.len() {
-            (self, other)
-        } else {
-            (other, self)
-        };
-        let values = smaller
-            .values
-            .iter()
-            .filter_map(|(&key, &a)| {
-                let product = a * *larger.values.get(&key)?;
-                (product != T::zero()).then_some((key, product))
-            })
-            .collect();
-        Ok(SparseMatrix::from_values(self.shape, values))
-    }
-
-    /// Applies `f` to every stored entry, returned as a new matrix of the same shape. The
-    /// result may have a different element type.
-    ///
-    /// `f` sees stored entries only, never the implicit zeros, so `map(|x| x + 1)` does not
-    /// turn the zeros into ones. Results that are exactly zero are not stored.
-    pub fn map<U: Scalar>(&self, f: impl Fn(T) -> U) -> SparseMatrix<U> {
-        let values = self
-            .values
-            .iter()
-            .filter_map(|(&key, &val)| {
-                let mapped = f(val);
-                (mapped != U::zero()).then_some((key, mapped))
-            })
-            .collect();
-        SparseMatrix::from_values(self.shape, values)
-    }
-
-    /// Applies `f` to every stored entry in place; see `map` for what `f` is applied to.
-    pub fn apply(&mut self, f: impl Fn(T) -> T) {
-        self.values.retain(|_, val| {
-            *val = f(*val);
-            *val != T::zero()
-        });
-        self.invalidate();
-    }
-}
-
-impl<T: Scalar> SparseMatrix<T> {
-    /// Scales each row `i` by `factors[i]`, giving the product `diag(factors) · A` as a new
-    /// matrix without forming the diagonal matrix.
-    ///
-    /// Products that are exactly zero (such as every entry of a row scaled by zero) are not
-    /// stored. Returns `SparseError::ShapeMismatch` unless there is one factor per row, with
-    /// `factors` reported as the square diagonal matrix it stands for.
-    pub fn scale_rows(&self, factors: &[T]) -> Result<SparseMatrix<T>, SparseError> {
-        if factors.len() != self.shape.0 {
-            return Err(SparseError::ShapeMismatch {
-                left: (factors.len(), factors.len()),
-                right: self.shape,
-            });
-        }
-        Ok(self.scale_entries(|row, _, val| factors[row] * val))
-    }
-
-    /// Scales each column `j` by `factors[j]`, giving the product `A · diag(factors)` as a new
-    /// matrix without forming the diagonal matrix.
-    ///
-    /// Products that are exactly zero are not stored. Returns `SparseError::ShapeMismatch`
-    /// unless there is one factor per column, with `factors` reported as the square diagonal
-    /// matrix it stands for.
-    pub fn scale_cols(&self, factors: &[T]) -> Result<SparseMatrix<T>, SparseError> {
-        if factors.len() != self.shape.1 {
-            return Err(SparseError::ShapeMismatch {
-                left: self.shape,
-                right: (factors.len(), factors.len()),
-            });
-        }
-        Ok(self.scale_entries(|_, col, val| val * factors[col]))
-    }
-
-    /// A new matrix with each entry replaced by `scaled(row, col, value)`, dropping zeros.
-    fn scale_entries(&self, scaled: impl Fn(usize, usize, T) -> T) -> SparseMatrix<T> {
-        let values = self
-            .values
-            .iter()
-            .filter_map(|(&(row, col), &val)| {
-                let product = scaled(row, col, val);
-                (product != T::zero()).then_some(((row, col), product))
-            })
-            .collect();
-        SparseMatrix::from_values(self.shape, values)
-    }
-}

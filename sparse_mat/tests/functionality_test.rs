@@ -291,31 +291,6 @@ fn sparsemat_display_uncompressed() {
 }
 
 #[test]
-#[should_panic]
-fn sparsemat_bad_addition() {
-    let local = SparseMatrix::<f64>::empty_with_shape(3, 3);
-    let local2 = SparseMatrix::empty_with_shape(2, 2);
-
-    let _local3 = &local + &local2;
-}
-
-#[test]
-fn sparsemat_good_addition() {
-    let mut local = SparseMatrix::empty_with_shape(3, 3);
-    local
-        .insert_triplets(vec![(0, 0, 10.0), (0, 1, 20.0), (1, 1, 30.0), (2, 2, 50.0)])
-        .unwrap();
-    let local2 = local.create_transpose();
-
-    let local3 = &local + &local2;
-    assert!(local3.peek_at(0, 0).unwrap() == Some(20.0));
-    assert!(local3.peek_at(0, 1).unwrap() == Some(20.0));
-    assert!(local3.peek_at(1, 0).unwrap() == Some(20.0));
-    assert!(local3.peek_at(1, 1).unwrap() == Some(60.0));
-    assert!(local3.peek_at(2, 2).unwrap() == Some(100.0));
-}
-
-#[test]
 fn sparsemat_insert_zero_into_empty() {
     let mut local = SparseMatrix::empty_with_shape(3, 3);
     // Unwrap as OOB not a part of this test
@@ -362,24 +337,6 @@ fn sparsemat_insert_zero_invalidates_compressed() {
 
     let rows: Vec<Vec<f64>> = local.row_iter().collect();
     assert!(rows == vec![vec![0.0, 0.0], vec![0.0, 3.0]]);
-}
-
-#[test]
-fn sparsemat_addition_cancellation() {
-    let mut local = SparseMatrix::empty_with_shape(2, 2);
-    local
-        .insert_triplets(vec![(0, 0, 1.5), (1, 1, 2.0)])
-        .unwrap();
-    let mut local2 = SparseMatrix::empty_with_shape(2, 2);
-    local2
-        .insert_triplets(vec![(0, 0, -1.5), (0, 1, 1.0)])
-        .unwrap();
-
-    let local3 = &local + &local2;
-    assert!(local3.peek_at(0, 0).unwrap().is_none());
-    assert!(local3.peek_at(0, 1).unwrap() == Some(1.0));
-    assert!(local3.peek_at(1, 1).unwrap() == Some(2.0));
-    assert!(local3.num_nonzero() == 2);
 }
 
 #[test]
@@ -578,41 +535,6 @@ fn sparsemat_to_dense_round_trip() {
 }
 
 #[test]
-fn sparsemat_integer_elements() {
-    let mut local = SparseMatrix::<i32>::empty_with_shape(2, 2);
-    local.insert(0, 0, 3).unwrap();
-    local.insert(1, 1, 4).unwrap();
-    local.insert(1, 1, 0).unwrap();
-    assert!(local.peek_at(0, 0) == Ok(Some(3)));
-    assert!(local.peek_at(1, 1) == Ok(None));
-
-    let other = SparseMatrix::from_triplets(2, 2, vec![(0, 0, 4), (0, 1, 1)]).unwrap();
-    let sum = &local + &other;
-    assert!(sum.to_dense() == vec![vec![7, 1], vec![0, 0]]);
-    assert!(format!("{}", sum).contains('7'));
-}
-
-#[test]
-fn sparsemat_f32_elements() {
-    let local = SparseMatrix::<f32>::identity(3);
-    assert!(local.num_nonzero() == 3);
-    let doubled = &local + &local;
-    assert!(doubled.peek_at(2, 2) == Ok(Some(2.0f32)));
-}
-
-#[test]
-fn sparsemat_complex_elements() {
-    use num_complex::Complex;
-    let i = Complex::new(0.0, 1.0);
-    let mut local = SparseMatrix::empty_with_shape(2, 2);
-    local.insert(0, 1, i).unwrap();
-    local.insert(1, 0, Complex::new(1.0, 0.0)).unwrap();
-    let sum = &local + &local;
-    assert!(sum.peek_at(0, 1) == Ok(Some(Complex::new(0.0, 2.0))));
-    assert!(local.create_transpose().peek_at(1, 0) == Ok(Some(i)));
-}
-
-#[test]
 fn sparsemat_compressed_csc() {
     let mut local = SparseMatrix::from_triplets(
         4,
@@ -666,38 +588,6 @@ fn sparsemat_csc_matches_transpose_csr() {
     assert!(csc.cols == csr.rows);
     assert!(csc.rows == csr.cols);
     assert!(csc.data == csr.data);
-}
-
-#[test]
-fn sparsemat_try_add_shape_mismatch() {
-    let local = SparseMatrix::<f64>::empty_with_shape(3, 3);
-    let local2 = SparseMatrix::<f64>::empty_with_shape(2, 4);
-    assert!(
-        local.try_add(&local2).err()
-            == Some(SparseError::ShapeMismatch {
-                left: (3, 3),
-                right: (2, 4)
-            })
-    );
-}
-
-#[test]
-fn sparsemat_try_add_matches_operator() {
-    let local = SparseMatrix::from_triplets(2, 2, vec![(0, 0, 1.5), (1, 1, 2.0)]).unwrap();
-    let local2 = SparseMatrix::from_triplets(2, 2, vec![(0, 0, -1.5), (0, 1, 1.0)]).unwrap();
-    let sum = local.try_add(&local2).unwrap();
-    assert!(sum.to_dense() == (&local + &local2).to_dense());
-    assert!(sum.num_nonzero() == 2);
-    // Operands are untouched
-    assert!(local.peek_at(0, 0) == Ok(Some(1.5)));
-}
-
-#[test]
-#[should_panic(expected = "incompatible shapes")]
-fn sparsemat_add_shape_mismatch_message() {
-    let local = SparseMatrix::<f64>::empty_with_shape(3, 3);
-    let local2 = SparseMatrix::<f64>::empty_with_shape(2, 2);
-    let _ = &local + &local2;
 }
 
 #[test]
@@ -1032,35 +922,9 @@ fn sparsemat_subtraction() {
 }
 
 #[test]
-fn sparsemat_try_sub_shape_mismatch() {
-    let a = sample_2x2();
-    let b = SparseMatrix::<f64>::empty_with_shape(3, 2);
-    assert!(
-        a.try_sub(&b).err()
-            == Some(SparseError::ShapeMismatch {
-                left: (2, 2),
-                right: (3, 2)
-            })
-    );
-}
-
-#[test]
 #[should_panic(expected = "incompatible shapes")]
 fn sparsemat_sub_shape_mismatch_panics() {
     let _ = &sample_2x2() - &SparseMatrix::<f64>::empty_with_shape(3, 3);
-}
-
-#[test]
-fn sparsemat_owned_operand_combinations() {
-    let expected_sum = vec![vec![2.0, 4.0], vec![0.0, 6.0]];
-    assert!((&sample_2x2() + &sample_2x2()).to_dense() == expected_sum);
-    assert!((sample_2x2() + &sample_2x2()).to_dense() == expected_sum);
-    assert!((&sample_2x2() + sample_2x2()).to_dense() == expected_sum);
-    assert!((sample_2x2() + sample_2x2()).to_dense() == expected_sum);
-
-    assert!((sample_2x2() - sample_2x2()).num_nonzero() == 0);
-    assert!((&sample_2x2() - sample_2x2()).num_nonzero() == 0);
-    assert!((sample_2x2() - &sample_2x2()).num_nonzero() == 0);
 }
 
 #[test]
@@ -1073,112 +937,10 @@ fn sparsemat_owned_lhs_invalidates_cache() {
 }
 
 #[test]
-fn sparsemat_add_assign_sub_assign() {
-    let mut a = sample_2x2();
-    a += &SparseMatrix::from([[1.0, 0.0], [0.0, 0.0]]);
-    assert!(a[(0, 0)] == 2.0);
-    a += SparseMatrix::from([[0.0, -2.0], [0.0, 0.0]]);
-    assert!(a[(0, 1)] == 0.0 && a.num_nonzero() == 2);
-    a -= &SparseMatrix::from([[2.0, 0.0], [0.0, 3.0]]);
-    assert!(a.num_nonzero() == 0);
-    a -= SparseMatrix::from([[1.0, 0.0], [0.0, 0.0]]);
-    assert!(a[(0, 0)] == -1.0);
-}
-
-#[test]
-#[should_panic(expected = "incompatible shapes")]
-fn sparsemat_add_assign_shape_mismatch_panics() {
-    let mut a = sample_2x2();
-    a += &SparseMatrix::<f64>::empty_with_shape(1, 1);
-}
-
-#[test]
-fn sparsemat_negation() {
-    let a = sample_2x2();
-    let negated = -&a;
-    assert!(negated.to_dense() == vec![vec![-1.0, -2.0], vec![0.0, -3.0]]);
-    assert!(a == sample_2x2());
-    assert!((-sample_2x2()).to_dense() == negated.to_dense());
-    assert!((&a + &negated).num_nonzero() == 0);
-
-    let ints = SparseMatrix::from([[1, 0], [0, -4]]);
-    assert!((-ints).to_dense() == vec![vec![-1, 0], vec![0, 4]]);
-}
-
-#[test]
-fn sparsemat_scalar_multiplication() {
-    let a = sample_2x2();
-    assert!((&a * 2.0).to_dense() == vec![vec![2.0, 4.0], vec![0.0, 6.0]]);
-    assert!((a.clone() * 0.5).to_dense() == vec![vec![0.5, 1.0], vec![0.0, 1.5]]);
-    assert!((2.0 * &a) == (&a * 2.0));
-    assert!((2.0 * a.clone()) == (&a * 2.0));
-    assert!(a.scale(3.0)[(1, 1)] == 9.0);
-
-    // Multiplying by zero leaves nothing stored
-    let zeroed = &a * 0.0;
-    assert!(zeroed.num_nonzero() == 0 && zeroed.shape == (2, 2));
-
-    let mut in_place = sample_2x2();
-    in_place *= 10.0;
-    assert!(in_place[(0, 1)] == 20.0);
-    assert!(a == sample_2x2());
-}
-
-#[test]
 fn sparsemat_scalar_multiplication_integers() {
     let a = SparseMatrix::from([[1i32, 2], [0, 3]]);
     assert!((&a * 4).to_dense() == vec![vec![4, 8], vec![0, 12]]);
     assert!((3i32 * &a).to_dense() == vec![vec![3, 6], vec![0, 9]]);
-}
-
-#[test]
-fn sparsemat_hadamard() {
-    let a = SparseMatrix::from([[1.0, 2.0, 0.0], [0.0, 3.0, 4.0]]);
-    let b = SparseMatrix::from([[5.0, 0.0, 6.0], [0.0, 7.0, 8.0]]);
-    let product = a.hadamard(&b).unwrap();
-    assert!(product.to_dense() == vec![vec![5.0, 0.0, 0.0], vec![0.0, 21.0, 32.0]]);
-    assert!(product.num_nonzero() == 3);
-    // Commutative, regardless of which operand is sparser
-    assert!(b.hadamard(&a).unwrap() == product);
-}
-
-#[test]
-fn sparsemat_hadamard_disjoint_and_shape_mismatch() {
-    let a = SparseMatrix::from([[1.0, 0.0], [0.0, 0.0]]);
-    let b = SparseMatrix::from([[0.0, 2.0], [0.0, 0.0]]);
-    assert!(a.hadamard(&b).unwrap().num_nonzero() == 0);
-
-    let other = SparseMatrix::<f64>::empty_with_shape(2, 3);
-    assert!(
-        a.hadamard(&other).err()
-            == Some(SparseError::ShapeMismatch {
-                left: (2, 2),
-                right: (2, 3)
-            })
-    );
-}
-
-#[test]
-fn sparsemat_map_changes_type_and_drops_zeros() {
-    let a = SparseMatrix::from([[1.0, 0.0], [-2.0, 3.0]]);
-    let signs = a.map(|x| if x > 0.0 { 1i32 } else { 0 });
-    assert!(signs.to_dense() == vec![vec![1, 0], vec![0, 1]]);
-    assert!(signs.num_nonzero() == 2);
-
-    // f is only applied to stored entries, so zeros stay zero
-    let shifted = a.map(|x| x + 1.0);
-    assert!(shifted.to_dense() == vec![vec![2.0, 0.0], vec![-1.0, 4.0]]);
-}
-
-#[test]
-fn sparsemat_apply_in_place() {
-    let mut a = SparseMatrix::from([[1.0, 0.0], [-1.0, 3.0]]);
-    a.explicitly_compress();
-    a.apply(|x| x * x - 1.0);
-    // 1 -> 0 (dropped), -1 -> 0 (dropped), 3 -> 8
-    assert!(a.to_dense() == vec![vec![0.0, 0.0], vec![0.0, 8.0]]);
-    assert!(a.num_nonzero() == 1);
-    assert!(a.compressed().is_none());
 }
 
 /// Deterministic pseudo-random sparse matrix with small integer-valued entries, so that
@@ -1200,137 +962,6 @@ fn pseudo_random(rows: usize, cols: usize, seed: u64, fill_percent: u64) -> Spar
         }
     }
     SparseMatrix::from_triplets(rows, cols, triplets).unwrap()
-}
-
-#[test]
-fn sparsemat_scalar_mul_still_works_alongside_matmul() {
-    let a = SparseMatrix::from([[1.0, 2.0], [3.0, 4.0]]);
-    assert!((&a * 2.0).to_dense() == vec![vec![2.0, 4.0], vec![6.0, 8.0]]);
-    assert!((&a * &a).to_dense() == vec![vec![7.0, 10.0], vec![15.0, 22.0]]);
-}
-
-fn dense_kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    let mut out = vec![];
-    for a_row in a {
-        for b_row in b {
-            out.push(
-                a_row
-                    .iter()
-                    .flat_map(|x| b_row.iter().map(move |y| x * y))
-                    .collect(),
-            );
-        }
-    }
-    out
-}
-
-#[test]
-fn sparsemat_kron_matches_dense() {
-    let a = pseudo_random(3, 2, 5, 60);
-    let b = pseudo_random(2, 4, 6, 60);
-    let product = a.kron(&b).unwrap();
-    assert!(product.shape == (6, 8));
-    assert!(product.to_dense() == dense_kron(&a.to_dense(), &b.to_dense()));
-    assert!(product.num_nonzero() == a.num_nonzero() * b.num_nonzero());
-}
-
-#[test]
-fn sparsemat_kron_identity_is_block_diagonal() {
-    let b = SparseMatrix::from([[1.0, 2.0], [3.0, 4.0]]);
-    let block_diag = SparseMatrix::identity(2).kron(&b).unwrap();
-    assert!(
-        block_diag.to_dense()
-            == vec![
-                vec![1.0, 2.0, 0.0, 0.0],
-                vec![3.0, 4.0, 0.0, 0.0],
-                vec![0.0, 0.0, 1.0, 2.0],
-                vec![0.0, 0.0, 3.0, 4.0],
-            ]
-    );
-}
-
-#[test]
-fn sparsemat_kron_mixed_product_property() {
-    // (A ⊗ B)(C ⊗ D) = (AC) ⊗ (BD)
-    let (a, b) = (pseudo_random(2, 3, 41, 70), pseudo_random(3, 2, 42, 70));
-    let (c, d) = (pseudo_random(3, 2, 43, 70), pseudo_random(2, 3, 44, 70));
-    let left = &a.kron(&b).unwrap() * &c.kron(&d).unwrap();
-    let right = (&a * &c).kron(&(&b * &d)).unwrap();
-    assert!(left == right);
-}
-
-#[test]
-fn sparsemat_kron_empty_operand_and_overflow() {
-    let a = SparseMatrix::from([[1.0, 2.0]]);
-    let empty = SparseMatrix::<f64>::new();
-    let product = a.kron(&empty).unwrap();
-    assert!(product.shape == (0, 0));
-
-    let huge = SparseMatrix::<f64>::empty_with_shape(usize::MAX, 1);
-    assert!(huge.kron(&huge) == Err(SparseError::ShapeOverflow));
-}
-
-#[test]
-fn sparsemat_hstack_vstack() {
-    let a = SparseMatrix::from([[1.0, 2.0], [3.0, 4.0]]);
-    let b = SparseMatrix::from([[5.0], [6.0]]);
-    let wide = SparseMatrix::hstack([&a, &b]).unwrap();
-    assert!(wide.to_dense() == vec![vec![1.0, 2.0, 5.0], vec![3.0, 4.0, 6.0]]);
-
-    let c = SparseMatrix::from([[7.0, 8.0]]);
-    let tall = SparseMatrix::vstack([&a, &c]).unwrap();
-    assert!(tall.to_dense() == vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![7.0, 8.0]]);
-
-    // Owned blocks work too
-    let owned = SparseMatrix::hstack(vec![a.clone(), b.clone()]).unwrap();
-    assert!(owned == wide);
-}
-
-#[test]
-fn sparsemat_stack_reassembles_submatrices() {
-    let original = pseudo_random(5, 6, 55, 45);
-    let left = original.submatrix(0..5, 0..2).unwrap();
-    let right = original.submatrix(0..5, 2..6).unwrap();
-    assert!(SparseMatrix::hstack([&left, &right]).unwrap() == original);
-
-    let top = original.submatrix(0..3, 0..6).unwrap();
-    let bottom = original.submatrix(3..5, 0..6).unwrap();
-    assert!(SparseMatrix::vstack([&top, &bottom]).unwrap() == original);
-}
-
-#[test]
-fn sparsemat_stack_errors_and_empty() {
-    let a = SparseMatrix::<f64>::empty_with_shape(2, 2);
-    let b = SparseMatrix::<f64>::empty_with_shape(3, 1);
-    assert!(
-        SparseMatrix::hstack([&a, &b]).err()
-            == Some(SparseError::ShapeMismatch {
-                left: (2, 2),
-                right: (3, 1)
-            })
-    );
-    assert!(
-        SparseMatrix::vstack([&a, &b]).err()
-            == Some(SparseError::ShapeMismatch {
-                left: (2, 2),
-                right: (3, 1)
-            })
-    );
-
-    let none: [&SparseMatrix; 0] = [];
-    assert!(SparseMatrix::hstack(none).unwrap().shape == (0, 0));
-    assert!(SparseMatrix::vstack(none).unwrap().shape == (0, 0));
-
-    // A single block is returned as is
-    assert!(SparseMatrix::vstack([&a]).unwrap() == a);
-    // Blocks with zero columns still contribute their rows
-    let tall_empty = SparseMatrix::<f64>::empty_with_shape(2, 0);
-    assert!(
-        SparseMatrix::vstack([&tall_empty, &tall_empty])
-            .unwrap()
-            .shape
-            == (4, 0)
-    );
 }
 
 const SAMPLE_MTX: &str = "%%MatrixMarket matrix coordinate real general
@@ -1582,167 +1213,4 @@ fn sparsemat_matrix_market_huge_entry_count_is_not_preallocated() {
     let (line, message) = parse_failure(&text);
     assert!(line == 3);
     assert!(message == format!("expected {} entries, found 1", usize::MAX));
-}
-
-#[test]
-fn sparsemat_scale_rows_matches_diagonal_product() {
-    let a = pseudo_random(5, 4, 61, 50);
-    let factors = [2.0, -1.0, 0.5, 3.0, -4.0];
-    let expected = SparseMatrix::from_diagonal(factors).matmul(&a).unwrap();
-    assert!(a.scale_rows(&factors).unwrap() == expected);
-}
-
-#[test]
-fn sparsemat_scale_cols_matches_diagonal_product() {
-    let a = pseudo_random(5, 4, 62, 50);
-    let factors = [2.0, -1.0, 0.5, 3.0];
-    let expected = a.matmul(&SparseMatrix::from_diagonal(factors)).unwrap();
-    assert!(a.scale_cols(&factors).unwrap() == expected);
-}
-
-#[test]
-fn sparsemat_scale_rows_cols_drop_zeros_and_keep_operand() {
-    let a = SparseMatrix::from([[1.0, 2.0], [3.0, 4.0]]);
-    let rows = a.scale_rows(&[0.0, 1.0]).unwrap();
-    assert!(rows.to_dense() == vec![vec![0.0, 0.0], vec![3.0, 4.0]]);
-    assert!(rows.num_nonzero() == 2);
-    let cols = a.scale_cols(&[1.0, 0.0]).unwrap();
-    assert!(cols.to_dense() == vec![vec![1.0, 0.0], vec![3.0, 0.0]]);
-    assert!(cols.num_nonzero() == 2);
-    // The operand is untouched, and an empty matrix scales to an empty matrix
-    assert!(a == SparseMatrix::from([[1.0, 2.0], [3.0, 4.0]]));
-    let empty = SparseMatrix::<f64>::empty_with_shape(0, 3);
-    assert!(empty.scale_rows(&[]).unwrap().shape == (0, 3));
-}
-
-#[test]
-fn sparsemat_scale_rows_cols_complex() {
-    use num_complex::Complex;
-    // diag(V) · A with complex voltages, as in power flow Jacobians
-    let a = SparseMatrix::from([
-        [Complex::new(1.0, 1.0), Complex::new(0.0, 0.0)],
-        [Complex::new(0.0, 0.0), Complex::new(2.0, 0.0)],
-    ]);
-    let v = [Complex::new(0.0, 1.0), Complex::new(1.0, -1.0)];
-    let scaled = a.scale_rows(&v).unwrap();
-    assert!(scaled[(0, 0)] == Complex::new(-1.0, 1.0));
-    assert!(scaled[(1, 1)] == Complex::new(2.0, -2.0));
-    assert!(a.scale_cols(&v).unwrap() == a.matmul(&SparseMatrix::from_diagonal(v)).unwrap());
-}
-
-#[test]
-fn sparsemat_scale_rows_cols_shape_mismatch() {
-    let a = SparseMatrix::<f64>::empty_with_shape(2, 3);
-    assert!(
-        a.scale_rows(&[1.0; 3]).err()
-            == Some(SparseError::ShapeMismatch {
-                left: (3, 3),
-                right: (2, 3)
-            })
-    );
-    assert!(
-        a.scale_cols(&[1.0; 2]).err()
-            == Some(SparseError::ShapeMismatch {
-                left: (2, 3),
-                right: (2, 2)
-            })
-    );
-}
-
-fn pseudo_random_complex(
-    rows: usize,
-    cols: usize,
-    seed: u64,
-) -> SparseMatrix<num_complex::Complex<f64>> {
-    let re = pseudo_random(rows, cols, seed, 40);
-    let im = pseudo_random(rows, cols, seed + 1000, 40);
-    SparseMatrix::from_parts(&re, &im).unwrap()
-}
-
-#[test]
-fn sparsemat_from_parts_round_trips_real_and_imag() {
-    let a = pseudo_random_complex(6, 5, 91);
-    let (re, im) = (a.real(), a.imag());
-    assert!(re.shape == (6, 5) && im.shape == (6, 5));
-    assert!(SparseMatrix::from_parts(&re, &im).unwrap() == a);
-}
-
-#[test]
-fn sparsemat_real_and_imag_drop_zero_parts() {
-    use num_complex::Complex;
-    let a = SparseMatrix::from([
-        [Complex::new(1.0, 0.0), Complex::new(0.0, 2.0)],
-        [Complex::new(3.0, -4.0), Complex::new(0.0, 0.0)],
-    ]);
-    let re = a.real();
-    let im = a.imag();
-    assert!(re.to_dense() == vec![vec![1.0, 0.0], vec![3.0, 0.0]]);
-    assert!(im.to_dense() == vec![vec![0.0, 2.0], vec![-4.0, 0.0]]);
-    // The purely imaginary entry is absent from the real part, and vice versa
-    assert!(re.num_nonzero() == 2 && im.num_nonzero() == 2);
-}
-
-#[test]
-fn sparsemat_conj_and_adjoint() {
-    use num_complex::Complex;
-    let a = SparseMatrix::from([
-        [Complex::new(1.0, 2.0), Complex::new(0.0, -1.0)],
-        [Complex::new(0.0, 0.0), Complex::new(3.0, 0.0)],
-    ]);
-    let conjugated = a.conj();
-    assert!(conjugated[(0, 0)] == Complex::new(1.0, -2.0));
-    assert!(conjugated[(0, 1)] == Complex::new(0.0, 1.0));
-    assert!(conjugated.conj() == a);
-
-    let adjoint = a.adjoint();
-    assert!(adjoint == a.conj().create_transpose());
-    assert!(adjoint[(1, 0)] == Complex::new(0.0, 1.0));
-    assert!(adjoint.adjoint() == a);
-}
-
-#[test]
-fn sparsemat_adjoint_reverses_products() {
-    // (AB)ᴴ = Bᴴ Aᴴ, on a rectangular pair
-    let a = pseudo_random_complex(4, 3, 92);
-    let b = pseudo_random_complex(3, 5, 93);
-    assert!((&a * &b).adjoint() == &b.adjoint() * &a.adjoint());
-}
-
-#[test]
-fn sparsemat_hermitian_matrix_is_its_own_adjoint() {
-    let a = pseudo_random_complex(5, 5, 94);
-    let hermitian = &a + &a.adjoint();
-    assert!(hermitian.adjoint() == hermitian);
-    // Its diagonal is real
-    assert!(hermitian
-        .diagonal()
-        .values()
-        .iter()
-        .all(|val| val.im == 0.0));
-}
-
-#[test]
-fn sparsemat_complex_helpers_on_real_matrices() {
-    let a = pseudo_random(4, 6, 95, 50);
-    assert!(a.conj() == a);
-    assert!(a.adjoint() == a.create_transpose());
-    assert!(a.real() == a);
-    let imaginary = a.imag();
-    assert!(imaginary.shape == (4, 6) && imaginary.num_nonzero() == 0);
-
-    let single = SparseMatrix::from([[1.0f32, 0.0], [0.0, -2.0]]);
-    assert!(single.adjoint() == single.create_transpose());
-}
-
-#[test]
-fn sparsemat_from_parts_shape_mismatch() {
-    let re = SparseMatrix::<f64>::empty_with_shape(2, 3);
-    let im = SparseMatrix::<f64>::empty_with_shape(3, 2);
-    assert!(
-        SparseMatrix::from_parts(&re, &im).err()
-            == Some(SparseError::ShapeMismatch {
-                left: (2, 3),
-                right: (3, 2)
-            })
-    );
 }

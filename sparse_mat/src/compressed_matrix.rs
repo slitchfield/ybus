@@ -26,6 +26,8 @@ use crate::sparse_matrix::{write_dense_grid, SparseMatrix};
 use crate::Scalar;
 
 mod access;
+mod blocks;
+mod ops;
 #[cfg(feature = "rayon")]
 mod parallel;
 pub(crate) mod product;

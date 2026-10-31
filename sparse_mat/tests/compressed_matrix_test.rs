@@ -1196,3 +1196,473 @@ fn permute_errors() {
         (0, 0)
     );
 }
+
+// Arithmetic, block construction and complex parts
+
+use sparse_mat::Complex;
+
+fn sample_2x2() -> CsrMatrix<f64> {
+    CsrMatrix::from_dense(&[[1.0, 2.0], [0.0, 3.0]]).unwrap()
+}
+
+fn pseudo_random_complex(rows: usize, cols: usize, seed: u64) -> CsrMatrix<Complex<f64>> {
+    let re = pseudo_random(rows, cols, seed, 40);
+    let im = pseudo_random(rows, cols, seed + 1000, 40);
+    CsrMatrix::from_parts(&re, &im).unwrap()
+}
+
+fn dense_kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let mut out = vec![];
+    for a_row in a {
+        for b_row in b {
+            out.push(
+                a_row
+                    .iter()
+                    .flat_map(|x| b_row.iter().map(move |y| x * y))
+                    .collect(),
+            );
+        }
+    }
+    out
+}
+
+#[test]
+fn addition_stores_the_union_and_keeps_cancellations() {
+    let a = CsrMatrix::from_triplets(2, 2, vec![(0, 0, 1.5), (1, 1, 2.0)]).unwrap();
+    let b = CsrMatrix::from_triplets(2, 2, vec![(0, 0, -1.5), (0, 1, 1.0)]).unwrap();
+    for sum in [&a + &b, (&a.to_csc() + &b.to_csc()).to_csr()] {
+        assert_eq!(sum.to_dense(), vec![vec![0.0, 1.0], vec![0.0, 2.0]]);
+        assert_eq!((sum.num_stored(), sum.num_nonzero()), (3, 2));
+    }
+    assert_eq!(a.try_add(&b).unwrap(), &a + &b);
+    // Operands are untouched
+    assert_eq!(a.values(), [1.5, 2.0]);
+
+    let symmetric = &sample_2x2() + &sample_2x2().transpose().to_csr();
+    assert_eq!(symmetric.to_dense(), vec![vec![2.0, 2.0], vec![2.0, 6.0]]);
+}
+
+#[test]
+fn subtraction_and_owned_operands() {
+    let expected_sum = vec![vec![2.0, 4.0], vec![0.0, 6.0]];
+    assert_eq!((&sample_2x2() + &sample_2x2()).to_dense(), expected_sum);
+    assert_eq!((sample_2x2() + &sample_2x2()).to_dense(), expected_sum);
+    assert_eq!((&sample_2x2() + sample_2x2()).to_dense(), expected_sum);
+    assert_eq!((sample_2x2() + sample_2x2()).to_dense(), expected_sum);
+
+    for difference in [
+        sample_2x2() - sample_2x2(),
+        &sample_2x2() - sample_2x2(),
+        sample_2x2() - &sample_2x2(),
+    ] {
+        assert_eq!((difference.num_stored(), difference.num_nonzero()), (3, 0));
+    }
+    // An entry only on the right is negated
+    let right_only = CsrMatrix::from_triplets(2, 2, vec![(1, 0, 4.0)]).unwrap();
+    assert_eq!(
+        (&sample_2x2() - &right_only).to_dense(),
+        vec![vec![1.0, 2.0], vec![-4.0, 3.0]]
+    );
+}
+
+#[test]
+fn add_assign_and_sub_assign() {
+    let mut a = sample_2x2();
+    a += &CsrMatrix::from_dense(&[[1.0, 0.0], [0.0, 0.0]]).unwrap();
+    assert_eq!(a.to_dense()[0][0], 2.0);
+    a += CsrMatrix::from_dense(&[[0.0, -2.0], [0.0, 0.0]]).unwrap();
+    assert_eq!((a.num_stored(), a.num_nonzero()), (3, 2));
+    a -= &CsrMatrix::from_dense(&[[2.0, 0.0], [0.0, 3.0]]).unwrap();
+    assert_eq!(a.num_nonzero(), 0);
+    a -= CsrMatrix::from_dense(&[[1.0, 0.0], [0.0, 0.0]]).unwrap();
+    assert_eq!(a.to_dense()[0][0], -1.0);
+}
+
+#[test]
+fn shape_mismatches() {
+    let a = CsrMatrix::<f64>::from_triplets(3, 3, Vec::new()).unwrap();
+    let b = CsrMatrix::<f64>::from_triplets(2, 4, Vec::new()).unwrap();
+    let mismatch = Some(SparseError::ShapeMismatch {
+        left: (3, 3),
+        right: (2, 4),
+    });
+    assert_eq!(a.try_add(&b).err(), mismatch);
+    assert_eq!(a.try_sub(&b).err(), mismatch);
+    assert_eq!(a.hadamard(&b).err(), mismatch);
+}
+
+#[test]
+#[should_panic(expected = "incompatible shapes")]
+fn add_operator_shape_mismatch_panics() {
+    let a = CsrMatrix::<f64>::from_triplets(3, 3, Vec::new()).unwrap();
+    let b = CsrMatrix::<f64>::from_triplets(2, 2, Vec::new()).unwrap();
+    let _ = &a + &b;
+}
+
+#[test]
+#[should_panic(expected = "incompatible shapes")]
+fn add_assign_shape_mismatch_panics() {
+    let mut a = sample_2x2();
+    a += &CsrMatrix::<f64>::from_triplets(1, 1, Vec::new()).unwrap();
+}
+
+#[test]
+fn element_types() {
+    let ints = CsrMatrix::from_triplets(2, 2, vec![(0, 0, 3), (0, 1, 1), (0, 0, 4)]).unwrap();
+    let sum = &ints + &ints;
+    assert_eq!(sum.to_dense(), vec![vec![14, 2], vec![0, 0]]);
+    assert!(format!("{sum}").contains("14"));
+
+    let doubled = &CscMatrix::<f32>::identity(3) + &CscMatrix::<f32>::identity(3);
+    assert_eq!(doubled.values(), [2.0f32; 3]);
+
+    let i = Complex::new(0.0, 1.0);
+    let complex =
+        CsrMatrix::from_triplets(2, 2, vec![(0, 1, i), (1, 0, Complex::new(1.0, 0.0))]).unwrap();
+    assert_eq!((&complex + &complex).values()[0], Complex::new(0.0, 2.0));
+}
+
+#[test]
+fn negation() {
+    let a = sample_2x2();
+    let negated = -&a;
+    assert_eq!(negated.to_dense(), vec![vec![-1.0, -2.0], vec![0.0, -3.0]]);
+    assert_eq!(a, sample_2x2());
+    assert_eq!(-sample_2x2(), negated);
+    assert_eq!((&a + &negated).num_nonzero(), 0);
+    let ints = CsrMatrix::from_dense(&[[1, 0], [0, -4]]).unwrap();
+    assert_eq!((-ints).to_dense(), vec![vec![-1, 0], vec![0, 4]]);
+}
+
+#[test]
+fn scalar_multiplication_keeps_the_pattern() {
+    let a = sample_2x2();
+    assert_eq!((&a * 2.0).to_dense(), vec![vec![2.0, 4.0], vec![0.0, 6.0]]);
+    assert_eq!(
+        (a.clone() * 0.5).to_dense(),
+        vec![vec![0.5, 1.0], vec![0.0, 1.5]]
+    );
+    assert_eq!(2.0 * &a, &a * 2.0);
+    assert_eq!(2.0 * a.clone(), &a * 2.0);
+    assert_eq!(a.scale(3.0).values(), [3.0, 6.0, 9.0]);
+    // Multiplying by zero keeps every entry, stored as zero
+    let zeroed = &a * 0.0;
+    assert_eq!((zeroed.num_stored(), zeroed.num_nonzero()), (3, 0));
+
+    let mut in_place = sample_2x2();
+    in_place *= 10.0;
+    assert_eq!(in_place.values(), [10.0, 20.0, 30.0]);
+    // Alongside the matrix product
+    assert_eq!((&a * &a).to_dense(), vec![vec![1.0, 8.0], vec![0.0, 9.0]]);
+}
+
+#[test]
+fn hadamard_stores_the_intersection() {
+    let a = CsrMatrix::from_dense(&[[1.0, 2.0, 0.0], [0.0, 3.0, 4.0]]).unwrap();
+    let b = CsrMatrix::from_dense(&[[5.0, 0.0, 6.0], [0.0, 7.0, 8.0]]).unwrap();
+    let product = a.hadamard(&b).unwrap();
+    assert_eq!(
+        product.to_dense(),
+        vec![vec![5.0, 0.0, 0.0], vec![0.0, 21.0, 32.0]]
+    );
+    assert_eq!(product.num_stored(), 3);
+    assert_eq!(b.hadamard(&a).unwrap(), product);
+    assert_eq!(a.to_csc().hadamard(&b.to_csc()).unwrap(), product);
+
+    let disjoint = CsrMatrix::from_dense(&[[1.0, 0.0], [0.0, 0.0]])
+        .unwrap()
+        .hadamard(&CsrMatrix::from_dense(&[[0.0, 2.0], [0.0, 0.0]]).unwrap())
+        .unwrap();
+    assert_eq!(disjoint.num_stored(), 0);
+}
+
+#[test]
+fn map_and_apply_keep_the_pattern() {
+    let a = CsrMatrix::from_dense(&[[1.0, 0.0], [-2.0, 3.0]]).unwrap();
+    let signs = a.map(|x| if x > 0.0 { 1i32 } else { 0 });
+    assert_eq!(signs.to_dense(), vec![vec![1, 0], vec![0, 1]]);
+    assert_eq!((signs.num_stored(), signs.num_nonzero()), (3, 2));
+    // f is only applied to stored entries, so implicit zeros stay zero
+    assert_eq!(
+        a.map(|x| x + 1.0).to_dense(),
+        vec![vec![2.0, 0.0], vec![-1.0, 4.0]]
+    );
+
+    let mut b = CscMatrix::from_dense(&[[1.0, 0.0], [-1.0, 3.0]]).unwrap();
+    b.apply(|x| x * x - 1.0);
+    assert_eq!(b.to_dense(), vec![vec![0.0, 0.0], vec![0.0, 8.0]]);
+    assert_eq!((b.num_stored(), b.num_nonzero()), (3, 1));
+}
+
+#[test]
+fn kron_in_both_orientations() {
+    let a = pseudo_random(3, 2, 5, 60);
+    let b = pseudo_random(2, 4, 6, 60);
+    let expected = dense_kron(&a.to_dense(), &b.to_dense());
+    let product = a.kron(&b).unwrap();
+    assert_eq!(product.shape(), (6, 8));
+    assert_eq!(product.to_dense(), expected);
+    assert_eq!(product.num_stored(), a.num_stored() * b.num_stored());
+    assert_eq!(a.to_csc().kron(&b.to_csc()).unwrap().to_dense(), expected);
+
+    let block = CsrMatrix::from_dense(&[[1.0, 2.0], [3.0, 4.0]]).unwrap();
+    assert_eq!(
+        CsrMatrix::identity(2).kron(&block).unwrap().to_dense(),
+        vec![
+            vec![1.0, 2.0, 0.0, 0.0],
+            vec![3.0, 4.0, 0.0, 0.0],
+            vec![0.0, 0.0, 1.0, 2.0],
+            vec![0.0, 0.0, 3.0, 4.0],
+        ]
+    );
+}
+
+#[test]
+fn kron_mixed_product_property() {
+    // (A ⊗ B)(C ⊗ D) = (AC) ⊗ (BD)
+    let (a, b) = (pseudo_random(2, 3, 41, 70), pseudo_random(3, 2, 42, 70));
+    let (c, d) = (pseudo_random(3, 2, 43, 70), pseudo_random(2, 3, 44, 70));
+    let left = &a.kron(&b).unwrap() * &c.kron(&d).unwrap();
+    let right = (&a * &c).kron(&(&b * &d)).unwrap();
+    assert_eq!(left, right);
+}
+
+#[test]
+fn kron_empty_operand_and_overflow() {
+    let a = CsrMatrix::from_dense(&[[1.0, 2.0]]).unwrap();
+    assert_eq!(a.kron(&CsrMatrix::default()).unwrap().shape(), (0, 0));
+    // A CSC matrix can have huge rows over a single column, needing only two pointers
+    let huge = CscMatrix::<f64>::from_triplets(1 << 33, 1, Vec::new()).unwrap();
+    assert_eq!(huge.kron(&huge).err(), Some(SparseError::ShapeOverflow));
+}
+
+#[test]
+fn hstack_and_vstack_in_both_orientations() {
+    let a = CsrMatrix::from_dense(&[[1.0, 2.0], [3.0, 4.0]]).unwrap();
+    let b = CsrMatrix::from_dense(&[[5.0], [6.0]]).unwrap();
+    let c = CsrMatrix::from_dense(&[[7.0, 8.0]]).unwrap();
+    let wide = vec![vec![1.0, 2.0, 5.0], vec![3.0, 4.0, 6.0]];
+    let tall = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![7.0, 8.0]];
+    assert_eq!(CsrMatrix::hstack([&a, &b]).unwrap().to_dense(), wide);
+    assert_eq!(CsrMatrix::vstack([&a, &c]).unwrap().to_dense(), tall);
+    let (a_csc, b_csc, c_csc) = (a.to_csc(), b.to_csc(), c.to_csc());
+    assert_eq!(
+        CscMatrix::hstack([&a_csc, &b_csc]).unwrap().to_dense(),
+        wide
+    );
+    assert_eq!(
+        CscMatrix::vstack([&a_csc, &c_csc]).unwrap().to_dense(),
+        tall
+    );
+    // Owned blocks work too
+    assert_eq!(
+        CsrMatrix::hstack(vec![a.clone(), b.clone()])
+            .unwrap()
+            .to_dense(),
+        wide
+    );
+}
+
+#[test]
+fn stack_reassembles_submatrices() {
+    let original = pseudo_random(5, 6, 55, 45);
+    for matrix in [original.clone(), original.to_csc().to_csr()] {
+        let left = matrix.submatrix(0..5, 0..2).unwrap();
+        let right = matrix.submatrix(0..5, 2..6).unwrap();
+        assert_eq!(CsrMatrix::hstack([&left, &right]).unwrap(), original);
+        let top = matrix.submatrix(0..3, 0..6).unwrap();
+        let bottom = matrix.submatrix(3..5, 0..6).unwrap();
+        assert_eq!(CsrMatrix::vstack([&top, &bottom]).unwrap(), original);
+    }
+    let csc = original.to_csc();
+    let left = csc.submatrix(0..5, 0..2).unwrap();
+    let right = csc.submatrix(0..5, 2..6).unwrap();
+    assert_eq!(CscMatrix::hstack([&left, &right]).unwrap(), original);
+}
+
+#[test]
+fn stack_errors_and_empty() {
+    let a = CsrMatrix::<f64>::from_triplets(2, 2, Vec::new()).unwrap();
+    let b = CsrMatrix::<f64>::from_triplets(3, 1, Vec::new()).unwrap();
+    let mismatch = Some(SparseError::ShapeMismatch {
+        left: (2, 2),
+        right: (3, 1),
+    });
+    assert_eq!(CsrMatrix::hstack([&a, &b]).err(), mismatch);
+    assert_eq!(CsrMatrix::vstack([&a, &b]).err(), mismatch);
+
+    let none: [&CsrMatrix<f64>; 0] = [];
+    assert_eq!(CsrMatrix::hstack(none).unwrap().shape(), (0, 0));
+    assert_eq!(CsrMatrix::vstack(none).unwrap().shape(), (0, 0));
+    assert_eq!(CsrMatrix::vstack([&a]).unwrap(), a);
+    // Blocks with zero columns still contribute their rows
+    let tall_empty = CsrMatrix::<f64>::from_triplets(2, 0, Vec::new()).unwrap();
+    assert_eq!(
+        CsrMatrix::vstack([&tall_empty, &tall_empty])
+            .unwrap()
+            .shape(),
+        (4, 0)
+    );
+    let tall_empty = tall_empty.to_csc();
+    assert_eq!(
+        CscMatrix::vstack([&tall_empty, &tall_empty])
+            .unwrap()
+            .shape(),
+        (4, 0)
+    );
+}
+
+#[test]
+fn scale_rows_and_cols_match_diagonal_products() {
+    let a = pseudo_random(5, 4, 61, 50);
+    let row_factors = [2.0, -1.0, 0.5, 3.0, -4.0];
+    let col_factors = [2.0, -1.0, 0.5, 3.0];
+    let by_rows = CsrMatrix::from_diagonal(row_factors).matmul(&a).unwrap();
+    let by_cols = a.matmul(&CsrMatrix::from_diagonal(col_factors)).unwrap();
+    assert_eq!(a.scale_rows(&row_factors).unwrap(), by_rows);
+    assert_eq!(a.scale_cols(&col_factors).unwrap(), by_cols);
+    assert_eq!(a.to_csc().scale_rows(&row_factors).unwrap(), by_rows);
+    assert_eq!(a.to_csc().scale_cols(&col_factors).unwrap(), by_cols);
+}
+
+#[test]
+fn scale_rows_and_cols_keep_the_pattern() {
+    let a = CsrMatrix::from_dense(&[[1.0, 2.0], [3.0, 4.0]]).unwrap();
+    let rows = a.scale_rows(&[0.0, 1.0]).unwrap();
+    assert_eq!(rows.to_dense(), vec![vec![0.0, 0.0], vec![3.0, 4.0]]);
+    assert_eq!(rows.num_stored(), 4);
+    let cols = a.scale_cols(&[1.0, 0.0]).unwrap();
+    assert_eq!(cols.to_dense(), vec![vec![1.0, 0.0], vec![3.0, 0.0]]);
+    assert_eq!(a.values(), [1.0, 2.0, 3.0, 4.0]);
+    let empty = CsrMatrix::<f64>::from_triplets(0, 3, Vec::new()).unwrap();
+    assert_eq!(empty.scale_rows(&[]).unwrap().shape(), (0, 3));
+
+    let rect = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    assert_eq!(
+        rect.scale_rows(&[1.0; 3]).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (3, 3),
+            right: (2, 3)
+        })
+    );
+    assert_eq!(
+        rect.scale_cols(&[1.0; 2]).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (2, 3),
+            right: (2, 2)
+        })
+    );
+}
+
+#[test]
+fn scale_rows_and_cols_complex() {
+    // diag(V) · A with complex voltages, as in power flow Jacobians
+    let a = CsrMatrix::from_triplets(
+        2,
+        2,
+        vec![
+            (0, 0, Complex::new(1.0, 1.0)),
+            (1, 1, Complex::new(2.0, 0.0)),
+        ],
+    )
+    .unwrap();
+    let v = [Complex::new(0.0, 1.0), Complex::new(1.0, -1.0)];
+    assert_eq!(
+        a.scale_rows(&v).unwrap().values(),
+        [Complex::new(-1.0, 1.0), Complex::new(2.0, -2.0)]
+    );
+    assert_eq!(
+        a.scale_cols(&v).unwrap(),
+        a.matmul(&CsrMatrix::from_diagonal(v)).unwrap()
+    );
+}
+
+#[test]
+fn real_imag_and_from_parts() {
+    let a = pseudo_random_complex(6, 5, 91);
+    let (re, im) = (a.real(), a.imag());
+    assert_eq!((re.shape(), im.shape()), ((6, 5), (6, 5)));
+    assert_eq!(CsrMatrix::from_parts(&re, &im).unwrap(), a);
+
+    let b = CsrMatrix::from_triplets(
+        2,
+        2,
+        vec![
+            (0, 0, Complex::new(1.0, 0.0)),
+            (0, 1, Complex::new(0.0, 2.0)),
+            (1, 0, Complex::new(3.0, -4.0)),
+        ],
+    )
+    .unwrap();
+    assert_eq!(b.real().to_dense(), vec![vec![1.0, 0.0], vec![3.0, 0.0]]);
+    assert_eq!(b.imag().to_dense(), vec![vec![0.0, 2.0], vec![-4.0, 0.0]]);
+    // The parts keep the pattern, so a purely imaginary entry is a stored zero in the real part
+    assert_eq!((b.real().num_stored(), b.real().num_nonzero()), (3, 2));
+
+    let wrong = CsrMatrix::<f64>::from_triplets(3, 2, Vec::new()).unwrap();
+    let re = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    assert_eq!(
+        CsrMatrix::from_parts(&re, &wrong).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (2, 3),
+            right: (3, 2)
+        })
+    );
+}
+
+#[test]
+fn conj_and_adjoint() {
+    let a = CsrMatrix::from_triplets(
+        2,
+        2,
+        vec![
+            (0, 0, Complex::new(1.0, 2.0)),
+            (0, 1, Complex::new(0.0, -1.0)),
+            (1, 1, Complex::new(3.0, 0.0)),
+        ],
+    )
+    .unwrap();
+    let conjugated = a.conj();
+    assert_eq!(
+        conjugated.values()[..2],
+        [Complex::new(1.0, -2.0), Complex::new(0.0, 1.0)]
+    );
+    assert_eq!(conjugated.conj(), a);
+
+    // The adjoint of a CSR matrix is a CSC matrix, like the transpose
+    let adjoint: CscMatrix<Complex<f64>> = a.adjoint();
+    assert_eq!(adjoint, a.conj().transpose());
+    assert_eq!(adjoint.to_dense()[1][0], Complex::new(0.0, 1.0));
+    assert_eq!(adjoint.adjoint(), a);
+
+    // (AB)ᴴ = Bᴴ Aᴴ, on a rectangular pair
+    let (c, d) = (
+        pseudo_random_complex(4, 3, 92),
+        pseudo_random_complex(3, 5, 93),
+    );
+    assert_eq!((&c * &d).adjoint(), &d.adjoint() * &c.adjoint());
+
+    // A + Aᴴ is Hermitian, with a real diagonal
+    let e = pseudo_random_complex(5, 5, 94);
+    let hermitian = &e + &e.adjoint().to_csr();
+    assert_eq!(hermitian.adjoint(), hermitian);
+    assert!(hermitian
+        .diagonal()
+        .values()
+        .iter()
+        .all(|value| value.im == 0.0));
+}
+
+#[test]
+fn complex_helpers_on_real_matrices() {
+    let a = pseudo_random(4, 6, 95, 50);
+    assert_eq!(a.conj(), a);
+    assert_eq!(a.adjoint(), a.clone().transpose());
+    assert_eq!(a.real(), a);
+    let imaginary = a.imag();
+    assert_eq!(imaginary.shape(), (4, 6));
+    assert_eq!(
+        (imaginary.num_stored(), imaginary.num_nonzero()),
+        (a.num_stored(), 0)
+    );
+}

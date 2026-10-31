@@ -180,7 +180,7 @@ Merged in PR #2.
       orientations and with `SparseMatrix`), formatting and `serde`. `SparseError::InvalidCsr`
       became `InvalidCompressed`, since raw arrays can now be either orientation, and `from_csr`
       validates through `CsrMatrix::try_from_raw_parts`.
-- [ ] Move the numerical methods from `SparseMatrix` to the compressed type, each on the
+- [x] Move the numerical methods from `SparseMatrix` to the compressed type, each on the
       orientation it needs, one group at a time:
       - [x] products, including `mul_vec` in both orientations and the `rayon` versions. A dot
             kernel and a scatter kernel serve both orientations, and every result entry adds its
@@ -202,7 +202,11 @@ Merged in PR #2.
             `select`, the permutations, `density`, `sum`, `trace`, `is_symmetric` and the norms
             work in either orientation. Stored zeros are carried along, count in `density`,
             and don't break symmetry.
-      - [ ] arithmetic, block construction and complex parts
+      - [x] arithmetic, block construction and complex parts. Patterns follow from the
+            operation: sums and differences store the union of their operands' patterns,
+            `hadamard` their intersection, and scaling, negation, `map`, `apply`, row and column
+            scaling and complex parts keep the pattern. `adjoint`, like `transpose`, returns the
+            other orientation. Stacking along the compressed axis concatenates the arrays.
 - [ ] `powerflow` builds and stores its DC model's matrices as `CsrMatrix`.
 - [ ] `SparseMatrix` becomes the editing type only: its compressed caches, the cache API and the
       moved methods are removed, and the README describes both types.
