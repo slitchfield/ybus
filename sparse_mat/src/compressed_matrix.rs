@@ -25,6 +25,9 @@ use crate::sparse_error::SparseError;
 use crate::sparse_matrix::{write_dense_grid, SparseMatrix};
 use crate::Scalar;
 
+#[cfg(feature = "rayon")]
+mod parallel;
+pub(crate) mod product;
 #[cfg(feature = "serde")]
 mod serde_impl;
 
@@ -33,8 +36,10 @@ mod sealed {
 }
 
 /// The orientation of a [`CompressedMatrix`]: which axis is compressed. Implemented only by
-/// [`Csr`] and [`Csc`].
-pub trait Orientation: sealed::Sealed + Copy + fmt::Debug + Default + 'static {
+/// [`Csr`] and [`Csc`], which hold no data, so a matrix is `Send` and `Sync` when its values are.
+pub trait Orientation:
+    sealed::Sealed + Copy + fmt::Debug + Default + Send + Sync + 'static
+{
     /// The other orientation, which transposing produces.
     type Transposed: Orientation<Transposed = Self>;
     /// Whether the rows are compressed (CSR) rather than the columns (CSC).

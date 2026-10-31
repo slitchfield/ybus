@@ -182,7 +182,12 @@ Merged in PR #2.
       validates through `CsrMatrix::try_from_raw_parts`.
 - [ ] Move the numerical methods from `SparseMatrix` to the compressed type, each on the
       orientation it needs, one group at a time:
-      - [ ] products, including `mul_vec` in both orientations and the `rayon` versions
+      - [x] products, including `mul_vec` in both orientations and the `rayon` versions. A dot
+            kernel and a scatter kernel serve both orientations, and every result entry adds its
+            terms in the same order either way, so CSR and CSC results are bit-for-bit equal.
+            `matmul` keeps cancellations as stored zeros, so its pattern doesn't depend on the
+            values. `par_mul_vec` is on CSR and `par_vec_mul` on CSC, where each splits into
+            independent dot products.
       - [ ] solvers, with factors returned as compressed matrices
       - [ ] access, selection, permutation and properties
       - [ ] arithmetic, block construction and complex parts

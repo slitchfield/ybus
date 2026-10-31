@@ -252,3 +252,253 @@ fn debug_and_display() {
     assert_eq!(format!("{csr}"), format!("{}", sample()));
     assert_eq!(format!("{}", sample().to_csc()), format!("{}", sample()));
 }
+
+// Products
+
+/// Deterministic pseudo-random sparse matrix. `values` maps the generator's draws to entries:
+/// small integers make products exact, so they compare against a dense reference.
+fn pseudo_random_with(
+    rows: usize,
+    cols: usize,
+    seed: u64,
+    fill_percent: u64,
+    values: impl Fn(u64) -> f64,
+) -> CsrMatrix<f64> {
+    let mut state = seed;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        state >> 33
+    };
+    let mut triplets = vec![];
+    for row in 0..rows {
+        for col in 0..cols {
+            if next() % 100 < fill_percent {
+                triplets.push((row, col, values(next())));
+            }
+        }
+    }
+    CsrMatrix::from_triplets(rows, cols, triplets).unwrap()
+}
+
+/// Small integer-valued entries, so products are exact.
+fn pseudo_random(rows: usize, cols: usize, seed: u64, fill_percent: u64) -> CsrMatrix<f64> {
+    pseudo_random_with(rows, cols, seed, fill_percent, |draw| {
+        (draw % 9) as f64 - 4.0
+    })
+}
+
+fn dense_matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = b.first().map_or(0, Vec::len);
+    a.iter()
+        .map(|row| {
+            (0..n)
+                .map(|j| row.iter().zip(b).map(|(x, b_row)| x * b_row[j]).sum())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn mul_vec_in_both_orientations() {
+    let a = CsrMatrix::from_dense(&[[1.0, 0.0, 2.0], [0.0, 3.0, 0.0]]).unwrap();
+    assert_eq!(a.mul_vec(&[1.0, 10.0, 100.0]).unwrap(), vec![201.0, 30.0]);
+    assert_eq!(&a * &vec![1.0, 10.0, 100.0], vec![201.0, 30.0]);
+    assert_eq!(&a * &[1.0, 1.0, 1.0][..], vec![3.0, 3.0]);
+    assert_eq!(
+        a.to_csc().mul_vec(&[1.0, 10.0, 100.0]).unwrap(),
+        vec![201.0, 30.0]
+    );
+}
+
+#[test]
+fn mul_vec_matches_dense() {
+    let a = pseudo_random(7, 5, 11, 40);
+    let x = vec![1.0, -2.0, 3.0, 0.0, 5.0];
+    let column: Vec<Vec<f64>> = x.iter().map(|&v| vec![v]).collect();
+    let expected: Vec<f64> = dense_matmul(&a.to_dense(), &column)
+        .into_iter()
+        .map(|row| row[0])
+        .collect();
+    assert_eq!(a.mul_vec(&x).unwrap(), expected);
+    assert_eq!(a.to_csc().mul_vec(&x).unwrap(), expected);
+}
+
+#[test]
+fn mul_vec_shape_mismatch() {
+    let a = CsrMatrix::from_dense(&[[1.0, 2.0], [3.0, 4.0]]).unwrap();
+    let expected = Some(SparseError::ShapeMismatch {
+        left: (2, 2),
+        right: (3, 1),
+    });
+    assert_eq!(a.mul_vec(&[1.0, 2.0, 3.0]).err(), expected);
+    assert_eq!(a.to_csc().mul_vec(&[1.0, 2.0, 3.0]).err(), expected);
+}
+
+#[test]
+fn vec_mul_is_the_transpose_product() {
+    let a = pseudo_random(6, 4, 3, 50);
+    let x = vec![2.0, -1.0, 0.0, 4.0, 1.0, 3.0];
+    // The transpose of a CSR matrix is a CSC matrix of the same arrays
+    let via_transpose = a.clone().transpose().mul_vec(&x).unwrap();
+    assert_eq!(a.vec_mul(&x).unwrap(), via_transpose);
+    assert_eq!(a.to_csc().vec_mul(&x).unwrap(), via_transpose);
+    assert_eq!(&x * &a, via_transpose);
+    assert_eq!(&x[..] * &a, via_transpose);
+}
+
+#[test]
+fn vec_mul_shape_mismatch() {
+    let a = CscMatrix::from_dense(&[[1.0, 2.0], [3.0, 4.0]]).unwrap();
+    assert_eq!(
+        a.vec_mul(&[1.0]).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (1, 1),
+            right: (2, 2)
+        })
+    );
+}
+
+#[test]
+fn mul_dense_matches_dense() {
+    let a = pseudo_random(5, 4, 21, 45);
+    let b = pseudo_random(4, 3, 22, 100).to_dense();
+    let expected = dense_matmul(&a.to_dense(), &b);
+    assert_eq!(a.mul_dense(&b).unwrap(), expected);
+    assert_eq!(a.to_csc().mul_dense(&b).unwrap(), expected);
+}
+
+#[test]
+fn mul_dense_errors() {
+    let a = CsrMatrix::from_dense(&[[1.0, 2.0], [3.0, 4.0]]).unwrap();
+    assert_eq!(
+        a.mul_dense(&[vec![1.0, 2.0]]).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (2, 2),
+            right: (1, 2)
+        })
+    );
+    assert_eq!(
+        a.mul_dense(&[vec![1.0, 2.0], vec![3.0]]).err(),
+        Some(SparseError::RaggedRows {
+            row: 1,
+            expected: 2,
+            found: 1
+        })
+    );
+}
+
+#[test]
+fn matmul_matches_dense_in_both_orientations() {
+    for (seed, (m, k, n)) in [
+        (1u64, (6, 5, 4)),
+        (2, (3, 8, 3)),
+        (3, (10, 10, 10)),
+        (4, (1, 7, 1)),
+    ] {
+        let a = pseudo_random(m, k, seed, 35);
+        let b = pseudo_random(k, n, seed + 100, 35);
+        let expected = dense_matmul(&a.to_dense(), &b.to_dense());
+        let product = a.matmul(&b).unwrap();
+        assert_eq!(product.shape(), (m, n));
+        assert_eq!(product.to_dense(), expected);
+        assert_eq!(a.to_csc().matmul(&b.to_csc()).unwrap().to_dense(), expected);
+        // The operator agrees, for every operand form
+        assert_eq!(&a * &b, product);
+        assert_eq!(a.clone() * b.clone(), product);
+        assert_eq!(a.clone() * &b, product);
+        assert_eq!(&a * b.clone(), product);
+    }
+}
+
+#[test]
+fn matmul_identity_and_zero() {
+    let a = pseudo_random(6, 6, 9, 40);
+    let identity = CsrMatrix::identity(6);
+    assert_eq!(a.matmul(&identity).unwrap(), a);
+    assert_eq!(identity.matmul(&a).unwrap(), a);
+
+    let zero = CsrMatrix::<f64>::from_triplets(6, 6, Vec::new()).unwrap();
+    assert_eq!(a.matmul(&zero).unwrap().num_stored(), 0);
+}
+
+#[test]
+fn matmul_associative_and_transpose_rule() {
+    let a = pseudo_random(4, 5, 31, 40);
+    let b = pseudo_random(5, 3, 32, 40);
+    let c = pseudo_random(3, 6, 33, 40);
+    assert_eq!(&(&a * &b) * &c, &a * &(&b * &c));
+    // (AB)ᵀ = BᵀAᵀ, where the transposes are CSC, so this exercises the CSC product
+    let product_transposed: CscMatrix<f64> = (&a * &b).transpose();
+    assert_eq!(
+        product_transposed,
+        b.clone().transpose() * a.clone().transpose()
+    );
+}
+
+#[test]
+fn matmul_keeps_cancellations_as_stored_zeros() {
+    // Entry (0, 0) of the product is 1*1 + (-1)*1 = 0, but the patterns reach it
+    let a = CsrMatrix::from_dense(&[[1.0, -1.0], [0.0, 2.0]]).unwrap();
+    let b = CsrMatrix::from_dense(&[[1.0, 0.0], [1.0, 5.0]]).unwrap();
+    for product in [
+        a.matmul(&b).unwrap(),
+        a.to_csc().matmul(&b.to_csc()).unwrap().to_csr(),
+    ] {
+        assert_eq!(product.to_dense(), vec![vec![0.0, -5.0], vec![2.0, 10.0]]);
+        assert_eq!((product.num_stored(), product.num_nonzero()), (4, 3));
+    }
+}
+
+#[test]
+fn matmul_shape_mismatch() {
+    let a = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    assert_eq!(
+        a.matmul(&a).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (2, 3),
+            right: (2, 3)
+        })
+    );
+}
+
+#[test]
+#[should_panic(expected = "incompatible shapes")]
+fn mul_operator_shape_mismatch_panics() {
+    let a = CscMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    let _ = &a * &a;
+}
+
+#[test]
+fn matmul_huge_sparse_shape() {
+    let a = CsrMatrix::from_triplets(1 << 20, 1 << 20, vec![(3, 1 << 19, 2.0)]).unwrap();
+    let b = CsrMatrix::from_triplets(1 << 20, 1 << 20, vec![(1 << 19, 7, 5.0)]).unwrap();
+    let product = a.matmul(&b).unwrap();
+    assert_eq!(product.iter().collect::<Vec<_>>(), vec![(3, 7, 10.0)]);
+}
+
+#[test]
+fn csr_and_csc_products_agree_bit_for_bit() {
+    // Values like 1/7 aren't exact in binary, so a different summation order would show
+    let fraction = |draw: u64| (draw % 1000) as f64 / 7.0 - 70.0;
+    let a = pseudo_random_with(9, 7, 5, 45, fraction);
+    let b = pseudo_random_with(7, 6, 6, 45, fraction);
+    let x: Vec<f64> = (0..7).map(|i| 1.0 / (i as f64 + 3.0)).collect();
+    let y: Vec<f64> = (0..9).map(|i| 1.0 / (i as f64 + 2.0)).collect();
+    let (a_csc, b_csc) = (a.to_csc(), b.to_csc());
+
+    assert_eq!(a.mul_vec(&x).unwrap(), a_csc.mul_vec(&x).unwrap());
+    assert_eq!(a.vec_mul(&y).unwrap(), a_csc.vec_mul(&y).unwrap());
+    let b_dense = b.to_dense();
+    assert_eq!(
+        a.mul_dense(&b_dense).unwrap(),
+        a_csc.mul_dense(&b_dense).unwrap()
+    );
+
+    let by_rows = a.matmul(&b).unwrap().to_csc();
+    let by_columns = a_csc.matmul(&b_csc).unwrap();
+    assert_eq!(by_rows.pointers(), by_columns.pointers());
+    assert_eq!(by_rows.indices(), by_columns.indices());
+    assert_eq!(by_rows.values(), by_columns.values());
+}
