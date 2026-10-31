@@ -144,7 +144,7 @@ fn entries(model: &DcModel, solver: DcSolver) -> Result<(usize, usize, usize), S
             let lu = bprime.lu().map_err(|err| err.to_string())?;
             lu.l().iter().count() + lu.u().iter().count() - unknown.len()
         }
-        DcSolver::None => 0,
+        DcSolver::NoSolve => 0,
     };
     Ok((unknown.len(), bprime.iter().count(), factor))
 }
