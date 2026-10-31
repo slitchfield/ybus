@@ -20,6 +20,7 @@ API overview, and [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for
 - **`./check.sh`:** runs everything the Check CI job runs, over the whole workspace: fmt,
   clippy with `-D warnings`, and the tests with no features, all features and each
   `sparse_mat` feature alone, plus doc tests (including the `sparse_mat` README's example).
+  The benchmarks run once, as tests, in the first of those passes only.
 - **Dependencies:** `cargo deny --all-features check` checks advisories, licenses, banned
   crates and sources against `deny.toml`. The Dependencies CI job runs it.
 - **MATPOWER test data:** `scripts/fetch-matpower.sh` downloads a pinned MATPOWER release
