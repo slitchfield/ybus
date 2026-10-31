@@ -217,8 +217,13 @@ Merged in PR #2.
       element edits and reads, `iter` (which now sorts on demand, so it works for any shape),
       transposes, `to_dense`, Matrix Market I/O, `serde`, and `to_csr`/`to_csc`. `from_csr` is
       gone in favour of `CsrMatrix::try_from_raw_parts`.
-- [ ] Zero-copy major-axis slices (a CSR row or a CSC column), `position(i, j)` by binary search,
-      and cached diagonal positions.
+- [x] Zero-copy major-axis slices (a CSR row or a CSC column), `position(i, j)` by binary search,
+      and cached diagonal positions. `outer(i)` borrows a row (CSR) or column (CSC) as its
+      index and value slices, and `outer_mut(i)` makes the values mutable for refills.
+      `position(row, col)` returns the entry's slot in `values()`, or `None` if it isn't
+      stored. `diagonal_positions()` computes the diagonal's slots on first use and caches
+      them in a `OnceLock`; a fixed pattern means the cache never goes stale, so values can
+      change freely, and `transpose` keeps it, since a diagonal entry keeps its slot.
 - [ ] An assembly map built once from a triplet list's positions that records each triplet's
       slot in `values`, so a refill with new values is an O(nnz) write with no hashing. Test that
       a refill matches a fresh `from_triplets`.

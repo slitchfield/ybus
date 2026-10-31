@@ -20,6 +20,7 @@
 
 use std::fmt;
 use std::marker::PhantomData;
+use std::sync::OnceLock;
 
 use crate::sparse_error::SparseError;
 use crate::sparse_matrix::{write_dense_grid, SparseMatrix};
@@ -92,6 +93,9 @@ pub struct CompressedMatrix<T = f64, O: Orientation = Csr> {
     idx: Vec<usize>,
     data: Vec<T>,
     orientation: PhantomData<O>,
+    /// The slot of each diagonal entry in `data`, computed on first use by
+    /// `diagonal_positions`. The pattern is fixed, so it never goes stale.
+    diagonal: OnceLock<Vec<Option<usize>>>,
 }
 
 /// A matrix in compressed sparse row form.
@@ -134,6 +138,7 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
             idx,
             data,
             orientation: PhantomData,
+            diagonal: OnceLock::new(),
         };
         debug_assert_eq!(
             validate(
@@ -183,6 +188,7 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
             idx: indices,
             data: values,
             orientation: PhantomData,
+            diagonal: OnceLock::new(),
         })
     }
 
@@ -302,6 +308,8 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
             idx: self.idx,
             data: self.data,
             orientation: PhantomData,
+            // Entry (i, i) of the transpose is the same entry, in the same slot
+            diagonal: self.diagonal,
         }
     }
 
@@ -326,6 +334,7 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
                 idx: self.idx.clone(),
                 data: self.data.clone(),
                 orientation: PhantomData,
+                diagonal: self.diagonal.clone(),
             };
         }
         // A counting sort by minor index. Visiting the major indices in order leaves each new
@@ -355,6 +364,7 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
             idx,
             data,
             orientation: PhantomData,
+            diagonal: OnceLock::new(),
         }
     }
 
@@ -462,15 +472,22 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
         self.iter().filter(|&(_, _, value)| value != T::zero())
     }
 
-    /// The value stored at `(row, col)`, or `None` if the position isn't in the pattern, found
-    /// by binary search within its major index. The caller has checked the bounds.
-    pub(crate) fn stored_value(&self, row: usize, col: usize) -> Option<T> {
+    /// The slot in `data` of the entry at `(row, col)`, or `None` if the position isn't in the
+    /// pattern, found by binary search within its major index. The caller has checked the
+    /// bounds.
+    pub(crate) fn slot(&self, row: usize, col: usize) -> Option<usize> {
         let (major, minor) = if O::ROW_MAJOR { (row, col) } else { (col, row) };
         let segment = self.ptr[major]..self.ptr[major + 1];
         self.idx[segment.clone()]
             .binary_search(&minor)
             .ok()
-            .map(|offset| self.data[segment.start + offset])
+            .map(|offset| segment.start + offset)
+    }
+
+    /// The value stored at `(row, col)`, or `None` if the position isn't in the pattern. The
+    /// caller has checked the bounds.
+    pub(crate) fn stored_value(&self, row: usize, col: usize) -> Option<T> {
+        self.slot(row, col).map(|p| self.data[p])
     }
 }
 

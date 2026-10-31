@@ -916,6 +916,136 @@ fn diagonal_in_both_orientations() {
 }
 
 #[test]
+fn outer_borrows_a_row_or_column() {
+    let csr = sample_4x6();
+    assert_eq!(
+        csr.outer(2).unwrap(),
+        (&[2, 3, 4][..], &[50.0, 60.0, 70.0][..])
+    );
+    let csc = csr.to_csc();
+    assert_eq!(csc.outer(3).unwrap(), (&[1, 2][..], &[40.0, 60.0][..]));
+    // The slices are the arrays' own: entry k is slot pointers()[i] + k
+    for i in 0..4 {
+        let (indices, values) = csr.outer(i).unwrap();
+        let start = csr.pointers()[i];
+        assert_eq!(indices, &csr.indices()[start..start + indices.len()]);
+        assert_eq!(values.as_ptr(), csr.values()[start..].as_ptr());
+    }
+    // An empty row, and stored zeros
+    let empty: (&[usize], &[f64]) = (&[], &[]);
+    assert_eq!(
+        CsrMatrix::<f64>::from_triplets(2, 3, Vec::new())
+            .unwrap()
+            .outer(1)
+            .unwrap(),
+        empty
+    );
+    let with_zero = CsrMatrix::from_triplets(1, 3, vec![(0, 0, 1.0), (0, 2, 0.0)]).unwrap();
+    assert_eq!(with_zero.outer(0).unwrap(), (&[0, 2][..], &[1.0, 0.0][..]));
+
+    assert_eq!(
+        csr.outer(4).err(),
+        Some(SparseError::OutOfRange { index: 4, len: 4 })
+    );
+    assert_eq!(
+        csc.outer(6).err(),
+        Some(SparseError::OutOfRange { index: 6, len: 6 })
+    );
+}
+
+#[test]
+fn outer_mut_refills_in_place() {
+    let mut csr = sample_4x6();
+    {
+        let (indices, values) = csr.outer_mut(2).unwrap();
+        assert_eq!(indices, [2, 3, 4]);
+        for (value, &col) in values.iter_mut().zip(indices) {
+            *value = col as f64;
+        }
+    }
+    // Setting a value to zero keeps it stored
+    csr.outer_mut(0).unwrap().1[1] = 0.0;
+    assert_eq!(csr.indices(), sample_4x6().indices());
+    assert_eq!(csr.row(2).unwrap().values(), [2.0, 3.0, 4.0]);
+    assert_eq!(csr.num_stored(), 8);
+    assert_eq!(csr.num_nonzero(), 7);
+
+    let mut csc = sample_4x6().to_csc();
+    csc.outer_mut(3).unwrap().1.copy_from_slice(&[-1.0, -2.0]);
+    assert_eq!(csc.col(3).unwrap().values(), [-1.0, -2.0]);
+    assert_eq!(
+        csc.outer_mut(6).err(),
+        Some(SparseError::OutOfRange { index: 6, len: 6 })
+    );
+}
+
+#[test]
+fn position_finds_each_stored_entry() {
+    let csr = sample_4x6();
+    let csc = csr.to_csc();
+    let dense = csr.to_dense();
+    for (row, dense_row) in dense.iter().enumerate() {
+        for (col, &value) in dense_row.iter().enumerate() {
+            let stored = value != 0.0;
+            for (position, values) in [
+                (csr.position(row, col).unwrap(), csr.values()),
+                (csc.position(row, col).unwrap(), csc.values()),
+            ] {
+                assert_eq!(position.is_some(), stored, "({row}, {col})");
+                if let Some(p) = position {
+                    assert_eq!(values[p], value);
+                }
+            }
+        }
+    }
+    // A stored zero has a position
+    let with_zero = CscMatrix::from_triplets(2, 2, vec![(1, 0, 0.0)]).unwrap();
+    assert_eq!(with_zero.position(1, 0), Ok(Some(0)));
+    assert_eq!(with_zero.position(0, 0), Ok(None));
+
+    for (row, col) in [(4, 0), (0, 6)] {
+        let error = Some(SparseError::OutOfBounds {
+            row,
+            col,
+            shape: (4, 6),
+        });
+        assert_eq!(csr.position(row, col).err(), error);
+        assert_eq!(csc.position(row, col).err(), error);
+    }
+}
+
+#[test]
+fn diagonal_positions_are_cached_and_survive_refills() {
+    let mut csr = sample_4x6();
+    let expected = [Some(0), Some(2), Some(4), None];
+    assert_eq!(csr.diagonal_positions(), expected);
+    for (i, &position) in expected.iter().enumerate() {
+        assert_eq!(csr.position(i, i), Ok(position));
+    }
+    // The cache stays right after values change, including to zero
+    csr.values_mut()[2] = 0.0;
+    assert_eq!(csr.diagonal_positions(), expected);
+    assert_eq!(csr.diagonal().indices(), [0, 1, 2]);
+    assert_eq!(csr.diagonal().values(), [10.0, 0.0, 50.0]);
+
+    // A clone and a transpose keep it; reorienting finds the new slots
+    let clone = csr.clone();
+    assert_eq!(clone.diagonal_positions(), expected);
+    let transposed = csr.clone().transpose();
+    assert_eq!(transposed.diagonal_positions(), expected);
+    let csc = csr.to_csc();
+    let csc_expected: Vec<Option<usize>> = (0..4).map(|i| csc.position(i, i).unwrap()).collect();
+    assert_eq!(csc.diagonal_positions(), csc_expected);
+    assert_eq!(csc_expected, [Some(0), Some(2), Some(3), None]);
+    assert_eq!(csc.to_csr().diagonal_positions(), expected);
+
+    // Rectangular and empty matrices
+    let tall = CscMatrix::from_triplets(5, 2, vec![(1, 1, 7.0), (4, 1, 1.0)]).unwrap();
+    assert_eq!(tall.diagonal_positions(), [None, Some(0)]);
+    assert!(CsrMatrix::<f64>::default().diagonal_positions().is_empty());
+}
+
+#[test]
 fn submatrix_in_both_orientations() {
     let csr = sample_4x6();
     let expected = vec![vec![30.0, 0.0, 40.0], vec![0.0, 50.0, 60.0]];
