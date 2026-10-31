@@ -183,3 +183,161 @@ fn ordering_edge_cases() {
         Err(SparseError::NotSquare { shape: (2, 3) })
     );
 }
+
+// Symbolic analysis for Cholesky
+
+/// A pseudo-random symmetric positive definite matrix: about `fill_percent` of the
+/// off-diagonal positions in a symmetric pattern, with a dominant diagonal.
+fn random_spd(n: usize, fill_percent: u64, seed: u64) -> CsrMatrix<f64> {
+    let mut rng = Lcg(seed);
+    let mut triplets = vec![];
+    let mut row_sums = vec![0.0; n];
+    for i in 0..n {
+        for j in 0..i {
+            if rng.next() % 100 < fill_percent {
+                let value = -((rng.next() % 1000) as f64 + 1.0) / 997.0;
+                triplets.extend([(i, j, value), (j, i, value)]);
+                row_sums[i] -= value;
+                row_sums[j] -= value;
+            }
+        }
+    }
+    for (i, sum) in row_sums.iter().enumerate() {
+        triplets.push((i, i, sum + 1.0 + i as f64 / n as f64));
+    }
+    CsrMatrix::from_triplets(n, n, triplets).unwrap()
+}
+
+/// The pattern of the Cholesky factor of `perm`'s reordering of `a`'s symmetrized pattern, by
+/// dense symbolic elimination: `filled[i][j]` for `j <= i`.
+fn brute_force_factor_pattern(a: &CsrMatrix<f64>, perm: &[usize]) -> Vec<Vec<bool>> {
+    let n = perm.len();
+    let mut inverse = vec![0; n];
+    for (new, &old) in perm.iter().enumerate() {
+        inverse[old] = new;
+    }
+    let mut filled = vec![vec![false; n]; n];
+    for (i, j, _) in a.iter() {
+        let (i, j) = (inverse[i], inverse[j]);
+        filled[i.max(j)][i.min(j)] = true;
+    }
+    for (i, row) in filled.iter_mut().enumerate() {
+        row[i] = true;
+    }
+    // Eliminating k connects every pair of later rows with an entry in column k
+    for k in 0..n {
+        let below: Vec<usize> = (k + 1..n).filter(|&i| filled[i][k]).collect();
+        for (a, &i) in below.iter().enumerate() {
+            for &j in &below[..=a] {
+                filled[i][j] = true;
+            }
+        }
+    }
+    filled
+}
+
+#[test]
+fn analysis_matches_brute_force_elimination() {
+    for (n, fill, seed) in [(1, 0, 1), (12, 20, 2), (40, 8, 3), (60, 4, 4), (30, 50, 5)] {
+        let a = random_spd(n, fill, seed);
+        for ordering in [Ordering::Natural, Ordering::Rcm] {
+            let symbolic = a.analyze_cholesky(ordering).unwrap();
+            assert_eq!(symbolic.dim(), n);
+            assert_eq!(symbolic.permutation(), a.ordering(ordering).unwrap());
+            let filled = brute_force_factor_pattern(&a, symbolic.permutation());
+
+            // The parent of j is the first row below j with an entry in column j
+            let parent: Vec<Option<usize>> =
+                (0..n).map(|j| (j + 1..n).find(|&i| filled[i][j])).collect();
+            assert_eq!(symbolic.elimination_tree(), parent, "n = {n}, {ordering:?}");
+            let counts: Vec<usize> = (0..n)
+                .map(|j| (j..n).filter(|&i| filled[i][j]).count())
+                .collect();
+            assert_eq!(symbolic.column_counts(), counts, "n = {n}, {ordering:?}");
+            assert_eq!(symbolic.predicted_entries(), counts.iter().sum::<usize>());
+
+            // With values that never cancel exactly, the factor stores the whole pattern
+            let reordered = a.permute_symmetric(symbolic.permutation()).unwrap();
+            assert_eq!(
+                reordered.cholesky().unwrap().num_stored(),
+                symbolic.predicted_entries()
+            );
+        }
+    }
+}
+
+#[test]
+fn postorder_visits_descendants_first() {
+    let a = grid_laplacian(7);
+    for ordering in [Ordering::Natural, Ordering::Rcm] {
+        let symbolic = a.analyze_cholesky(ordering).unwrap();
+        let order = symbolic.postorder();
+        assert!(is_permutation(order, 49));
+        let mut position = vec![0; 49];
+        for (k, &node) in order.iter().enumerate() {
+            position[node] = k;
+        }
+        // Every node follows its children, and each subtree is contiguous: a node's subtree
+        //   occupies the positions just before it, as many as the subtree has nodes
+        let tree = symbolic.elimination_tree();
+        let mut size = vec![1; 49];
+        for node in 0..49 {
+            if let Some(parent) = tree[node] {
+                assert!(position[node] < position[parent]);
+                assert!(parent > node);
+                size[parent] += size[node];
+            }
+        }
+        for node in 0..49 {
+            let first = position[node] + 1 - size[node];
+            for &member in &order[first..=position[node]] {
+                let mut ancestor = Some(member);
+                while ancestor.is_some_and(|a| a != node) {
+                    ancestor = tree[ancestor.unwrap()];
+                }
+                assert_eq!(ancestor, Some(node), "{member} is not under {node}");
+            }
+        }
+    }
+}
+
+#[test]
+fn analysis_uses_the_symmetrized_pattern_and_counts_stored_zeros() {
+    // Only the lower triangle stored, one entry of it a stored zero
+    let a = CsrMatrix::from_triplets(
+        3,
+        3,
+        vec![
+            (0, 0, 4.0),
+            (1, 1, 4.0),
+            (2, 2, 4.0),
+            (2, 0, 0.0),
+            (2, 1, 1.0),
+        ],
+    )
+    .unwrap();
+    let symbolic = a.analyze_cholesky(Ordering::Natural).unwrap();
+    assert_eq!(symbolic.elimination_tree(), [Some(2), Some(2), None]);
+    assert_eq!(symbolic.column_counts(), [2, 2, 1]);
+    // A forest: two components, so two roots
+    let forest = CsrMatrix::<f64>::identity(3)
+        .analyze_cholesky(Ordering::Rcm)
+        .unwrap();
+    assert_eq!(forest.elimination_tree(), [None, None, None]);
+    assert_eq!(forest.predicted_entries(), 3);
+
+    assert_eq!(
+        CsrMatrix::<f64>::from_triplets(2, 3, Vec::new())
+            .unwrap()
+            .analyze_cholesky(Ordering::Rcm)
+            .err(),
+        Some(SparseError::NotSquare { shape: (2, 3) })
+    );
+    assert_eq!(
+        CsrMatrix::<f64>::default()
+            .analyze_cholesky(Ordering::Rcm)
+            .unwrap()
+            .dim(),
+        0
+    );
+}

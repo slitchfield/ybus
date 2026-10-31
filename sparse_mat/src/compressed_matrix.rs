@@ -29,6 +29,7 @@ use crate::Scalar;
 mod access;
 mod assembly;
 mod blocks;
+mod cholesky;
 mod ops;
 mod ordering;
 #[cfg(feature = "rayon")]
@@ -40,6 +41,7 @@ mod serde_impl;
 mod solvers;
 
 pub use assembly::AssemblyMap;
+pub use cholesky::SymbolicCholesky;
 pub use ordering::Ordering;
 pub use solvers::Lu;
 

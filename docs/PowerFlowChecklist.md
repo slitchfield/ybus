@@ -273,8 +273,14 @@ Merged in PR #2.
       starts from a pseudo-peripheral node (George and Liu). On shuffled k×k grids it recovers
       bandwidth k exactly, with a smaller envelope than the natural order (10,700 against
       15,024 at k = 25). `bandwidth()` and `profile()` measure it.
-- [ ] Symbolic analysis, `analyze_cholesky`: ordering, the elimination tree and L's column
+- [x] Symbolic analysis, `analyze_cholesky`: ordering, the elimination tree and L's column
       counts.
+      `CsrMatrix::analyze_cholesky(Ordering)` returns a `SymbolicCholesky` holding the
+      permutation, the elimination tree (Liu's algorithm with path compression), a postorder,
+      and the exact pattern of L, found as each row's subtree of the tree, from which come the
+      column counts and `predicted_entries()`. It reads only the pattern of A+Aᵀ, stored zeros
+      included. Tested against dense symbolic elimination on random patterns, under both
+      orderings.
 - [ ] Cholesky after ordering, reusing the existing up-looking algorithm, with the elimination
       tree's reach in place of its `BTreeMap` work row. Moved up from the end of the phase: it
       costs little once an ordering exists, and gives the first measurement.
