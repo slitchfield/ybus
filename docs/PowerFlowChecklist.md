@@ -266,8 +266,13 @@ Merged in PR #2.
         symmetric), as KLU does by default.
       - **The pivot threshold defaults to 0.1** and is configurable: a pivot on the diagonal is
         kept if its magnitude is at least 0.1 times the column's largest.
-- [ ] Reverse Cuthill–McKee ordering, with a test that bandwidth doesn't increase on banded and
+- [x] Reverse Cuthill–McKee ordering, with a test that bandwidth doesn't increase on banded and
       grid matrices.
+      `CompressedMatrix::ordering(Ordering::Rcm)` in `compressed_matrix/ordering.rs`, on the
+      pattern of A+Aᵀ, so it's the same in either orientation and for any values. Each component
+      starts from a pseudo-peripheral node (George and Liu). On shuffled k×k grids it recovers
+      bandwidth k exactly, with a smaller envelope than the natural order (10,700 against
+      15,024 at k = 25). `bandwidth()` and `profile()` measure it.
 - [ ] Symbolic analysis, `analyze_cholesky`: ordering, the elimination tree and L's column
       counts.
 - [ ] Cholesky after ordering, reusing the existing up-looking algorithm, with the elimination

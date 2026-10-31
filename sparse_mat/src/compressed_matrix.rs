@@ -30,6 +30,7 @@ mod access;
 mod assembly;
 mod blocks;
 mod ops;
+mod ordering;
 #[cfg(feature = "rayon")]
 mod parallel;
 pub(crate) mod product;
@@ -39,6 +40,7 @@ mod serde_impl;
 mod solvers;
 
 pub use assembly::AssemblyMap;
+pub use ordering::Ordering;
 pub use solvers::Lu;
 
 mod sealed {
