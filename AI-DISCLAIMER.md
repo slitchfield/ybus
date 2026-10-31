@@ -46,8 +46,12 @@ None of this guarantees the absence of errors. Please report any you find.
 ## Attribution of sources
 
 Considerable care went into attributing the ideas this code is built on:
-- **No copied code:** the algorithms were implemented from published descriptions in papers and
-  textbooks. No source code from other libraries was knowingly copied or ported.
+- **No copied code:** the sparse matrix algorithms were implemented from published
+  descriptions in papers and textbooks, and no source code from other libraries was knowingly
+  copied or ported. The DC power flow is the exception: it reproduces MATPOWER's results, and
+  was written with reference to MATPOWER's BSD-licensed source code as well as its
+  documentation. It is a reimplementation in Rust, not a translation; the README's
+  [References](README.md#references) section describes how it relates to MATPOWER.
 - **References:** the [References](README.md#references) section of the README lists the
   publication behind each implemented algorithm, and behind each planned one.
 - **Checked citations:** each citation's details (authors, venue, pages, DOI) were checked against
