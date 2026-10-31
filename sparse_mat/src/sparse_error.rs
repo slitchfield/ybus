@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-/// Errors returned by `SparseMatrix` operations.
+/// Errors returned by `SparseMatrix` and `CompressedMatrix` operations.
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
 pub enum SparseError {

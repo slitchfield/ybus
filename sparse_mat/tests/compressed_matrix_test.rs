@@ -1666,3 +1666,28 @@ fn complex_helpers_on_real_matrices() {
         (a.num_stored(), 0)
     );
 }
+
+#[test]
+fn subtraction_stores_cancellations_and_leaves_operands() {
+    let b = CsrMatrix::from_dense(&[[1.0, 0.0], [4.0, 3.0]]).unwrap();
+    let difference = &sample_2x2() - &b;
+    assert_eq!(difference.to_dense(), vec![vec![0.0, 2.0], vec![-4.0, 0.0]]);
+    assert_eq!((difference.num_stored(), difference.num_nonzero()), (4, 2));
+    assert_eq!(
+        sample_2x2(),
+        CsrMatrix::from_dense(&[[1.0, 2.0], [0.0, 3.0]]).unwrap()
+    );
+}
+
+#[test]
+#[should_panic(expected = "incompatible shapes")]
+fn sub_operator_shape_mismatch_panics() {
+    let _ = &sample_2x2() - &CsrMatrix::<f64>::from_triplets(3, 3, Vec::new()).unwrap();
+}
+
+#[test]
+fn integer_scalar_multiplication() {
+    let a = CsrMatrix::from_dense(&[[1i32, 2], [0, 3]]).unwrap();
+    assert_eq!((&a * 4).to_dense(), vec![vec![4, 8], vec![0, 12]]);
+    assert_eq!((3i32 * &a).to_dense(), vec![vec![3, 6], vec![0, 9]]);
+}

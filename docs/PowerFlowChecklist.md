@@ -212,8 +212,11 @@ Merged in PR #2.
       that solve in under 30 s, every survey column but time and memory (sizes, solver, B′ and
       factor entries, backward errors and differences from MATPOWER) matches the recorded
       survey exactly.
-- [ ] `SparseMatrix` becomes the editing type only: its compressed caches, the cache API and the
-      moved methods are removed, and the README describes both types.
+- [x] `SparseMatrix` becomes the editing type only: its compressed caches, the cache API and the
+      moved methods are removed, and the README describes both types. It keeps construction,
+      element edits and reads, `iter` (which now sorts on demand, so it works for any shape),
+      transposes, `to_dense`, Matrix Market I/O, `serde`, and `to_csr`/`to_csc`. `from_csr` is
+      gone in favour of `CsrMatrix::try_from_raw_parts`.
 - [ ] Zero-copy major-axis slices (a CSR row or a CSC column), `position(i, j)` by binary search,
       and cached diagonal positions.
 - [ ] An assembly map built once from a triplet list's positions that records each triplet's

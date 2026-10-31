@@ -55,51 +55,6 @@ fn sparsemat_transpose_creation() {
 }
 
 #[test]
-fn sparsemat_rowiter() {
-    let mut local = SparseMatrix::empty_with_shape(4, 6);
-    local
-        .insert_triplets(vec![
-            (0, 0, 10.0),
-            (0, 1, 20.0),
-            (1, 1, 30.0),
-            (2, 2, 50.0),
-            (1, 3, 40.0),
-            (2, 3, 60.0),
-            (2, 4, 70.0),
-            (3, 5, 80.0),
-        ])
-        .unwrap();
-
-    local.explicitly_compress();
-
-    for row in local.row_iter() {
-        dbg!(row);
-    }
-}
-
-#[test]
-fn sparsemat_rowiter_uncompressed() {
-    let mut local = SparseMatrix::empty_with_shape(2, 3);
-    local
-        .insert_triplets(vec![(0, 2, 1.0), (1, 0, 2.0)])
-        .unwrap();
-
-    let rows: Vec<Vec<f64>> = local.row_iter().collect();
-    assert!(rows == vec![vec![0.0, 0.0, 1.0], vec![2.0, 0.0, 0.0]]);
-}
-
-#[test]
-fn sparsemat_rowiter_stale_after_compress() {
-    let mut local = SparseMatrix::empty_with_shape(2, 2);
-    local.insert(0, 0, 1.0).unwrap();
-    local.explicitly_compress();
-    local.insert(1, 1, 4.0).unwrap();
-
-    let rows: Vec<Vec<f64>> = local.row_iter().collect();
-    assert!(rows == vec![vec![1.0, 0.0], vec![0.0, 4.0]]);
-}
-
-#[test]
 fn sparsemat_insert() {
     let mut local = SparseMatrix::empty_with_shape(3, 3);
     local.insert(0, 0, 1.0).unwrap();
@@ -222,43 +177,6 @@ fn sparsemat_transposeinplace() {
 }
 
 #[test]
-fn sparsemat_compressedrepr() {
-    let mut local = SparseMatrix::empty_with_shape(4, 4);
-    local
-        .insert_triplets(vec![(0, 0, 5.0), (1, 1, 8.0), (3, 1, 6.0), (2, 2, 3.0)])
-        .unwrap();
-    assert!(local.compressed().is_none());
-    local.explicitly_compress();
-    assert!(local.compressed().unwrap().data == vec![5.0, 8.0, 3.0, 6.0]);
-    assert!(local.compressed().unwrap().cols == vec![0, 1, 2, 1]);
-    assert!(local.compressed().unwrap().rows == vec![0, 1, 2, 3, 4]);
-
-    let mut local2 = SparseMatrix::empty_with_shape(4, 6);
-    local2
-        .insert_triplets(vec![
-            (0, 0, 10.0),
-            (0, 1, 20.0),
-            (1, 1, 30.0),
-            (2, 2, 50.0),
-            (1, 3, 40.0),
-            (2, 3, 60.0),
-            (2, 4, 70.0),
-            (3, 5, 80.0),
-        ])
-        .unwrap();
-    local2.explicitly_compress();
-    assert!(
-        local2.compressed().unwrap().data == vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
-    );
-    assert!(local2.compressed().unwrap().cols == vec![0, 1, 1, 3, 2, 3, 4, 5]);
-    assert!(local2.compressed().unwrap().rows == vec![0, 2, 4, 7, 8]);
-
-    // Unwrap as OOB not a part of this test
-    local2.insert(0, 2, 1.0).unwrap();
-    assert!(local2.compressed().is_none());
-}
-
-#[test]
 fn sparsemat_display() {
     let mut local = SparseMatrix::empty_with_shape(4, 6);
     local
@@ -273,21 +191,18 @@ fn sparsemat_display() {
             (3, 5, 80.0),
         ])
         .unwrap();
-    local.explicitly_compress();
     println!("{}", local)
 }
 
 #[test]
-fn sparsemat_display_uncompressed() {
+fn sparsemat_display_matches_compressed() {
     let mut local = SparseMatrix::empty_with_shape(2, 2);
     local
         .insert_triplets(vec![(0, 0, 1.0), (1, 1, 2.0)])
         .unwrap();
-    let before = format!("{}", local);
-
-    local.explicitly_compress();
-    assert!(before == format!("{}", local));
-    assert!(before.contains("1.00"));
+    let shown = format!("{}", local);
+    assert!(shown == format!("{}", local.to_csr()));
+    assert!(shown.contains("1.00"));
 }
 
 #[test]
@@ -325,31 +240,13 @@ fn sparsemat_insert_triplets_zeros() {
 }
 
 #[test]
-fn sparsemat_insert_zero_invalidates_compressed() {
-    let mut local = SparseMatrix::empty_with_shape(2, 2);
-    local
-        .insert_triplets(vec![(0, 1, 4.0), (1, 1, 3.0)])
-        .unwrap();
-    local.explicitly_compress();
-    // Unwrap as OOB not a part of this test
-    local.insert(0, 1, 0.0).unwrap();
-    assert!(local.compressed().is_none());
-
-    let rows: Vec<Vec<f64>> = local.row_iter().collect();
-    assert!(rows == vec![vec![0.0, 0.0], vec![0.0, 3.0]]);
-}
-
-#[test]
 fn sparsemat_prune_zeroes_noop() {
     let mut local = SparseMatrix::empty_with_shape(2, 2);
     local
         .insert_triplets(vec![(0, 0, 1.0), (1, 1, 2.0)])
         .unwrap();
-    local.explicitly_compress();
-
     local.prune_zeroes();
     assert!(local.num_nonzero() == 2);
-    assert!(local.compressed().is_some());
 }
 
 #[test]
@@ -360,7 +257,6 @@ fn sparsemat_from_triplets_basic() {
     assert!(local.peek_at(2, 3) == Ok(Some(7.0)));
     assert!(local.peek_at(1, 1) == Ok(None));
     assert!(local.num_nonzero() == 2);
-    assert!(local.compressed().is_none());
 }
 
 #[test]
@@ -416,8 +312,7 @@ fn sparsemat_from_triplets_huge_shape() {
 fn sparsemat_from_triplets_row_iter() {
     let local =
         SparseMatrix::from_triplets(2, 3, vec![(0, 2, 1.0), (1, 0, 2.0), (0, 2, 1.0)]).unwrap();
-    let rows: Vec<Vec<f64>> = local.row_iter().collect();
-    assert!(rows == vec![vec![0.0, 0.0, 2.0], vec![2.0, 0.0, 0.0]]);
+    assert!(local.to_dense() == vec![vec![0.0, 0.0, 2.0], vec![2.0, 0.0, 0.0]]);
 }
 
 #[test]
@@ -428,7 +323,6 @@ fn sparsemat_from_dense_basic() {
     assert!(local.peek_at(0, 2) == Ok(Some(2.0)));
     assert!(local.peek_at(1, 1) == Ok(Some(3.0)));
     assert!(local.num_nonzero() == 3);
-    assert!(local.compressed().is_none());
 }
 
 #[test]
@@ -470,7 +364,7 @@ fn sparsemat_from_dense_round_trip() {
         .insert_triplets(vec![(0, 0, 1.0), (1, 3, -2.0), (2, 1, 4.5)])
         .unwrap();
 
-    let rebuilt = SparseMatrix::from_dense(original.row_iter()).unwrap();
+    let rebuilt = SparseMatrix::from_dense(original.to_dense()).unwrap();
     assert!(rebuilt.shape == original.shape);
     assert!(rebuilt.num_nonzero() == original.num_nonzero());
     for (r, c, v) in [(0, 0, 1.0), (1, 3, -2.0), (2, 1, 4.5)] {
@@ -502,14 +396,6 @@ fn sparsemat_to_dense_basic() {
 }
 
 #[test]
-fn sparsemat_to_dense_matches_row_iter() {
-    let local =
-        SparseMatrix::from_triplets(3, 4, vec![(0, 0, 1.0), (2, 3, 4.0), (1, 1, -2.0)]).unwrap();
-    let rows: Vec<Vec<f64>> = local.row_iter().collect();
-    assert!(local.to_dense() == rows);
-}
-
-#[test]
 fn sparsemat_to_dense_empty_shapes() {
     assert!(SparseMatrix::<f64>::new().to_dense().is_empty());
     assert!(SparseMatrix::<f64>::empty_with_shape(2, 0).to_dense() == vec![Vec::<f64>::new(); 2]);
@@ -532,62 +418,6 @@ fn sparsemat_to_dense_round_trip() {
     let rebuilt = SparseMatrix::from_dense(local.to_dense()).unwrap();
     assert!(rebuilt.shape == local.shape);
     assert!(rebuilt.num_nonzero() == local.num_nonzero());
-}
-
-#[test]
-fn sparsemat_compressed_csc() {
-    let mut local = SparseMatrix::from_triplets(
-        4,
-        6,
-        vec![
-            (0, 0, 10.0),
-            (0, 1, 20.0),
-            (1, 1, 30.0),
-            (2, 2, 50.0),
-            (1, 3, 40.0),
-            (2, 3, 60.0),
-            (2, 4, 70.0),
-            (3, 5, 80.0),
-        ],
-    )
-    .unwrap();
-    assert!(local.compressed_csc().is_none());
-    local.explicitly_compress_csc();
-
-    let csc = local.compressed_csc().unwrap();
-    assert!(csc.cols == vec![0, 1, 3, 4, 6, 7, 8]);
-    assert!(csc.rows == vec![0, 0, 1, 2, 1, 2, 2, 3]);
-    assert!(csc.data == vec![10.0, 20.0, 30.0, 50.0, 40.0, 60.0, 70.0, 80.0]);
-    // CSR was not built as a side effect
-    assert!(local.compressed().is_none());
-
-    local.insert(3, 0, 1.0).unwrap();
-    assert!(local.compressed_csc().is_none());
-}
-
-#[test]
-fn sparsemat_csc_matches_transpose_csr() {
-    let mut local = SparseMatrix::from_triplets(
-        3,
-        5,
-        vec![
-            (0, 4, 1.0),
-            (2, 0, 2.0),
-            (1, 1, 3.0),
-            (2, 4, 4.0),
-            (0, 0, 5.0),
-        ],
-    )
-    .unwrap();
-    local.explicitly_compress_csc();
-    let mut transposed = local.create_transpose();
-    transposed.explicitly_compress();
-
-    let csc = local.compressed_csc().unwrap();
-    let csr = transposed.compressed().unwrap();
-    assert!(csc.cols == csr.rows);
-    assert!(csc.rows == csr.cols);
-    assert!(csc.data == csr.data);
 }
 
 #[test]
@@ -633,16 +463,6 @@ fn sparsemat_iter_len_and_empty() {
 }
 
 #[test]
-fn sparsemat_iter_compressed_or_not() {
-    let mut local = SparseMatrix::from_triplets(3, 3, vec![(1, 2, 4.0), (0, 1, 3.0)]).unwrap();
-    let before: Vec<_> = local.iter().collect();
-    local.explicitly_compress();
-    let after: Vec<_> = local.iter().collect();
-    assert!(before == after);
-    assert!(before == vec![(0, 1, 3.0), (1, 2, 4.0)]);
-}
-
-#[test]
 fn sparsemat_iter_sparse_cost_on_huge_shape() {
     let mut local = SparseMatrix::<f64>::empty_with_shape(1 << 20, 1 << 20);
     local.insert(5, 7, 1.0).unwrap();
@@ -667,18 +487,6 @@ fn sample_4x6() -> SparseMatrix {
         ],
     )
     .unwrap()
-}
-
-#[test]
-fn sparsemat_col_iter() {
-    let local = sample_4x6();
-    let cols: Vec<Vec<f64>> = local.col_iter().collect();
-    assert!(cols.len() == 6);
-    assert!(cols[1] == vec![20.0, 30.0, 0.0, 0.0]);
-    assert!(cols[5] == vec![0.0, 0.0, 0.0, 80.0]);
-    // Columns of a matrix are the rows of its transpose
-    let transposed_rows: Vec<Vec<f64>> = local.create_transpose().row_iter().collect();
-    assert!(cols == transposed_rows);
 }
 
 #[test]
@@ -724,11 +532,10 @@ fn sparsemat_debug_format() {
 #[test]
 fn sparsemat_partial_eq() {
     let local = SparseMatrix::from_triplets(2, 2, vec![(0, 0, 1.0), (1, 1, 2.0)]).unwrap();
-    // Same entries inserted in a different order, with a different cache state
+    // Same entries inserted in a different order
     let mut local2 = SparseMatrix::empty_with_shape(2, 2);
     local2.insert(1, 1, 2.0).unwrap();
     local2.insert(0, 0, 1.0).unwrap();
-    local2.explicitly_compress();
     assert!(local == local2);
 
     local2.insert(0, 1, 5.0).unwrap();
@@ -797,105 +604,18 @@ fn sparsemat_into_dense_vecs() {
 }
 
 #[test]
-fn sparsemat_from_csr_basic() {
-    // [[10, 20, 0], [0, 0, 0], [0, 30, 40]]
-    let local = SparseMatrix::from_csr(
-        3,
-        3,
-        vec![0, 2, 2, 4],
-        vec![0, 1, 1, 2],
-        vec![10.0, 20.0, 30.0, 40.0],
-    )
-    .unwrap();
-    assert!(local.shape == (3, 3));
-    assert!(local.num_nonzero() == 4);
-    assert!(local[(2, 1)] == 30.0);
-    assert!(local.to_dense() == vec![vec![10.0, 20.0, 0.0], vec![0.0; 3], vec![0.0, 30.0, 40.0]]);
-    // The arrays were adopted as the CSR cache
-    assert!(local.compressed().unwrap().rows == [0, 2, 2, 4]);
-}
-
-#[test]
-fn sparsemat_from_csr_drops_zeros_and_rebuilds_cache() {
-    let local =
-        SparseMatrix::from_csr(2, 2, vec![0, 2, 3], vec![0, 1, 1], vec![1.0, 0.0, 2.0]).unwrap();
-    assert!(local.num_nonzero() == 2);
-    assert!(local.compressed().is_none());
-    assert!(local.to_dense() == vec![vec![1.0, 0.0], vec![0.0, 2.0]]);
-}
-
-#[test]
-fn sparsemat_from_csr_round_trip() {
-    let mut original = sample_4x6();
-    original.explicitly_compress();
-    let view = original.compressed().unwrap();
-    let rebuilt = SparseMatrix::from_csr(
-        4,
-        6,
-        view.rows.to_vec(),
-        view.cols.to_vec(),
-        view.data.to_vec(),
-    )
-    .unwrap();
-    assert!(rebuilt == original);
-}
-
-#[test]
-fn sparsemat_from_csr_invalid() {
-    let reason = |result: Result<SparseMatrix, SparseError>| match result.err() {
-        Some(SparseError::InvalidCompressed { reason }) => reason,
-        other => panic!("expected InvalidCompressed, got {other:?}"),
-    };
-    assert!(
-        reason(SparseMatrix::from_csr(2, 2, vec![0, 1], vec![0], vec![1.0]))
-            == "pointers must have rows + 1 entries"
-    );
-    assert!(
-        reason(SparseMatrix::from_csr(1, 2, vec![0, 1], vec![0], vec![]))
-            == "indices and values must have the same length"
-    );
-    assert!(
-        reason(SparseMatrix::from_csr(1, 2, vec![0, 2], vec![0], vec![1.0]))
-            == "pointers must start at 0 and end at the entry count"
-    );
-    assert!(
-        reason(SparseMatrix::from_csr(
-            3,
-            2,
-            vec![0, 2, 1, 2],
-            vec![0, 1],
-            vec![1.0, 2.0]
-        )) == "pointers must be non-decreasing"
-    );
-    assert!(
-        reason(SparseMatrix::from_csr(1, 2, vec![0, 1], vec![2], vec![1.0]))
-            == "column index out of range"
-    );
-    assert!(
-        reason(SparseMatrix::from_csr(
-            1,
-            3,
-            vec![0, 2],
-            vec![1, 1],
-            vec![1.0, 2.0]
-        )) == "column indices must be strictly increasing within a row"
-    );
-}
-
-#[test]
-fn sparsemat_from_csr_empty() {
-    let local = SparseMatrix::<f64>::from_csr(0, 0, vec![0], vec![], vec![]).unwrap();
-    assert!(local.shape == (0, 0));
-    let wide = SparseMatrix::<f64>::from_csr(2, 5, vec![0, 0, 0], vec![], vec![]).unwrap();
-    assert!(wide.shape == (2, 5) && wide.num_nonzero() == 0);
-}
-
-#[test]
 fn sparsemat_from_diagonal() {
     let local = SparseMatrix::from_diagonal(vec![1.0, 0.0, 3.0]);
     assert!(local.shape == (3, 3));
     assert!(local.num_nonzero() == 2);
-    assert!(local.diagonal().to_dense() == vec![1.0, 0.0, 3.0]);
+    assert!(
+        local.to_dense()
+            == vec![
+                vec![1.0, 0.0, 0.0],
+                vec![0.0, 0.0, 0.0],
+                vec![0.0, 0.0, 3.0]
+            ]
+    );
     assert!(local[(0, 1)] == 0.0);
 
     let empty = SparseMatrix::<f64>::from_diagonal(Vec::new());
@@ -903,44 +623,6 @@ fn sparsemat_from_diagonal() {
 
     let identity = SparseMatrix::from_diagonal([1.0; 4]);
     assert!(identity == SparseMatrix::identity(4));
-}
-
-fn sample_2x2() -> SparseMatrix {
-    SparseMatrix::from([[1.0, 2.0], [0.0, 3.0]])
-}
-
-#[test]
-fn sparsemat_subtraction() {
-    let a = sample_2x2();
-    let b = SparseMatrix::from([[1.0, 0.0], [4.0, 3.0]]);
-    let difference = &a - &b;
-    assert!(difference.to_dense() == vec![vec![0.0, 2.0], vec![-4.0, 0.0]]);
-    // Cancelled entries are not stored
-    assert!(difference.num_nonzero() == 2);
-    // Operands untouched
-    assert!(a == sample_2x2());
-}
-
-#[test]
-#[should_panic(expected = "incompatible shapes")]
-fn sparsemat_sub_shape_mismatch_panics() {
-    let _ = &sample_2x2() - &SparseMatrix::<f64>::empty_with_shape(3, 3);
-}
-
-#[test]
-fn sparsemat_owned_lhs_invalidates_cache() {
-    let mut a = sample_2x2();
-    a.explicitly_compress();
-    let sum = a + SparseMatrix::from([[0.0, 0.0], [5.0, 0.0]]);
-    assert!(sum.compressed().is_none());
-    assert!(sum[(1, 0)] == 5.0);
-}
-
-#[test]
-fn sparsemat_scalar_multiplication_integers() {
-    let a = SparseMatrix::from([[1i32, 2], [0, 3]]);
-    assert!((&a * 4).to_dense() == vec![vec![4, 8], vec![0, 12]]);
-    assert!((3i32 * &a).to_dense() == vec![vec![3, 6], vec![0, 9]]);
 }
 
 /// Deterministic pseudo-random sparse matrix with small integer-valued entries, so that
@@ -1041,7 +723,7 @@ fn sparsemat_matrix_market_integer_and_pattern() {
 fn sparsemat_matrix_market_symmetric_and_skew() {
     let symmetric = "%%MatrixMarket matrix coordinate real symmetric\n3 3 3\n1 1 4\n2 1 1\n3 2 2\n";
     let local = SparseMatrix::<f64>::from_matrix_market(symmetric).unwrap();
-    assert!(local.is_symmetric());
+    assert!(local.to_csr().is_symmetric());
     assert!(local[(0, 1)] == 1.0 && local[(1, 2)] == 2.0 && local.num_nonzero() == 5);
 
     let skew = "%%MatrixMarket matrix coordinate real skew-symmetric\n2 2 1\n2 1 5\n";
@@ -1169,30 +851,27 @@ fn sparsemat_matrix_market_io_error_is_reported() {
 }
 
 #[test]
-fn sparsemat_from_csr_rows_overflow_is_an_error() {
-    // rows + 1 does not fit in a usize, so no row_ptr can have the right length
-    let result = SparseMatrix::<f64>::from_csr(usize::MAX, 1, vec![0], vec![], vec![]);
-    assert!(
-        result.err()
-            == Some(SparseError::InvalidCompressed {
-                reason: "pointers must have rows + 1 entries"
-            })
-    );
-}
-
-#[test]
 #[should_panic(expected = "compressed storage")]
 fn sparsemat_csr_for_usize_max_rows_panics_clearly() {
     // CSR needs rows + 1 pointers, which overflows
     let local = SparseMatrix::<f64>::empty_with_shape(usize::MAX, 1);
-    let _ = local.iter().count();
+    let _ = local.to_csr();
+}
+
+#[test]
+fn sparsemat_iter_needs_no_compressed_storage() {
+    // Iterating sorts the stored entries, so even a shape no compressed form can hold works
+    let mut local = SparseMatrix::<f64>::empty_with_shape(usize::MAX, usize::MAX);
+    local.insert(usize::MAX - 1, 3, 2.0).unwrap();
+    local.insert(5, 7, 1.0).unwrap();
+    assert!(local.iter().collect::<Vec<_>>() == vec![(5, 7, 1.0), (usize::MAX - 1, 3, 2.0)]);
 }
 
 #[test]
 #[should_panic(expected = "compressed storage")]
 fn sparsemat_csc_for_usize_max_cols_panics_clearly() {
     let local = SparseMatrix::<f64>::empty_with_shape(1, usize::MAX);
-    let _ = local.col(0);
+    let _ = local.to_csc();
 }
 
 #[test]
@@ -1200,7 +879,7 @@ fn sparsemat_csc_for_usize_max_cols_panics_clearly() {
 fn sparsemat_csr_too_large_to_allocate_panics_clearly() {
     // No overflow in rows + 1, but 2^61 pointers is more bytes than an allocation can hold
     let local = SparseMatrix::<f64>::empty_with_shape(1 << 61, 1);
-    let _ = local.iter().count();
+    let _ = local.to_csr();
 }
 
 #[test]

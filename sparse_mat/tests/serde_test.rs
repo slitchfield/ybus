@@ -14,15 +14,6 @@ fn serde_json_format_and_round_trip() {
 }
 
 #[test]
-fn serde_ignores_cache_state() {
-    let mut local = SparseMatrix::from_triplets(2, 2, vec![(0, 0, 1), (1, 1, 2)]).unwrap();
-    let before = serde_json::to_string(&local).unwrap();
-    local.explicitly_compress();
-    local.explicitly_compress_csc();
-    assert_eq!(serde_json::to_string(&local).unwrap(), before);
-}
-
-#[test]
 fn serde_empty_and_integer_matrices() {
     let empty = SparseMatrix::<f64>::empty_with_shape(4, 0);
     let json = serde_json::to_string(&empty).unwrap();
