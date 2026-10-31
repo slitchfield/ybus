@@ -75,20 +75,32 @@ any additional terms or conditions.
 
 ## References
 
-The algorithms in this repository were written from the standard published descriptions below. No
-source code from other libraries was copied or ported.
+The sparse matrix algorithms in `sparse_mat` were written from the standard published
+descriptions below; no source code from other libraries was copied or ported.
+
+`powerflow` reproduces MATPOWER's behaviour, so that its results can be checked against
+MATPOWER's to within 1e-9. Its DC power flow (`powerflow::dc`) was written from MATPOWER's
+documentation and with reference to its BSD-licensed source code (`ext2int`, `bustypes`,
+`makeBdc`, `dcpf` and `runpf`), to match its handling of every case, including isolated
+buses, out-of-service elements and phase shifters. It is a reimplementation in Rust, not a
+translation, and the module documentation names the MATPOWER functions each step follows.
 
 ### Implemented
 
-| Where (in `sparse_mat` unless noted) | Algorithm | Reference |
+| Where (in `sparse_mat` unless a crate is named) | Algorithm | Reference |
 |---|---|---|
 | `solve_lower_triangular`, `solve_upper_triangular`, `lu`, `Lu::determinant` | Forward and back substitution; Gaussian elimination with partial pivoting | G. H. Golub and C. F. Van Loan, *Matrix Computations*, 4th ed., Johns Hopkins University Press, 2013, ch. 3. |
 | `cholesky` | Up-looking (row-by-row) sparse Cholesky. This crate's version does no elimination-tree symbolic analysis. | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 4. |
 | `conjugate_gradient` | Conjugate gradient | M. R. Hestenes and E. Stiefel, "Methods of conjugate gradients for solving linear systems," *J. Res. Natl. Bur. Stand.* 49(6):409–436, 1952. [doi:10.6028/jres.049.044](https://doi.org/10.6028/jres.049.044) |
 | | | Y. Saad, *Iterative Methods for Sparse Linear Systems*, 2nd ed., SIAM, 2003. |
 | | | J. R. Shewchuk, "An Introduction to the Conjugate Gradient Method Without the Agonizing Pain," Tech. Rep. CMU-CS-94-125, Carnegie Mellon University, 1994. |
-| `matmul`, `par_matmul`, CSR/CSC construction | Row-by-row sparse matrix product; counting-sort transposition into compressed form | F. G. Gustavson, "Two fast algorithms for sparse matrices: multiplication and permuted transposition," *ACM Trans. Math. Softw.* 4(3):250–269, 1978. [doi:10.1145/355791.355796](https://doi.org/10.1145/355791.355796) |
+| `matmul`, `par_matmul`; `CompressedMatrix::from_triplets`, `to_csr`/`to_csc` and `SparseMatrix::to_csr`/`to_csc` | Row-by-row sparse matrix product; counting-sort transposition into compressed form, also used to group triplets and to reorient between CSR and CSC | F. G. Gustavson, "Two fast algorithms for sparse matrices: multiplication and permuted transposition," *ACM Trans. Math. Softw.* 4(3):250–269, 1978. [doi:10.1145/355791.355796](https://doi.org/10.1145/355791.355796) |
 | Matrix Market I/O | Coordinate exchange format | R. F. Boisvert, R. Pozo and K. A. Remington, "The Matrix Market Exchange Formats: Initial Design," NISTIR 5935, NIST, 1996. [doi:10.6028/NIST.IR.5935](https://doi.org/10.6028/NIST.IR.5935) |
+| `powerflow`'s tests and `dc_survey` example (`tests/common/accuracy.rs`) | Normwise backward error, η = ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) | J. L. Rigal and J. Gaches, "On the compatibility of a given solution with the data of a linear system," *J. ACM* 14(3):543–548, 1967. |
+| | | N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed., SIAM, 2002, ch. 7. [doi:10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027) |
+| `powerflow::case` (`Case::parse`) | The MATPOWER case format, as `caseformat.m` defines it | R. D. Zimmerman and C. E. Murillo-Sánchez, *MATPOWER User's Manual*, Version 8.1, 2025. [doi:10.5281/zenodo.15871661](https://doi.org/10.5281/zenodo.15871661) |
+| `powerflow::dc`, and the reference results its tests compare against | DC power flow as MATPOWER's `rundcpf` computes it (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
+| | | R. D. Zimmerman and C. E. Murillo-Sánchez, MATPOWER, Version 8.1 [software], 2025. <https://matpower.org>, [doi:10.5281/zenodo.15871662](https://doi.org/10.5281/zenodo.15871662) |
 
 ### Planned (see [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md))
 
@@ -102,7 +114,7 @@ source code from other libraries was copied or ported.
 | COLAMD ordering (Phase 3) | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "A column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):353–376, 2004. |
 | Low-rank updates for contingencies (Phase 5) | J. Sherman and W. J. Morrison, "Adjustment of an inverse matrix corresponding to a change in one element of a given matrix," *Ann. Math. Statist.* 21(1):124–127, 1950. [doi:10.1214/aoms/1177729893](https://doi.org/10.1214/aoms/1177729893) |
 | | M. A. Woodbury, "Inverting modified matrices," Memorandum Report 42, Statistical Research Group, Princeton University, 1950. |
-| Newton–Raphson power flow and its Jacobian; reference results (Phases 1.5 and 4.5) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
+| Newton–Raphson power flow and its Jacobian (Phase 4.5) | The MATPOWER paper and manual above |
 | Fast-decoupled power flow (Phase 4.5) | B. Stott and O. Alsaç, "Fast decoupled load flow," *IEEE Trans. Power App. Syst.* PAS-93(3):859–869, 1974. |
 
 ### Licenses of related software
