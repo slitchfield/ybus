@@ -234,8 +234,20 @@ Merged in PR #2.
       orientations). The map carries the orientation in its type, so it can't refill a matrix of
       the other orientation, and checks the shape and stored count (`PatternMismatch`) and the
       number of values (`LengthMismatch`, both new errors) before writing anything.
-- [ ] Benchmark: refilling Ybus and Jacobian-sized patterns through the assembly map versus
+- [x] Benchmark: refilling Ybus and Jacobian-sized patterns through the assembly map versus
       `from_triplets`.
+      `powerflow/benches/assembly.rs`, on case2383wp, on the maintainer's machine (medians):
+
+      | Pattern | Size, triplets | `from_triplets` | `refill` | Speedup |
+      |---|---|---|---|---|
+      | B stamps (Ybus-shaped) | 2,383², 11,584 | 69.0 µs | 5.39 µs | 12.8× |
+      | 2×2 blocks (Jacobian-shaped) | 4,766², 46,336 | 309.0 µs | 34.9 µs | 8.9× |
+
+      The block pattern expands each B stamp into the four quadrants, as the polar Jacobian's
+      blocks share Ybus's pattern. Its refill costs more per triplet: its map and values
+      (about 1.1 MB) outgrow the cache, so the scattered writes miss. Routing `from_triplets`
+      through the shared core left the DC model step unchanged (382.6 µs, against 387.7 µs
+      before).
 
 ## Phase 3: Factorization rewrite (the largest piece)
 

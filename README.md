@@ -41,9 +41,10 @@ API overview, and [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for
     [`powerflow/tests/data/matpower-reference/`](powerflow/tests/data/matpower-reference/). It
     needs Octave. Given an output directory and cases, it generates MATPOWER's results for any
     case instead, for local comparisons; never commit those.
-- **Benchmarks:** `cargo bench -p powerflow` times the DC power flow on case2383wp with
-  criterion, and `scripts/benchmark-dc.sh` surveys every MATPOWER case once, comparing the
-  results with MATPOWER's. [`docs/benchmarks/`](docs/benchmarks/) records the results.
+- **Benchmarks:** `cargo bench -p powerflow` times, with criterion, the DC power flow on
+  case2383wp and reassembling its matrices through an assembly map, and
+  `scripts/benchmark-dc.sh` surveys every MATPOWER case once, comparing the results with
+  MATPOWER's. [`docs/benchmarks/`](docs/benchmarks/) records the results.
 
 ## Documentation
 

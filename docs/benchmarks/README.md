@@ -12,6 +12,9 @@ change. Each record names the code, the machine and the method it used.
 - **One case, repeatably:** `cargo bench -p powerflow --bench dc_power_flow` runs the criterion
   benchmarks in `powerflow/benches/dc_power_flow.rs`, which time parsing, the model and the
   solve on case2383wp. Criterion compares each run with the previous one on the same machine.
+- **Reassembly:** `cargo bench -p powerflow --bench assembly` times refilling case2383wp's
+  B stamps, and a Jacobian-shaped pattern of 2×2 blocks built from them, through an assembly
+  map against building them afresh with `from_triplets` (`powerflow/benches/assembly.rs`).
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example
   on each MATPOWER case in its own process, under a time and memory limit, and compares the
   results with MATPOWER's own. Its header comment lists what it needs and its settings.
