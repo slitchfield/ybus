@@ -3,18 +3,11 @@
 
 use std::ops::Mul;
 
-use super::{Compressed, SparseMatrix};
-use crate::compressed_matrix::product::dot_kernel;
+use super::SparseMatrix;
 use crate::sparse_error::SparseError;
 use crate::Scalar;
 
 impl<T: Scalar> SparseMatrix<T> {
-    /// `A x` for a matrix in CSR form; the caller has checked that `x` has one entry per
-    /// column. Kept for the conjugate gradient solver until it moves.
-    pub(super) fn mul_vec_csr(csr: &Compressed<T>, x: &[T]) -> Vec<T> {
-        dot_kernel(&csr.ptr, &csr.idx, &csr.data, x)
-    }
-
     /// The matrix-vector product `A x`; forwards to `CsrMatrix::mul_vec`.
     pub fn mul_vec(&self, x: &[T]) -> Result<Vec<T>, SparseError> {
         self.to_csr().mul_vec(x)

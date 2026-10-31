@@ -188,7 +188,15 @@ Merged in PR #2.
             `matmul` keeps cancellations as stored zeros, so its pattern doesn't depend on the
             values. `par_mul_vec` is on CSR and `par_vec_mul` on CSC, where each splits into
             independent dot products.
-      - [ ] solvers, with factors returned as compressed matrices
+      - [x] solvers, with factors returned as compressed matrices. `lu`, `solve`, `cholesky`
+            and `solve_spd` are on `CsrMatrix`, since they work by rows, and build their factors
+            straight into CSR arrays instead of through `HashMap`s. The triangular solves and
+            conjugate gradient work in either orientation. Changed from the plan: `solve_spd`
+            back-substitutes with `Lᵀ` reoriented to CSR, an O(nnz) step, rather than the O(1)
+            transpose with a column-oriented solve, which adds terms in another order. That keeps
+            every result bit-for-bit what it was: the DC survey's factor sizes, backward errors
+            and differences from MATPOWER match the recorded ones exactly on case14, case300,
+            case2383wp and case2848rte.
       - [ ] access, selection, permutation and properties
       - [ ] arithmetic, block construction and complex parts
 - [ ] `powerflow` builds and stores its DC model's matrices as `CsrMatrix`.

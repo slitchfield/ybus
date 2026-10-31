@@ -502,3 +502,317 @@ fn csr_and_csc_products_agree_bit_for_bit() {
     assert_eq!(by_rows.indices(), by_columns.indices());
     assert_eq!(by_rows.values(), by_columns.values());
 }
+
+// Solvers
+
+fn assert_vec_close(actual: &[f64], expected: &[f64], tolerance: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (a, e) in actual.iter().zip(expected) {
+        assert!(
+            (a - e).abs() <= tolerance,
+            "{a} differs from {e}: {actual:?} vs {expected:?}"
+        );
+    }
+}
+
+/// A strictly diagonally dominant (so non-singular) pseudo-random matrix.
+fn dominant(n: usize, seed: u64) -> CsrMatrix<f64> {
+    let shift = (0..n).map(|i| (i, i, 4.0 * n as f64 + 1.0));
+    CsrMatrix::from_triplets(n, n, pseudo_random(n, n, seed, 30).iter().chain(shift)).unwrap()
+}
+
+/// A symmetric positive definite matrix `BᵀB + n I`.
+fn spd(n: usize, seed: u64) -> CsrMatrix<f64> {
+    let b = pseudo_random(n, n, seed, 25);
+    let gram = &b.clone().transpose().to_csr() * &b;
+    let shift = (0..n).map(|i| (i, i, n as f64));
+    CsrMatrix::from_triplets(n, n, gram.iter().chain(shift)).unwrap()
+}
+
+fn diagonal_of(matrix: &CsrMatrix<f64>) -> Vec<f64> {
+    matrix
+        .iter()
+        .filter(|&(row, col, _)| row == col)
+        .map(|(_, _, value)| value)
+        .collect()
+}
+
+#[test]
+fn triangular_solves_in_both_orientations() {
+    let lower =
+        CsrMatrix::from_dense(&[[2.0, 0.0, 0.0], [1.0, 4.0, 0.0], [0.0, 3.0, 5.0]]).unwrap();
+    // x = [1, 2, 3] -> b = L x
+    let b = lower.mul_vec(&[1.0, 2.0, 3.0]).unwrap();
+    let by_rows = lower.solve_lower_triangular(&b).unwrap();
+    assert_vec_close(&by_rows, &[1.0, 2.0, 3.0], 1e-12);
+    // Column-oriented forward substitution subtracts in the same order
+    assert_eq!(lower.to_csc().solve_lower_triangular(&b).unwrap(), by_rows);
+
+    let upper: CscMatrix<f64> = lower.transpose();
+    let b = upper.mul_vec(&[1.0, 2.0, 3.0]).unwrap();
+    assert_vec_close(
+        &upper.solve_upper_triangular(&b).unwrap(),
+        &[1.0, 2.0, 3.0],
+        1e-12,
+    );
+    assert_vec_close(
+        &upper.to_csr().solve_upper_triangular(&b).unwrap(),
+        &[1.0, 2.0, 3.0],
+        1e-12,
+    );
+}
+
+#[test]
+fn triangular_solves_ignore_the_other_triangle() {
+    // Garbage across the diagonal must not affect a solve, in either orientation
+    let a = CsrMatrix::from_dense(&[[2.0, 99.0], [1.0, 4.0]]).unwrap();
+    for lower in [
+        a.solve_lower_triangular(&[2.0, 9.0]).unwrap(),
+        a.to_csc().solve_lower_triangular(&[2.0, 9.0]).unwrap(),
+    ] {
+        assert_vec_close(&lower, &[1.0, 2.0], 1e-12);
+    }
+    for upper in [
+        a.solve_upper_triangular(&[200.0, 8.0]).unwrap(),
+        a.to_csc().solve_upper_triangular(&[200.0, 8.0]).unwrap(),
+    ] {
+        assert_vec_close(&upper, &[1.0, 2.0], 1e-12);
+    }
+}
+
+#[test]
+fn triangular_solve_errors() {
+    let missing_diagonal = CsrMatrix::from_dense(&[[1.0, 0.0], [1.0, 0.0]]).unwrap();
+    let singular = Some(SparseError::SingularMatrix { pivot: 1 });
+    assert_eq!(
+        missing_diagonal.solve_lower_triangular(&[1.0, 1.0]).err(),
+        singular
+    );
+    assert_eq!(
+        missing_diagonal
+            .to_csc()
+            .solve_lower_triangular(&[1.0, 1.0])
+            .err(),
+        singular
+    );
+    // A stored zero on the diagonal is as singular as a missing one
+    let stored_zero =
+        CscMatrix::try_from_raw_parts(2, 2, vec![0, 1, 2], vec![0, 1], vec![1.0, 0.0]).unwrap();
+    assert_eq!(
+        stored_zero.solve_upper_triangular(&[1.0, 1.0]).err(),
+        singular
+    );
+
+    let a = CsrMatrix::<f64>::identity(2);
+    assert_eq!(
+        a.solve_upper_triangular(&[1.0]).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (2, 2),
+            right: (1, 1)
+        })
+    );
+    let rect = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    assert_eq!(
+        rect.solve_lower_triangular(&[1.0, 1.0]).err(),
+        Some(SparseError::NotSquare { shape: (2, 3) })
+    );
+}
+
+#[test]
+fn lu_reconstructs_permuted_matrix() {
+    for (n, seed) in [(1, 1), (4, 2), (9, 3), (15, 4)] {
+        let a = dominant(n, seed);
+        let lu = a.lu().unwrap();
+        // P A = L U, with row i of P A being row perm[i] of A
+        let pa: Vec<Vec<f64>> = lu
+            .permutation()
+            .iter()
+            .map(|&r| a.to_dense()[r].clone())
+            .collect();
+        let product = (lu.l() * lu.u()).to_dense();
+        for (got, want) in product.iter().zip(&pa) {
+            assert_vec_close(got, want, 1e-9);
+        }
+    }
+}
+
+#[test]
+fn lu_solves_systems() {
+    for (n, seed) in [(3, 7), (10, 8), (25, 9)] {
+        let a = dominant(n, seed);
+        let x: Vec<f64> = (0..n).map(|i| i as f64 - 3.0).collect();
+        let b = a.mul_vec(&x).unwrap();
+        assert_vec_close(&a.solve(&b).unwrap(), &x, 1e-9);
+        assert_vec_close(&a.lu().unwrap().solve(&b).unwrap(), &x, 1e-9);
+    }
+}
+
+#[test]
+fn lu_needs_pivoting() {
+    // A zero on the diagonal forces a row swap
+    let a = CsrMatrix::from_dense(&[[0.0, 2.0], [3.0, 1.0]]).unwrap();
+    let lu = a.lu().unwrap();
+    assert_eq!(lu.permutation(), [1, 0]);
+    assert_vec_close(&lu.solve(&[4.0, 5.0]).unwrap(), &[1.0, 2.0], 1e-12);
+
+    // A matrix whose rows are all shifted so that nothing is on the diagonal
+    let n = 6;
+    let shifted =
+        CsrMatrix::from_triplets(n, n, (0..n).map(|i| (i, (i + 1) % n, (i + 2) as f64))).unwrap();
+    let x: Vec<f64> = (0..n).map(|i| 1.0 + i as f64).collect();
+    let b = shifted.mul_vec(&x).unwrap();
+    assert_vec_close(&shifted.solve(&b).unwrap(), &x, 1e-12);
+}
+
+#[test]
+fn lu_handles_stored_zeros() {
+    // A stored zero below the pivot needs no elimination, and the factors store no zeros
+    let a = CsrMatrix::from_triplets(2, 2, vec![(0, 0, 2.0), (1, 0, 0.0), (1, 1, 3.0)]).unwrap();
+    let lu = a.lu().unwrap();
+    assert_eq!(lu.l().num_stored(), 2);
+    assert_eq!(lu.u().num_stored(), 2);
+    assert_vec_close(&lu.solve(&[2.0, 3.0]).unwrap(), &[1.0, 1.0], 1e-12);
+}
+
+#[test]
+fn lu_determinant() {
+    let a = CsrMatrix::from_dense(&[[4.0f64, 3.0], [6.0, 3.0]]).unwrap();
+    assert!((a.lu().unwrap().determinant() - (-6.0)).abs() < 1e-12);
+    // Row swap flips the sign: det [[0,2],[3,1]] = -6
+    let b = CsrMatrix::from_dense(&[[0.0f64, 2.0], [3.0, 1.0]]).unwrap();
+    assert!((b.lu().unwrap().determinant() - (-6.0)).abs() < 1e-12);
+    assert_eq!(
+        CsrMatrix::<f64>::identity(5).lu().unwrap().determinant(),
+        1.0
+    );
+    assert_eq!(CsrMatrix::<f64>::default().lu().unwrap().determinant(), 1.0);
+}
+
+#[test]
+fn lu_singular_and_shape_errors() {
+    let singular = CsrMatrix::from_dense(&[[1.0, 2.0], [2.0, 4.0]]).unwrap();
+    assert_eq!(
+        singular.lu().err(),
+        Some(SparseError::SingularMatrix { pivot: 1 })
+    );
+    let empty_column = CsrMatrix::from_dense(&[[1.0, 0.0], [1.0, 0.0]]).unwrap();
+    assert_eq!(
+        empty_column.lu().err(),
+        Some(SparseError::SingularMatrix { pivot: 1 })
+    );
+
+    let rect = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    assert_eq!(
+        rect.lu().err(),
+        Some(SparseError::NotSquare { shape: (2, 3) })
+    );
+
+    let a = CsrMatrix::<f64>::identity(3);
+    assert!(a.lu().unwrap().solve(&[1.0]).is_err());
+    assert!(a.solve(&[1.0]).is_err());
+}
+
+#[test]
+fn cholesky_reconstructs() {
+    for (n, seed) in [(1, 1), (5, 2), (12, 3), (20, 4)] {
+        let a = spd(n, seed);
+        let l = a.cholesky().unwrap();
+        // Lower triangular with a positive diagonal
+        assert!(l.iter().all(|(row, col, _)| col <= row));
+        assert!(diagonal_of(&l).iter().all(|&d| d > 0.0));
+        let reconstructed = (&l * &l.clone().transpose().to_csr()).to_dense();
+        for (got, want) in reconstructed.iter().zip(a.to_dense()) {
+            assert_vec_close(got, &want, 1e-8);
+        }
+    }
+}
+
+#[test]
+fn cholesky_keeps_diagonal_matrix_sparse() {
+    let l = CsrMatrix::from_diagonal(vec![4.0, 9.0, 16.0])
+        .cholesky()
+        .unwrap();
+    assert_eq!(l.num_stored(), 3);
+    assert_eq!(diagonal_of(&l), vec![2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn cholesky_errors() {
+    let not_symmetric = CsrMatrix::from_dense(&[[2.0, 1.0], [0.0, 2.0]]).unwrap();
+    assert_eq!(
+        not_symmetric.cholesky().err(),
+        Some(SparseError::NotSymmetric)
+    );
+    // Symmetry is mathematical: a stored zero opposite a missing entry doesn't break it
+    let stored_zero =
+        CsrMatrix::from_triplets(2, 2, vec![(0, 0, 4.0), (0, 1, 0.0), (1, 1, 9.0)]).unwrap();
+    assert!(stored_zero.cholesky().is_ok());
+    let rect = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    assert_eq!(
+        rect.cholesky().err(),
+        Some(SparseError::NotSquare { shape: (2, 3) })
+    );
+    // Symmetric but indefinite: eigenvalues 3 and -1
+    let indefinite = CsrMatrix::from_dense(&[[1.0, 2.0], [2.0, 1.0]]).unwrap();
+    assert_eq!(
+        indefinite.cholesky().err(),
+        Some(SparseError::NotPositiveDefinite { pivot: 1 })
+    );
+    // Zero matrix has a non-positive first pivot
+    let zero = CsrMatrix::<f64>::from_triplets(2, 2, Vec::new()).unwrap();
+    assert_eq!(
+        zero.cholesky().err(),
+        Some(SparseError::NotPositiveDefinite { pivot: 0 })
+    );
+}
+
+#[test]
+fn solve_spd_matches_lu() {
+    let a = spd(14, 5);
+    let x: Vec<f64> = (0..14).map(|i| (i as f64).sin()).collect();
+    let b = a.mul_vec(&x).unwrap();
+    assert_vec_close(&a.solve_spd(&b).unwrap(), &x, 1e-9);
+    assert_vec_close(&a.solve(&b).unwrap(), &x, 1e-9);
+}
+
+#[test]
+fn conjugate_gradient_solves_in_both_orientations() {
+    for (n, seed) in [(5, 1), (20, 2), (40, 3)] {
+        let a = spd(n, seed);
+        let x: Vec<f64> = (0..n).map(|i| 1.0 + (i % 3) as f64).collect();
+        let b = a.mul_vec(&x).unwrap();
+        let solution = a.conjugate_gradient(&b, 1e-12, 10 * n).unwrap();
+        assert_vec_close(&solution, &x, 1e-7);
+        // CSC's products agree bit for bit, so its iterates do too
+        assert_eq!(
+            a.to_csc().conjugate_gradient(&b, 1e-12, 10 * n).unwrap(),
+            solution
+        );
+    }
+}
+
+#[test]
+fn conjugate_gradient_edge_cases() {
+    // Identity converges in one step; a zero right-hand side needs none
+    let identity = CsrMatrix::<f64>::identity(4);
+    let b = [1.0, 2.0, 3.0, 4.0];
+    assert_eq!(identity.conjugate_gradient(&b, 1e-12, 1).unwrap(), b);
+    assert_eq!(
+        identity.conjugate_gradient(&[0.0; 4], 1e-12, 0).unwrap(),
+        vec![0.0; 4]
+    );
+
+    // Too few iterations
+    let a = spd(30, 6);
+    assert_eq!(
+        a.conjugate_gradient(&[1.0; 30], 1e-14, 1).err(),
+        Some(SparseError::NoConvergence { iterations: 1 })
+    );
+    // Negative definite is detected on the first step
+    let negative = CsrMatrix::from_diagonal(vec![-1.0; 3]);
+    assert_eq!(
+        negative.conjugate_gradient(&[1.0; 3], 1e-12, 10).err(),
+        Some(SparseError::NoConvergence { iterations: 0 })
+    );
+    assert!(identity.conjugate_gradient(&[1.0], 1e-12, 10).is_err());
+}

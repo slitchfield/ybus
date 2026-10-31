@@ -30,6 +30,9 @@ mod parallel;
 pub(crate) mod product;
 #[cfg(feature = "serde")]
 mod serde_impl;
+mod solvers;
+
+pub use solvers::Lu;
 
 mod sealed {
     pub trait Sealed {}
@@ -453,6 +456,17 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
     /// The stored entries whose value isn't zero, in storage order.
     fn nonzeros(&self) -> impl Iterator<Item = (usize, usize, T)> + '_ {
         self.iter().filter(|&(_, _, value)| value != T::zero())
+    }
+
+    /// The value stored at `(row, col)`, or `None` if the position isn't in the pattern, found
+    /// by binary search within its major index. The caller has checked the bounds.
+    pub(crate) fn stored_value(&self, row: usize, col: usize) -> Option<T> {
+        let (major, minor) = if O::ROW_MAJOR { (row, col) } else { (col, row) };
+        let segment = self.ptr[major]..self.ptr[major + 1];
+        self.idx[segment.clone()]
+            .binary_search(&minor)
+            .ok()
+            .map(|offset| self.data[segment.start + offset])
     }
 }
 

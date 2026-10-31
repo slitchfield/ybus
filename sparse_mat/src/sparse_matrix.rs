@@ -22,7 +22,7 @@ mod serde_impl;
 mod solvers;
 mod traits;
 
-pub use solvers::Lu;
+pub use crate::compressed_matrix::Lu;
 
 pub use access::{ColIterator, Entries, SparseVector};
 
