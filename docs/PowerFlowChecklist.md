@@ -207,7 +207,11 @@ Merged in PR #2.
             `hadamard` their intersection, and scaling, negation, `map`, `apply`, row and column
             scaling and complex parts keep the pattern. `adjoint`, like `transpose`, returns the
             other orientation. Stacking along the compressed axis concatenates the arrays.
-- [ ] `powerflow` builds and stores its DC model's matrices as `CsrMatrix`.
+- [x] `powerflow` builds and stores its DC model's matrices as `CsrMatrix`. Every stamped
+      position stays stored, so Bbus's pattern depends only on the topology. On the 70 cases
+      that solve in under 30 s, every survey column but time and memory (sizes, solver, B′ and
+      factor entries, backward errors and differences from MATPOWER) matches the recorded
+      survey exactly.
 - [ ] `SparseMatrix` becomes the editing type only: its compressed caches, the cache API and the
       moved methods are removed, and the README describes both types.
 - [ ] Zero-copy major-axis slices (a CSR row or a CSC column), `position(i, j)` by binary search,

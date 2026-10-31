@@ -69,7 +69,7 @@ fn parallel_branches_sum() {
     let doubled = model(&doubled).unwrap();
     let single = model(&triangle()).unwrap();
     assert_eq!(doubled.bbus().to_dense(), single.bbus().to_dense());
-    assert_eq!(doubled.bf().shape, (4, 3));
+    assert_eq!(doubled.bf().shape(), (4, 3));
     assert_eq!(doubled.bf().to_dense()[3], vec![-5.0, 5.0, 0.0]);
 }
 
