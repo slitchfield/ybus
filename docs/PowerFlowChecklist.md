@@ -293,9 +293,22 @@ Merged in PR #2.
       until AMD arrives, and `NotPositiveDefinite` names the failing row of A in its own
       numbering. The factor keeps Lᵀ in CSR form as well, for a back substitution in the same
       order as before, at twice the factor's memory.
-- [ ] The DC power flow solves with ordered Cholesky, and the survey can choose its ordering.
+- [x] The DC power flow solves with ordered Cholesky, and the survey can choose its ordering.
       Rerun the survey with RCM and make a first check of the hypothesis below on the Cholesky
       cases.
+      `DcModel::solve` orders B′ by RCM, and `solve_with_ordering` takes any ordering; the
+      survey's `--ordering` (and the script's `YBUS_BENCH_ORDERING`) chooses it, and a new
+      `ordering` column records it. Recorded in `docs/benchmarks/dc-power-flow-rcm-2026-10-31.md`:
+      - **Check:** ordered naturally, the 70 cases that solve in under 30 s match the baseline
+        in every column but time and memory, backward errors included.
+      - **Speed:** the 59 Cholesky cases solve in 19 ms together instead of 17.5 s;
+        case2383wp's solve takes 1.56 ms in the criterion benchmark instead of 292 ms. No case
+        fills more, and the 19 LU cases are unchanged.
+      - **Hypothesis, first check:** on the Cholesky cases, the median ratio of our backward
+        error to MATPOWER's falls from 1.23 to 1.00 and its rank correlation with fill from 0.39
+        to 0.07; case2383wp's falls from 10.7 ε to 0.72 ε (MATPOWER's: 0.65 ε). But
+        case8387pegase's barely moves (2.44 ε to 2.35 ε, MATPOWER's 0.94 ε) though its fill
+        falls 15.5 times, so fill explains the large excesses, not the whole gap.
 - [ ] AMD ordering, for Cholesky and (on the pattern of A+Aᵀ) for LU. Benchmark fill and time
       against RCM on the large case.
 - [ ] Keep the current `BTreeMap` LU as a test-only reference implementation, and compare the

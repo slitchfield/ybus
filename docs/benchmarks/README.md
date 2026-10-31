@@ -6,6 +6,7 @@ change. Each record names the code, the machine and the method it used.
 | Record | What |
 |---|---|
 | [`dc-power-flow-2026-10-31.md`](dc-power-flow-2026-10-31.md) | The DC power flow on every MATPOWER 8.1 case, before Phase 2's fixed-pattern matrices and Phase 3's ordered LU: the Phase 1.5 baseline. The survey's raw output is in the `.csv` beside it. |
+| [`dc-power-flow-rcm-2026-10-31.md`](dc-power-flow-rcm-2026-10-31.md) | The same survey with B′'s Cholesky factorization ordered by reverse Cuthill–McKee (Phase 3), with the first test of the hypothesis that fill-in drives the backward error. |
 
 ## Measuring
 
@@ -17,7 +18,7 @@ change. Each record names the code, the machine and the method it used.
   map against building them afresh with `from_triplets` (`powerflow/benches/assembly.rs`).
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example
   on each MATPOWER case in its own process, under a time and memory limit, and compares the
-  results with MATPOWER's own. Its header comment lists what it needs and its settings.
+  results with MATPOWER's own. `YBUS_BENCH_ORDERING` chooses the Cholesky ordering. Its header comment lists what it needs and its settings.
 
 Timings depend on the machine, so compare runs made on the same one, and record the machine
 with any new record.

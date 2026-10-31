@@ -11,17 +11,16 @@
 mod common;
 
 use std::hint::black_box;
-use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
+use criterion::{criterion_group, criterion_main, Criterion};
 use powerflow::case::Case;
 use powerflow::dc::DcModel;
 
 /// MATPOWER's case2383wp, the Polish grid at its 1999–2000 winter peak: 2,383 buses, 2,896
 /// branches (6 of them phase shifters) and 327 generators. It's a common benchmark, it parses
 /// straight from MATPOWER's files, and its numbering suits an unordered factorization badly:
-/// the Cholesky factor of B′ has 40 times the entries of B′'s lower triangle, against 13 times
-/// for the similarly sized case_ACTIVSg2000, so Phase 3's orderings will show.
+/// unordered, the Cholesky factor of B′ had 40 times the entries of B′'s lower triangle, and
+/// the solve took about 300 ms. Ordered by RCM, it has 5 times, and the solve takes 1.6 ms.
 const CASE: &str = "case2383wp";
 
 fn dc_power_flow(c: &mut Criterion) {
@@ -38,13 +37,6 @@ fn dc_power_flow(c: &mut Criterion) {
     group.bench_function("model", |b| {
         b.iter(|| DcModel::new(black_box(&case)).unwrap())
     });
-    // A solve takes about a third of a second without an ordering, so it's sampled flat (the
-    //   same number of iterations in every sample), as criterion recommends for long
-    //   benchmarks, with fewer samples and the time 20 of them need
-    group
-        .sampling_mode(SamplingMode::Flat)
-        .sample_size(20)
-        .measurement_time(Duration::from_secs(10));
     group.bench_function("solve", |b| {
         b.iter(|| model.solve(black_box(&case)).unwrap())
     });

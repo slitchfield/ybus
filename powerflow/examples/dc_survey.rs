@@ -2,13 +2,15 @@
 //! `scripts/benchmark-dc.sh` runs. The script runs this once per case, each in its own process,
 //! so that it can limit time and memory and record peak memory.
 //!
-//! Usage: `dc_survey <case.m> [<reference-dir>]`, or `dc_survey --header`.
+//! Usage: `dc_survey [--ordering natural|rcm] <case.m> [<reference-dir>]`, or
+//! `dc_survey --header`. The ordering is the Cholesky factorization's (default `rcm`, as
+//! `DcModel::solve` uses); the LU fallback isn't ordered yet.
 //!
 //! Prints one CSV line, with the columns in `HEADER`. Each step (parse, model, solve) is timed
 //! by its median over repeated runs, for up to `BUDGET` or `MAX_RUNS` runs, so small cases get
-//! stable figures and large ones run once. After timing, it factors B′ once more, as the solve
-//! did, to count the factor's entries, which unlike the times don't depend on the machine, and
-//! it measures the solve's backward error. Given a directory of MATPOWER's results from
+//! stable figures and large ones run once. After timing, it counts the factor's entries, which
+//! unlike the times don't depend on the machine (from the symbolic analysis for Cholesky, by
+//! factoring again for LU), and it measures the solve's backward error. Given a directory of MATPOWER's results from
 //! `scripts/generate-reference.sh`, it also prints the backward error of MATPOWER's angles and
 //! the largest differences from MATPOWER's results; those columns are empty when the directory
 //! has no results for the case.
@@ -26,8 +28,9 @@ use std::time::{Duration, Instant};
 
 use powerflow::case::Case;
 use powerflow::dc::{DcModel, DcSolver};
+use sparse_mat::compressed_matrix::Ordering;
 
-/// `negative_branches` counts the in-service branches with a negative series susceptance,
+/// `ordering` is the Cholesky factorization's. `negative_branches` counts the in-service branches with a negative series susceptance,
 /// which can make B′ indefinite. `bprime_dimension` and `bprime_entries` give B′'s size and
 /// stored entries, and `factor_entries` counts those of the factor the solve used: L for
 /// Cholesky, or L and U for LU, counting their diagonal once. `backward_error` is the
@@ -35,7 +38,7 @@ use powerflow::dc::{DcModel, DcSolver};
 /// `matpower_backward_error` that of MATPOWER's angles for the same system: a control, since
 /// MATPOWER's solve reorders B′ to limit fill-in.
 const HEADER: &str = "case,buses,branches,generators,connected_buses,in_service_branches,\
-                      negative_branches,parse_ms,model_ms,solve_ms,solve_runs,solver,\
+                      negative_branches,parse_ms,model_ms,solve_ms,solve_runs,solver,ordering,\
                       bprime_dimension,bprime_entries,factor_entries,\
                       backward_error,matpower_backward_error,\
                       va_deviation_deg,pf_deviation_mw,pg_deviation_mw";
@@ -46,20 +49,26 @@ const BUDGET: Duration = Duration::from_secs(1);
 const MAX_RUNS: usize = 101;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let mut args: Vec<String> = env::args().skip(1).collect();
+    if args.as_slice() == ["--header"] {
+        println!("{HEADER}");
+        return ExitCode::SUCCESS;
+    }
+    let mut ordering = Ordering::Rcm;
+    if args.first().is_some_and(|flag| flag == "--ordering") {
+        ordering = match args.get(1).map(String::as_str) {
+            Some("natural") => Ordering::Natural,
+            Some("rcm") => Ordering::Rcm,
+            _ => return usage(),
+        };
+        args.drain(..2);
+    }
     let (case, references) = match args.as_slice() {
-        [flag] if flag == "--header" => {
-            println!("{HEADER}");
-            return ExitCode::SUCCESS;
-        }
         [case] => (case, None),
         [case, references] => (case, Some(Path::new(references))),
-        _ => {
-            eprintln!("usage: dc_survey <case.m> [<reference-dir>] | --header");
-            return ExitCode::from(2);
-        }
+        _ => return usage(),
     };
-    match survey(Path::new(case), references) {
+    match survey(Path::new(case), references, ordering) {
         Ok(line) => {
             println!("{line}");
             ExitCode::SUCCESS
@@ -71,8 +80,13 @@ fn main() -> ExitCode {
     }
 }
 
+fn usage() -> ExitCode {
+    eprintln!("usage: dc_survey [--ordering natural|rcm] <case.m> [<reference-dir>] | --header");
+    ExitCode::from(2)
+}
+
 /// The CSV line for the case at `path`.
-fn survey(path: &Path, references: Option<&Path>) -> Result<String, String> {
+fn survey(path: &Path, references: Option<&Path>, ordering: Ordering) -> Result<String, String> {
     let name = path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -81,14 +95,15 @@ fn survey(path: &Path, references: Option<&Path>) -> Result<String, String> {
     let case = case.map_err(|err| err.to_string())?;
     let (model_time, _, model) = time(|| DcModel::new(&case));
     let model = model.map_err(|err| err.to_string())?;
-    let (solve, solve_runs, solution) = time(|| model.solve(&case));
+    let (solve, solve_runs, solution) = time(|| model.solve_with_ordering(&case, ordering));
     let solution = solution.map_err(|err| err.to_string())?;
     let negative_branches = model
         .branch_rows()
         .iter()
         .filter(|&&row| case.branch[row].x * case.branch[row].effective_tap() < 0.0)
         .count();
-    let (bprime_dimension, bprime_entries, factor_entries) = entries(&model, solution.solver)?;
+    let (bprime_dimension, bprime_entries, factor_entries) =
+        entries(&model, solution.solver, ordering)?;
     let backward_error = accuracy::backward_error(&case, &model, &solution.va_deg);
 
     let comparison = match references {
@@ -107,7 +122,7 @@ fn survey(path: &Path, references: Option<&Path>) -> Result<String, String> {
         _ => ",,,".to_string(),
     };
     Ok(format!(
-        "{name},{},{},{},{},{},{negative_branches},{:.3},{:.3},{:.3},{solve_runs},{:?},\
+        "{name},{},{},{},{},{},{negative_branches},{:.3},{:.3},{:.3},{solve_runs},{:?},{},\
          {bprime_dimension},{bprime_entries},{factor_entries},{backward_error:e},{comparison}",
         case.bus.len(),
         case.branch.len(),
@@ -118,12 +133,19 @@ fn survey(path: &Path, references: Option<&Path>) -> Result<String, String> {
         milliseconds(model_time),
         milliseconds(solve),
         solution.solver,
+        ordering_name(ordering),
     ))
 }
 
 /// B′'s dimension and stored entries, and the stored entries of the factor `solver` made of it.
 /// B′ is built as [`DcModel::solve`] builds it: Bbus over the PV and PQ buses, in that order.
-fn entries(model: &DcModel, solver: DcSolver) -> Result<(usize, usize, usize), String> {
+/// A Cholesky factor, ordered by `ordering`, stores its whole symbolic pattern, which its
+/// analysis predicts exactly.
+fn entries(
+    model: &DcModel,
+    solver: DcSolver,
+    ordering: Ordering,
+) -> Result<(usize, usize, usize), String> {
     let unknown: Vec<usize> = model
         .pv_buses()
         .iter()
@@ -136,10 +158,9 @@ fn entries(model: &DcModel, solver: DcSolver) -> Result<(usize, usize, usize), S
         .map_err(|err| err.to_string())?;
     let factor = match solver {
         DcSolver::Cholesky => bprime
-            .cholesky()
+            .analyze_cholesky(ordering)
             .map_err(|err| err.to_string())?
-            .l()
-            .num_stored(),
+            .predicted_entries(),
         DcSolver::Lu => {
             let lu = bprime.lu().map_err(|err| err.to_string())?;
             lu.l().num_stored() + lu.u().num_stored() - unknown.len()
@@ -147,6 +168,14 @@ fn entries(model: &DcModel, solver: DcSolver) -> Result<(usize, usize, usize), S
         DcSolver::NoSolve => 0,
     };
     Ok((unknown.len(), bprime.num_stored(), factor))
+}
+
+fn ordering_name(ordering: Ordering) -> &'static str {
+    match ordering {
+        Ordering::Natural => "natural",
+        Ordering::Rcm => "rcm",
+        _ => "other",
+    }
 }
 
 /// Runs `step` until `BUDGET` has passed or it has run `MAX_RUNS` times, and returns its median
