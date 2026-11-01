@@ -400,15 +400,23 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
 
 ## Phase 4: Complex-capable solvers (migrating what Phase 3 didn't rewrite)
 
-- [ ] Change the bounds of the triangular solves, `solve` and the norms from `Float` to
-      `Scalar + ComplexFloat`. Pivot choice compares `abs()` (a real value), and norms return
-      `Real`.
+- [x] **Decide:** what Cholesky reports for a matrix that isn't Hermitian.
+      Decided (2026-11-01): keep `SparseError::NotSymmetric`, documented as "not symmetric, or
+      for complex element types, not Hermitian (A ≠ Aᴴ)", so nothing breaks for real callers
+      such as the DC solve's LU fallback. Every real result stays bit for bit what it was: for
+      `f64`, `conj` is the identity and re² + im² is x·x + 0, so each change keeps the same
+      operations in the same order.
+- [ ] Change the bounds of the triangular solves, conjugate gradient and the norms from `Float`
+      to `Scalar + ComplexFloat`, with norms returning `Real`. (`solve`, the general one, is the
+      LU's, which Phase 3 already made generic.)
 - [ ] Hermitian Cholesky (`A = L Lᴴ`): replace the symmetry check with a Hermitian check, and
       take real square roots of the diagonal (review note 3).
 - [ ] Hermitian conjugate gradient: use conjugated inner products.
 - [ ] Run every solver test for both `f64` and `Complex<f64>`.
-- [ ] Note in the docs that user-defined `Float` types lose solver support, since `ComplexFloat`
-      is sealed.
+- [ ] Note in the docs which float types keep solver support. Corrected while planning:
+      `ComplexFloat` is sealed, but its seal is implemented for every `Float + FloatConst` type
+      (`num-complex` 0.4.6, `complex_float.rs`), so a user-defined float type keeps solver support
+      if it also implements `FloatConst`; only a type implementing `Float` alone loses it.
 
 ## Phase 4.5: AC power flow (power flow crate)
 
