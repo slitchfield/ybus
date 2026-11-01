@@ -3,7 +3,7 @@
 
 mod common;
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, Refactor};
+use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, RefactorOutcome};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
 
@@ -970,7 +970,7 @@ fn refactor_reuses_the_pivots_for_new_values() {
         let permutations = (lu.permutation().to_vec(), lu.column_permutation().to_vec());
         for round in 0..3 {
             let b = new_values(&a, 10 + round);
-            assert_eq!(lu.refactor(&b), Ok(Refactor::Reused), "n = {n}");
+            assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused), "n = {n}");
             // Same pivots and patterns, new values that factor b
             assert_eq!(lu.l().indices(), l_pattern);
             assert_eq!(lu.u().indices(), u_pattern);
@@ -1001,19 +1001,19 @@ fn refactor_repivots_when_a_pivot_becomes_too_small() {
     let mut b = a.clone();
     let p = b.position(0, 0).unwrap().unwrap();
     b.values_mut()[p] = 0.01;
-    assert_eq!(lu.refactor(&b), Ok(Refactor::Repivoted));
+    assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Repivoted));
     assert_eq!(lu.permutation()[0], 1, "row 1 pivots first now");
     assert_lu_reconstructs(&b, &lu);
     // Zeroing (0, 0) no longer touches a pivot, since row 1 pivots column 0 now
     b.values_mut()[p] = 0.0;
-    assert_eq!(lu.refactor(&b), Ok(Refactor::Reused));
+    assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused));
     // From the original pivots, an exactly zero pivot can't be reused
     let mut fresh = a
         .analyze_lu(Ordering::Natural)
         .unwrap()
         .factor(&a, LuOptions::default())
         .unwrap();
-    assert_eq!(fresh.refactor(&b), Ok(Refactor::Repivoted));
+    assert_eq!(fresh.refactor(&b), Ok(RefactorOutcome::Repivoted));
     assert_lu_reconstructs(&b, &fresh);
     assert_close(
         &lu.solve(&[1.0, 2.0, 3.0]).unwrap(),
@@ -1022,7 +1022,7 @@ fn refactor_repivots_when_a_pivot_becomes_too_small() {
     );
     // Back to the original values, the pivots chosen for b fail in column 1 (1 against
     //   0.1 x 15), so it repivots, back to the diagonal
-    assert_eq!(lu.refactor(&a), Ok(Refactor::Repivoted));
+    assert_eq!(lu.refactor(&a), Ok(RefactorOutcome::Repivoted));
     assert_eq!(lu.permutation(), [0, 1, 2]);
     assert_lu_reconstructs(&a, &lu);
 }
@@ -1037,7 +1037,7 @@ fn refactor_handles_complex_values() {
     let a = grid.map(|v| Complex::new(v, -2.0 * v));
     let b = grid.map(|v| Complex::new(0.7 * v, -1.1 * v));
     let mut lu = a.lu().unwrap();
-    assert_eq!(lu.refactor(&b), Ok(Refactor::Reused));
+    assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused));
     let x: Vec<Complex<f64>> = (0..25).map(|i| Complex::new(i as f64, 1.0)).collect();
     let solved = lu.solve(&b.mul_vec(&x).unwrap()).unwrap();
     assert!(solved.iter().zip(&x).all(|(s, x)| (s - x).norm() < 1e-10));

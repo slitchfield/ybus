@@ -44,9 +44,10 @@ pub struct SymbolicLu {
     a_idx: Vec<usize>,
 }
 
-/// What [`Lu::refactor`] did.
+/// The outcome of a successful [`Lu::refactor`] call: whether the previous pivots were reused or
+/// the matrix had to be factored afresh.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Refactor {
+pub enum RefactorOutcome {
     /// Every pivot of the previous factorization was still large enough, so its pivot
     /// sequence and patterns were reused.
     Reused,
@@ -405,11 +406,12 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
     ///
     /// Each reused pivot is checked against the threshold this factorization used. If one is
     /// too small (or zero), the matrix is factored afresh with new pivots under the same column
-    /// ordering, and `Refactor::Repivoted` says so; otherwise the result is `Refactor::Reused`.
+    /// ordering, and the outcome is `RefactorOutcome::Repivoted`; otherwise it is
+    /// `RefactorOutcome::Reused`.
     /// Returns `SparseError::PatternMismatch` if `matrix`'s shape or pattern differs, or
     /// `SparseError::SingularMatrix` if the fresh factorization finds no pivot; on an error,
     /// `self` is unchanged.
-    pub fn refactor(&mut self, matrix: &CscMatrix<T>) -> Result<Refactor, SparseError> {
+    pub fn refactor(&mut self, matrix: &CscMatrix<T>) -> Result<RefactorOutcome, SparseError> {
         let n = self.row_perm.len();
         if matrix.shape != (n, n) || matrix.ptr != self.a_ptr || matrix.idx != self.a_idx {
             return Err(SparseError::PatternMismatch);
@@ -449,7 +451,7 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
             if pivot == T::zero() || pivot.abs() < tau * largest {
                 // Too small to reuse: factor afresh, leaving self as it was if that fails
                 *self = gilbert_peierls(matrix, &self.col_perm, self.options)?;
-                return Ok(Refactor::Repivoted);
+                return Ok(RefactorOutcome::Repivoted);
             }
             u_val[diagonal] = pivot;
             x[k] = T::zero();
@@ -462,6 +464,6 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
         }
         self.l.data = l_val;
         self.u.data = u_val;
-        Ok(Refactor::Reused)
+        Ok(RefactorOutcome::Reused)
     }
 }

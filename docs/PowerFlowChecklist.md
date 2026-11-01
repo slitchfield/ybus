@@ -355,7 +355,8 @@ Merged in PR #2.
       and U: each column is a sparse triangular solve over U's known pattern, with no search.
       Each reused pivot is checked against the factorization's threshold; if one fails (or is
       zero), it factors afresh under the same column ordering and returns
-      `Refactor::Repivoted`, otherwise `Refactor::Reused`. A different pattern is
+      `RefactorOutcome::Repivoted`, otherwise `RefactorOutcome::Reused` (named `Refactor` until
+      the PR #21 review asked for a name that reads as a call's result). A different pattern is
       `PatternMismatch`, and on any error the factorization is unchanged. Tested on new values
       (same pivots and patterns, reconstructing P A Q, solving and the determinant), on pivots
       that shrink or vanish, on complex values, and on errors.

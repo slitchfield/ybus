@@ -43,7 +43,7 @@ mod solvers;
 
 pub use assembly::AssemblyMap;
 pub use cholesky::{Cholesky, SymbolicCholesky};
-pub use lu::{Lu, LuOptions, Refactor, SymbolicLu};
+pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
 pub use ordering::Ordering;
 
 mod sealed {
