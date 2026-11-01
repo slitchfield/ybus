@@ -90,11 +90,15 @@ translation, and the module documentation names the MATPOWER functions each step
 | Where (in `sparse_mat` unless a crate is named) | Algorithm | Reference |
 |---|---|---|
 | `solve_lower_triangular`, `solve_upper_triangular`, `lu`, `Lu::determinant` | Forward and back substitution; Gaussian elimination with partial pivoting | G. H. Golub and C. F. Van Loan, *Matrix Computations*, 4th ed., Johns Hopkins University Press, 2013, ch. 3. |
-| `cholesky` | Up-looking (row-by-row) sparse Cholesky. This crate's version does no elimination-tree symbolic analysis. | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 4. |
+| `cholesky`, `analyze_cholesky` | Up-looking (row-by-row) sparse Cholesky, with symbolic analysis by the elimination tree and row subtrees | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 4. |
 | `conjugate_gradient` | Conjugate gradient | M. R. Hestenes and E. Stiefel, "Methods of conjugate gradients for solving linear systems," *J. Res. Natl. Bur. Stand.* 49(6):409–436, 1952. [doi:10.6028/jres.049.044](https://doi.org/10.6028/jres.049.044) |
 | | | Y. Saad, *Iterative Methods for Sparse Linear Systems*, 2nd ed., SIAM, 2003. |
 | | | J. R. Shewchuk, "An Introduction to the Conjugate Gradient Method Without the Agonizing Pain," Tech. Rep. CMU-CS-94-125, Carnegie Mellon University, 1994. |
 | `matmul`, `par_matmul`; `CompressedMatrix::from_triplets`, `to_csr`/`to_csc` and `SparseMatrix::to_csr`/`to_csc` | Row-by-row sparse matrix product; counting-sort transposition into compressed form, also used to group triplets and to reorient between CSR and CSC | F. G. Gustavson, "Two fast algorithms for sparse matrices: multiplication and permuted transposition," *ACM Trans. Math. Softw.* 4(3):250–269, 1978. [doi:10.1145/355791.355796](https://doi.org/10.1145/355791.355796) |
+| `Ordering::Rcm` | Reverse Cuthill–McKee, from a pseudo-peripheral node found by George and Liu's method | E. Cuthill and J. McKee, "Reducing the bandwidth of sparse symmetric matrices," *Proc. 24th ACM National Conference*, pp. 157–172, 1969. |
+| | | A. George and J. W. H. Liu, *Computer Solution of Large Sparse Positive Definite Systems*, Prentice-Hall, 1981. |
+| `Ordering::Amd` | Approximate minimum degree on the quotient graph, with aggressive absorption and supervariables | P. R. Amestoy, T. A. Davis and I. S. Duff, "An approximate minimum degree ordering algorithm," *SIAM J. Matrix Anal. Appl.* 17(4):886–905, 1996. [doi:10.1137/S0895479894278952](https://doi.org/10.1137/S0895479894278952) |
+| | | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 7. |
 | Matrix Market I/O | Coordinate exchange format | R. F. Boisvert, R. Pozo and K. A. Remington, "The Matrix Market Exchange Formats: Initial Design," NISTIR 5935, NIST, 1996. [doi:10.6028/NIST.IR.5935](https://doi.org/10.6028/NIST.IR.5935) |
 | `powerflow`'s tests and `dc_survey` example (`tests/common/accuracy.rs`) | Normwise backward error, η = ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) | J. L. Rigal and J. Gaches, "On the compatibility of a given solution with the data of a linear system," *J. ACM* 14(3):543–548, 1967. |
 | | | N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed., SIAM, 2002, ch. 7. [doi:10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027) |
@@ -108,10 +112,7 @@ translation, and the module documentation names the MATPOWER functions each step
 |---|---|
 | Left-looking sparse LU (Phase 3) | J. R. Gilbert and T. Peierls, "Sparse partial pivoting in time proportional to arithmetic operations," *SIAM J. Sci. Stat. Comput.* 9(5):862–874, 1988. [doi:10.1137/0909058](https://doi.org/10.1137/0909058) |
 | Refactoring circuit-like matrices (Phase 3) | T. A. Davis and E. Palamadai Natarajan, "Algorithm 907: KLU, a direct sparse solver for circuit simulation problems," *ACM Trans. Math. Softw.* 37(3), article 36, 2010. [doi:10.1145/1824801.1824814](https://doi.org/10.1145/1824801.1824814) |
-| Reverse Cuthill–McKee ordering (Phase 3) | E. Cuthill and J. McKee, "Reducing the bandwidth of sparse symmetric matrices," *Proc. 24th ACM National Conference*, pp. 157–172, 1969. |
-| | A. George and J. W. H. Liu, *Computer Solution of Large Sparse Positive Definite Systems*, Prentice-Hall, 1981. |
-| AMD ordering (Phase 3) | P. R. Amestoy, T. A. Davis and I. S. Duff, "An approximate minimum degree ordering algorithm," *SIAM J. Matrix Anal. Appl.* 17(4):886–905, 1996. [doi:10.1137/S0895479894278952](https://doi.org/10.1137/S0895479894278952) |
-| COLAMD ordering (Phase 3) | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "A column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):353–376, 2004. |
+| COLAMD ordering (deferred: only needed for patterns far from symmetric) | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "A column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):353–376, 2004. |
 | Low-rank updates for contingencies (Phase 5) | J. Sherman and W. J. Morrison, "Adjustment of an inverse matrix corresponding to a change in one element of a given matrix," *Ann. Math. Statist.* 21(1):124–127, 1950. [doi:10.1214/aoms/1177729893](https://doi.org/10.1214/aoms/1177729893) |
 | | M. A. Woodbury, "Inverting modified matrices," Memorandum Report 42, Statistical Research Group, Princeton University, 1950. |
 | Newton–Raphson power flow and its Jacobian (Phase 4.5) | The MATPOWER paper and manual above |

@@ -309,7 +309,7 @@ Merged in PR #2.
         to 0.07; case2383wp's falls from 10.7 ε to 0.72 ε (MATPOWER's: 0.65 ε). But
         case8387pegase's barely moves (2.44 ε to 2.35 ε, MATPOWER's 0.94 ε) though its fill
         falls 15.5 times, so fill explains the large excesses, not the whole gap.
-- [ ] AMD ordering, for Cholesky and (on the pattern of A+Aᵀ) for LU. Benchmark fill and time
+- [x] AMD ordering, for Cholesky and (on the pattern of A+Aᵀ) for LU. Benchmark fill and time
       against RCM on the large case.
       `Ordering::Amd` (`compressed_matrix/ordering.rs`), written from the paper and the book:
       quotient graph, approximate degrees, aggressive absorption, supervariables found by
@@ -317,6 +317,15 @@ Merged in PR #2.
       fill on random trees and arrowheads, dense rows last, and less fill than RCM on shuffled
       grids: 184,412 fill entries against 651,750 on a 100×100 grid, ordered in 7.2 ms
       (119 ms for 300×300).
+      `cholesky()`, `solve_spd` and `DcModel::solve` now order by AMD. Recorded in
+      `docs/benchmarks/dc-power-flow-amd-2026-11-01.md`, on the 59 Cholesky cases against RCM:
+      - **Fill:** never more than RCM's; the large cases hold 2.9–4.7 times fewer entries, and
+        the worst fill falls from 11.2× to 2.4×.
+      - **Time:** a wash for one solve (19.0 ms against 18.6 ms over the 59 cases;
+        case2383wp 1.36 ms against 1.52 ms in criterion). AMD's ordering costs about three times
+        RCM's, but its factor is about twice as fast and its solve two to four times, so it pays
+        off wherever an analysis is reused.
+      - **Backward error:** see the hypothesis item below.
 - [ ] Keep the current `BTreeMap` LU as a test-only reference implementation, and compare the
       two on pseudo-random and power flow matrices.
 - [ ] Gilbert–Peierls left-looking LU with threshold partial pivoting, generic over
@@ -333,6 +342,11 @@ Merged in PR #2.
       `matpower_backward_error` against the baseline in
       `docs/benchmarks/dc-power-flow-2026-10-31.md`. Threshold partial pivoting trades some
       stability for sparsity, so `dc_backward_error_test.rs` guards its limit meanwhile.
+      **Cholesky verdict (2026-11-01): supported.** Ordered by AMD, the 59 Cholesky cases' median
+      ratio of our backward error to MATPOWER's is 1.00, the largest backward error is 0.78 ε
+      (10.7 ε unordered), and its rank correlation with fill is −0.03 (0.45 unordered).
+      case8387pegase, which RCM left at 2.35 ε, falls to 0.71 ε, below MATPOWER's 0.94 ε. The
+      LU cases remain, for the ordered LU.
 - [ ] Deferred: COLAMD, for LU of a matrix whose pattern is far from symmetric. Nothing in power
       flow needs it yet.
 

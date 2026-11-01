@@ -20,7 +20,7 @@ use powerflow::dc::DcModel;
 /// branches (6 of them phase shifters) and 327 generators. It's a common benchmark, it parses
 /// straight from MATPOWER's files, and its numbering suits an unordered factorization badly:
 /// unordered, the Cholesky factor of B′ had 40 times the entries of B′'s lower triangle, and
-/// the solve took about 300 ms. Ordered by RCM, it has 5 times, and the solve takes 1.6 ms.
+/// the solve took about 300 ms. Ordered by AMD, it has 1.6 times, and the solve takes 1.4 ms.
 const CASE: &str = "case2383wp";
 
 fn dc_power_flow(c: &mut Criterion) {

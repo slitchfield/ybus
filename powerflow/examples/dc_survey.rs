@@ -2,8 +2,8 @@
 //! `scripts/benchmark-dc.sh` runs. The script runs this once per case, each in its own process,
 //! so that it can limit time and memory and record peak memory.
 //!
-//! Usage: `dc_survey [--ordering natural|rcm] <case.m> [<reference-dir>]`, or
-//! `dc_survey --header`. The ordering is the Cholesky factorization's (default `rcm`, as
+//! Usage: `dc_survey [--ordering natural|rcm|amd] <case.m> [<reference-dir>]`, or
+//! `dc_survey --header`. The ordering is the Cholesky factorization's (default `amd`, as
 //! `DcModel::solve` uses); the LU fallback isn't ordered yet.
 //!
 //! Prints one CSV line, with the columns in `HEADER`. Each step (parse, model, solve) is timed
@@ -54,11 +54,12 @@ fn main() -> ExitCode {
         println!("{HEADER}");
         return ExitCode::SUCCESS;
     }
-    let mut ordering = Ordering::Rcm;
+    let mut ordering = Ordering::Amd;
     if args.first().is_some_and(|flag| flag == "--ordering") {
         ordering = match args.get(1).map(String::as_str) {
             Some("natural") => Ordering::Natural,
             Some("rcm") => Ordering::Rcm,
+            Some("amd") => Ordering::Amd,
             _ => return usage(),
         };
         args.drain(..2);
@@ -81,7 +82,9 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: dc_survey [--ordering natural|rcm] <case.m> [<reference-dir>] | --header");
+    eprintln!(
+        "usage: dc_survey [--ordering natural|rcm|amd] <case.m> [<reference-dir>] | --header"
+    );
     ExitCode::from(2)
 }
 
@@ -174,6 +177,7 @@ fn ordering_name(ordering: Ordering) -> &'static str {
     match ordering {
         Ordering::Natural => "natural",
         Ordering::Rcm => "rcm",
+        Ordering::Amd => "amd",
         _ => "other",
     }
 }
