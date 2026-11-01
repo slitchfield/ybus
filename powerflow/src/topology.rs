@@ -77,25 +77,11 @@ impl Topology {
             }
         }
 
-        // bustypes
-        let mut has_gen = vec![false; nb];
-        for &bus in &gen_buses {
-            has_gen[bus] = true;
-        }
-        let (mut ref_buses, mut pv_buses, mut pq_buses) = (vec![], vec![], vec![]);
-        for (index, &row) in bus_rows.iter().enumerate() {
-            match case.bus[row].bus_type {
-                BusType::Ref if has_gen[index] => ref_buses.push(index),
-                BusType::PV if has_gen[index] => pv_buses.push(index),
-                _ => pq_buses.push(index),
-            }
-        }
-        if ref_buses.is_empty() {
-            if pv_buses.is_empty() {
-                return Err(PowerflowError::NoReferenceBus);
-            }
-            ref_buses.push(pv_buses.remove(0));
-        }
+        let Roles {
+            ref_buses,
+            pv_buses,
+            pq_buses,
+        } = bustypes(case, &bus_rows, &gen_buses)?;
 
         // Every connected bus must reach a reference bus
         let mut neighbours = vec![vec![]; nb];
@@ -135,6 +121,15 @@ impl Topology {
         })
     }
 
+    /// The bus roles the topology was built with.
+    pub(crate) fn roles(&self) -> Roles {
+        Roles {
+            ref_buses: self.ref_buses.clone(),
+            pv_buses: self.pv_buses.clone(),
+            pq_buses: self.pq_buses.clone(),
+        }
+    }
+
     /// The PV then PQ buses, the unknowns of a power flow, in MATPOWER's order.
     pub(crate) fn pv_pq(&self) -> Vec<usize> {
         self.pv_buses
@@ -157,4 +152,54 @@ impl Topology {
             })
         }
     }
+}
+
+/// Which connected buses (internal indices, in case order) are references, PV buses and PQ
+/// buses in a power flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Roles {
+    pub(crate) ref_buses: Vec<usize>,
+    pub(crate) pv_buses: Vec<usize>,
+    pub(crate) pq_buses: Vec<usize>,
+}
+
+impl Roles {
+    /// The PV then PQ buses, the unknowns of a power flow, in MATPOWER's order.
+    pub(crate) fn pv_pq(&self) -> Vec<usize> {
+        self.pv_buses
+            .iter()
+            .chain(&self.pq_buses)
+            .copied()
+            .collect()
+    }
+}
+
+/// MATPOWER's `bustypes`: a REF or PV bus counts as one only if it has an in-service generator
+/// (one of `gen_buses`), and is otherwise PQ. With no REF bus, the first PV bus becomes the
+/// reference, and with neither, it's `PowerflowError::NoReferenceBus`. Reads each connected
+/// bus's type (`bus_rows` maps internal to case rows) from `case`.
+fn bustypes(case: &Case, bus_rows: &[usize], gen_buses: &[usize]) -> Result<Roles, PowerflowError> {
+    let mut has_gen = vec![false; bus_rows.len()];
+    for &bus in gen_buses {
+        has_gen[bus] = true;
+    }
+    let (mut ref_buses, mut pv_buses, mut pq_buses) = (vec![], vec![], vec![]);
+    for (index, &row) in bus_rows.iter().enumerate() {
+        match case.bus[row].bus_type {
+            BusType::Ref if has_gen[index] => ref_buses.push(index),
+            BusType::PV if has_gen[index] => pv_buses.push(index),
+            _ => pq_buses.push(index),
+        }
+    }
+    if ref_buses.is_empty() {
+        if pv_buses.is_empty() {
+            return Err(PowerflowError::NoReferenceBus);
+        }
+        ref_buses.push(pv_buses.remove(0));
+    }
+    Ok(Roles {
+        ref_buses,
+        pv_buses,
+        pq_buses,
+    })
 }

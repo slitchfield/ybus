@@ -22,7 +22,7 @@ use sparse_mat::Complex;
 
 use crate::case::{Branch, Case};
 use crate::powerflow_error::PowerflowError;
-use crate::topology::Topology;
+use crate::topology::{Roles, Topology};
 
 /// The AC model of a case: the admittance matrices in per unit over the connected buses and
 /// in-service branches, with each bus's role in the solve.
@@ -404,15 +404,17 @@ impl AcModel {
     /// infinite once resistance is ignored.
     pub fn solve(&self, case: &Case, options: AcOptions) -> Result<AcSolution, PowerflowError> {
         self.topology.check_case(case)?;
-        let topology = &self.topology;
-        let unknowns = Unknowns {
-            pv: topology.pv_buses.clone(),
-            pq: topology.pq_buses.clone(),
-            pv_pq: topology.pv_pq(),
-        };
+        let roles = self.topology.roles();
+        let v = self.start(case, &roles);
+        let solved = self.solve_round(case, &roles, v, options)?;
+        Ok(self.results(case, &roles, &solved))
+    }
 
-        // runpf's start: case voltages, with generator setpoints at voltage-controlled buses.
-        //   Each setpoint scales the case voltage, so its angle is kept
+    /// `runpf`'s starting voltages: each connected bus's case voltage, with each in-service
+    /// generator's setpoint scaling the magnitude at buses `roles` makes REF or PV (the last
+    /// generator listed at a bus wins), keeping the angle.
+    fn start(&self, case: &Case, roles: &Roles) -> Vec<Complex<f64>> {
+        let topology = &self.topology;
         let start: Vec<Complex<f64>> = topology
             .bus_rows
             .iter()
@@ -423,7 +425,7 @@ impl AcModel {
             .collect();
         let mut v = start.clone();
         let mut voltage_controlled = vec![true; v.len()];
-        for &bus in &unknowns.pq {
+        for &bus in &roles.pq_buses {
             voltage_controlled[bus] = false;
         }
         for (&row, &bus) in topology.gen_rows.iter().zip(&topology.gen_buses) {
@@ -431,24 +433,29 @@ impl AcModel {
                 v[bus] = start[bus] * (case.generator[row].vg_pu / start[bus].norm());
             }
         }
-        let sbus = self.sbus_pu(case);
+        v
+    }
 
-        let solved = match options.method {
-            AcMethod::Newton => self.newton(case, v, &sbus, &unknowns, options)?,
+    /// One power flow solve from the voltages `v`, with the bus `roles` given and `case`'s
+    /// injections (`sbus_pu`), by `options.method`.
+    fn solve_round(
+        &self,
+        case: &Case,
+        roles: &Roles,
+        v: Vec<Complex<f64>>,
+        options: AcOptions,
+    ) -> Result<Solved, PowerflowError> {
+        let unknowns = Unknowns::from(roles);
+        let sbus = self.sbus_pu(case);
+        match options.method {
+            AcMethod::Newton => self.newton(case, v, &sbus, &unknowns, options),
             AcMethod::FastDecoupledXb => {
-                self.fast_decoupled(case, v, &sbus, &unknowns, options, true)?
+                self.fast_decoupled(case, v, &sbus, &unknowns, options, true)
             }
             AcMethod::FastDecoupledBx => {
-                self.fast_decoupled(case, v, &sbus, &unknowns, options, false)?
+                self.fast_decoupled(case, v, &sbus, &unknowns, options, false)
             }
-        };
-        Ok(self.results(
-            case,
-            &solved.v,
-            solved.iterations,
-            solved.mismatch_pu,
-            solved.full_factorizations,
-        ))
+        }
     }
 
     /// `newtonpf`, from the starting voltages `v`.
@@ -752,25 +759,23 @@ impl AcModel {
             self.topology.bus_rows.len(),
             "one voltage per connected bus"
         );
-        let unknowns = Unknowns {
-            pv: self.topology.pv_buses.clone(),
-            pq: self.topology.pq_buses.clone(),
-            pv_pq: self.topology.pv_pq(),
-        };
+        let unknowns = Unknowns::from(&self.topology.roles());
         let mut assembly = JacobianAssembly::new(&self.ybus, &unknowns);
         assembly.refill(&self.ybus, v);
         assembly.jacobian
     }
 
-    /// `pfsoln`'s results, indexed like the case's tables.
-    fn results(
-        &self,
-        case: &Case,
-        v: &[Complex<f64>],
-        iterations: usize,
-        mismatch_pu: f64,
-        full_factorizations: usize,
-    ) -> AcSolution {
+    /// `pfsoln`'s results, indexed like the case's tables, for the bus `roles` the solve used.
+    /// Its "on" generators are those at buses whose type in `case` isn't PQ.
+    fn results(&self, case: &Case, roles: &Roles, solved: &Solved) -> AcSolution {
+        let Solved {
+            v,
+            iterations,
+            mismatch_pu,
+            full_factorizations,
+        } = solved;
+        let (iterations, mismatch_pu, full_factorizations) =
+            (*iterations, *mismatch_pu, *full_factorizations);
         let topology = &self.topology;
         let base_mva = self.base_mva;
         let mut vm_pu: Vec<f64> = case.bus.iter().map(|bus| bus.vm_pu).collect();
@@ -819,7 +824,7 @@ impl AcModel {
             share_reactive_power(case, &on, &mut qg_mvar);
         }
         // The slack: the first "on" generator at each reference bus takes up the difference
-        for &reference in &topology.ref_buses {
+        for &reference in &roles.ref_buses {
             let at_bus: Vec<usize> = (0..on.len()).filter(|&k| on[k].1 == reference).collect();
             let first = *at_bus
                 .first()
@@ -854,6 +859,16 @@ impl AcModel {
             iterations,
             mismatch_pu,
             full_factorizations,
+        }
+    }
+}
+
+impl From<&Roles> for Unknowns {
+    fn from(roles: &Roles) -> Unknowns {
+        Unknowns {
+            pv: roles.pv_buses.clone(),
+            pq: roles.pq_buses.clone(),
+            pv_pq: roles.pv_pq(),
         }
     }
 }
@@ -1107,11 +1122,7 @@ mod tests {
             1 3 0.01 0.05 0.02 0 0 0 0.98 2 1 -360 360;\n];\n";
         let case = Case::parse(text).unwrap();
         let model = AcModel::new(&case).unwrap();
-        let unknowns = Unknowns {
-            pv: model.topology.pv_buses.clone(),
-            pq: model.topology.pq_buses.clone(),
-            pv_pq: model.topology.pv_pq(),
-        };
+        let unknowns = Unknowns::from(&model.topology.roles());
         let first: Vec<Complex<f64>> = (0..3)
             .map(|k| Complex::from_polar(1.0 + 0.01 * k as f64, -0.05 * k as f64))
             .collect();

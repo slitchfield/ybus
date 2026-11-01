@@ -603,8 +603,13 @@ item.
       - **Inferred refill cost:** the solve saved 4.7 ms over 6 iterations, so a refill costs
         about 0.18 ms where the old build took 0.96 ms. The `jacobian` benchmark measures a
         layout and one fill (0.86 ms), since `AcModel::jacobian` makes a fresh layout each call.
-- [ ] Let the AC solve take changing bus roles (REF, PV, PQ), with a `bustypes` shared with the
+- [x] Let the AC solve take changing bus roles (REF, PV, PQ), with a `bustypes` shared with the
       topology, and no change in results.
+      `topology.rs` has a `bustypes` function returning `Roles` (the ref, pv and pq lists) from a
+      case's bus types, which `Topology::new` uses. `AcModel::solve` is split into `start`,
+      `solve_round` (one solve under given roles and a case's injections) and `results` (which
+      takes the roles for its slack). The DC survey (78 cases) and the AC survey (234
+      case-and-method rows) match their records in every column but time and memory.
 - [ ] Enforce generator reactive power limits as `runpf`'s `pf.enforce_q_lims` does (both
       modes), with fixture tests.
 - [ ] MATPOWER's reactive-limit reference results, and the tests against them.
