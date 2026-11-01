@@ -400,6 +400,9 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
 
 ## Phase 4: Complex-capable solvers (migrating what Phase 3 didn't rewrite)
 
+Done in PR #23 (2026-11-01). Every solver and norm now works for real and complex element
+types through one code path, and every real result is bit for bit what it was.
+
 - [x] **Decide:** what Cholesky reports for a matrix that isn't Hermitian.
       Decided (2026-11-01): keep `SparseError::NotSymmetric`, documented as "not symmetric, or
       for complex element types, not Hermitian (A ≠ Aᴴ)", so nothing breaks for real callers
@@ -441,10 +444,12 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
       needed). Changed from the plan: the existing real-only tests stay as they are rather than
       being rewritten generically, since many check exact values or bit-for-bit agreement with
       the old algorithms, which only make sense for `f64`.
-- [ ] Note in the docs which float types keep solver support. Corrected while planning:
+- [x] Note in the docs which float types keep solver support. Corrected while planning:
       `ComplexFloat` is sealed, but its seal is implemented for every `Float + FloatConst` type
       (`num-complex` 0.4.6, `complex_float.rs`), so a user-defined float type keeps solver support
       if it also implements `FloatConst`; only a type implementing `Float` alone loses it.
+      Done in the Element types section of `sparse_mat/README.md`, which also lists the
+      complex-capable solvers and norms.
 
 ## Phase 4.5: AC power flow (power flow crate)
 
