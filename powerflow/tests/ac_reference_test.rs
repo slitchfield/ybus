@@ -59,3 +59,36 @@ fn newton_raphson_matches_runpf() {
         );
     }
 }
+
+#[test]
+fn fast_decoupled_matches_runpf() {
+    use powerflow::ac::{AcMethod, AcModel, AcOptions};
+    for name in ["case14", "case30", "case118"] {
+        let Some(path) = common::matpower_case(name) else {
+            continue; // not fetched; the skip was reported on stderr
+        };
+        let case = powerflow::case::Case::from_path(&path).unwrap();
+        let model = AcModel::new(&case).unwrap();
+        for (run, method) in [
+            ("fdxb", AcMethod::FastDecoupledXb),
+            ("fdbx", AcMethod::FastDecoupledBx),
+        ] {
+            let reference = common::reference::read_ac_run(&committed_dir(), name, run).unwrap();
+            let solution = model.solve(&case, AcOptions::for_method(method)).unwrap();
+            let deviation = common::reference::ac_deviation(&case, &solution, &reference).unwrap();
+            eprintln!(
+                "{name} {run}: {} iterations (MATPOWER {}), mismatch {:e}, largest deviation {:e}",
+                solution.iterations,
+                reference.iterations,
+                solution.mismatch_pu,
+                deviation.largest()
+            );
+            assert_eq!(solution.iterations, reference.iterations, "{name} {run}");
+            assert!(
+                deviation.largest() <= TOLERANCE,
+                "{name} {run}: {deviation:?} exceeds {TOLERANCE}"
+            );
+            assert_eq!(solution.full_factorizations, 2, "B′ and B″, once each");
+        }
+    }
+}

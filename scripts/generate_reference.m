@@ -1,5 +1,6 @@
 % Generates DC and AC power flow reference results by running MATPOWER's rundcpf and runpf
-%   (with its default options: Newton's method, tolerance 1e-8, reactive limits not enforced). Run
+%   (with its default options: Newton's method, tolerance 1e-8, reactive limits not enforced;
+%   then again with fast-decoupled XB and BX). Run
 %   through
 %   scripts/generate-reference.sh, which fetches MATPOWER and passes its directory, the output
 %   directory and any cases as arguments.
@@ -20,6 +21,10 @@
 %                           flows at the from end and at the to end (MW, MVAr)
 %   <case>_acpf_gen.csv     generator row, bus, and real and reactive power output (MW, MVAr)
 %   <case>_acpf_summary.csv Newton iterations and whether runpf converged
+%   <case>_fdxb_*.csv, <case>_fdbx_*.csv
+%                           the same for runpf's fast-decoupled XB and BX methods (pf.alg
+%                           FDXB and FDBX, through the legacy fdpf rather than MP-Core), whose
+%                           iterations are P half-iterations
 % Values are printed with 17 significant digits, enough to round-trip a double exactly.
 
 % Marks this file as a script, so Octave accepts the function definition that follows. Octave
@@ -74,30 +79,39 @@ for k = 1:numel(cases)
     printf('%s: %d buses, %d branches, %d generators\n', name, size(result.bus, 1), ...
         size(result.branch, 1), size(result.gen, 1));
 
-    % The AC power flow, with runpf's defaults
-    try
-        [result, success] = runpf(name, mpopt);
-    catch err
-        fprintf(2, '%s: %s\n', name, err.message);
-        success = false;
+    % The AC power flow: runpf's defaults (Newton's method), then fast-decoupled XB and BX
+    %   Fast-decoupled runs bypass MP-Core (exp.use_legacy_core), which MATPOWER 8.1 otherwise
+    %   uses under Octave too: its fast-decoupled results differ from the legacy fdpf's by up
+    %   to 2.3e-7 (case14, FDXB) at the same iteration counts, and powerflow follows fdpf. For
+    %   Newton's method the two agree within 6.4e-12, so it keeps runpf's defaults.
+    for run = {{'acpf', 'NR', 0}, {'fdxb', 'FDXB', 1}, {'fdbx', 'FDBX', 1}}
+        [prefix, alg, legacy] = deal(run{1}{1}, run{1}{2}, run{1}{3});
+        try
+            [result, success] = runpf(name, mpoption(mpopt, 'pf.alg', alg, ...
+                'exp.use_legacy_core', legacy));
+        catch err
+            fprintf(2, '%s (%s): %s\n', name, alg, err.message);
+            success = false;
+        end
+        if ~success
+            fprintf(2, 'runpf (%s) failed on %s\n', alg, name);
+            failed{end + 1} = [name ' (' alg ')'];
+            continue;
+        end
+        write_csv(fullfile(out_dir, [name '_' prefix '_bus.csv']), 'bus,vm_pu,va_deg', ...
+            '%d,%.17g,%.17g', [result.bus(:, BUS_I), result.bus(:, VM), result.bus(:, VA)]);
+        rows = (1:size(result.branch, 1))';
+        write_csv(fullfile(out_dir, [name '_' prefix '_branch.csv']), ...
+            'row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar', ...
+            '%d,%d,%d,%d,%.17g,%.17g,%.17g,%.17g', ...
+            [rows, result.branch(:, [F_BUS, T_BUS, BR_STATUS, PF, QF, PT, QT])]);
+        rows = (1:size(result.gen, 1))';
+        write_csv(fullfile(out_dir, [name '_' prefix '_gen.csv']), 'row,bus,pg_mw,qg_mvar', ...
+            '%d,%d,%.17g,%.17g', [rows, result.gen(:, [GEN_BUS, PG, QG])]);
+        write_csv(fullfile(out_dir, [name '_' prefix '_summary.csv']), 'iterations,success', ...
+            '%d,%d', [result.iterations, success]);
+        printf('%s: %s converged in %d iterations\n', name, alg, result.iterations);
     end
-    if ~success
-        fprintf(2, 'runpf failed on %s\n', name);
-        failed{end + 1} = [name ' (AC)'];
-        continue;
-    end
-    write_csv(fullfile(out_dir, [name '_acpf_bus.csv']), 'bus,vm_pu,va_deg', '%d,%.17g,%.17g', ...
-        [result.bus(:, BUS_I), result.bus(:, VM), result.bus(:, VA)]);
-    rows = (1:size(result.branch, 1))';
-    write_csv(fullfile(out_dir, [name '_acpf_branch.csv']), ...
-        'row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar', '%d,%d,%d,%d,%.17g,%.17g,%.17g,%.17g', ...
-        [rows, result.branch(:, [F_BUS, T_BUS, BR_STATUS, PF, QF, PT, QT])]);
-    rows = (1:size(result.gen, 1))';
-    write_csv(fullfile(out_dir, [name '_acpf_gen.csv']), 'row,bus,pg_mw,qg_mvar', ...
-        '%d,%d,%.17g,%.17g', [rows, result.gen(:, [GEN_BUS, PG, QG])]);
-    write_csv(fullfile(out_dir, [name '_acpf_summary.csv']), 'iterations,success', '%d,%d', ...
-        [result.iterations, success]);
-    printf('%s: AC converged in %d iterations\n', name, result.iterations);
 end
 
 % The run's provenance, so a regeneration with a different MATPOWER is visible in the diff
