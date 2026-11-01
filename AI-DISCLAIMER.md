@@ -37,9 +37,20 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
 ### How AI-generated code was checked
 
 AI-generated code can be plausible and still wrong, so it was not accepted on trust:
-- **Tests:** numerical routines (products, LU, Cholesky, conjugate gradient, Kronecker products)
-  are tested against independent dense reference implementations and algebraic identities, such
-  as PA = LU, A = LLᵀ, (AB)ᵀ = BᵀAᵀ and solution residuals.
+- **Tests:** numerical routines (products, orderings, LU, Cholesky, conjugate gradient,
+  Kronecker products) are tested against independent dense reference implementations and
+  algebraic identities, such as P A Q = L U, P A Pᵀ = L Lᴴ, (AB)ᵀ = BᵀAᵀ and solution residuals,
+  for real and complex element types.
+- **Old algorithms kept as references:** when an algorithm was replaced, the old one was kept in
+  the tests, and the new one was required to reproduce its results bit for bit where they should
+  agree (for example the ordered Cholesky without an ordering, and the new LU's pivots under true
+  partial pivoting).
+- **Validation against MATPOWER:** the power flows are compared with MATPOWER's own results.
+  Committed reference cases must agree within 1e-9 and, for the AC power flow, take MATPOWER's
+  number of iterations. Surveys of all 78 MATPOWER cases, recorded in
+  [`docs/benchmarks/`](docs/benchmarks/), check every case against MATPOWER, and differences
+  were investigated rather than tolerated. A backward-error test checks that the DC solve is
+  backward stable.
 - **Regressions:** bugs were reproduced with a failing test before they were fixed.
 - **CI:** every change runs `./check.sh` in CI (formatting, clippy with warnings as errors, and
   tests with each feature combination), plus a minimum-supported-Rust-version job.
