@@ -477,8 +477,17 @@ types through one code path, and every real result is bit for bit what it was.
       (`x = 0` for DC), run as branches are found, so errors keep their precedence. The DC tests
       pass unchanged, and a survey rerun matches the AMD and LU records in every column but
       time and memory, on all 78 cases.
-- [ ] Ybus assembly with `from_triplets` (complex branch π-models, taps, shifts, shunts), then
+- [x] Ybus assembly with `from_triplets` (complex branch π-models, taps, shifts, shunts), then
       converted to `CsrMatrix` with an assembly map for re-stamping.
+      `AcModel::new` in `powerflow/src/ac.rs` builds Ybus, Yf and Yt as
+      `CsrMatrix<Complex<f64>>` with `from_triplets_mapped`, keeping each assembly map, and
+      `AcModel::restamp` re-stamps changed impedances, charging, taps, phase shifts and shunts
+      through them; the result equals a fresh build bit for bit (tested). `sbus_pu` gives
+      `makeSbus`'s injections. A zero-impedance in-service branch is the new
+      `PowerflowError::ZeroImpedance`. Tested against the π-model computed by hand, rows summing
+      to the shunts, symmetry, and dropped elements. Corrected while testing: the plan expected
+      Ybus to be Hermitian without phase shifts, but it's symmetric (Yft = Ytf for a real tap),
+      and never Hermitian.
 - [ ] MATPOWER's AC reference results (`runpf`, Newton–Raphson) for case14, case30 and case118,
       committed beside the DC ones.
 - [ ] Newton–Raphson in polar form: mismatch, then the dS/dV Jacobian built with

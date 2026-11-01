@@ -40,6 +40,8 @@
 // Each integration test file compiles this module separately and uses only part of it
 #![allow(dead_code)]
 
+/// Hand-built cases for the AC power flow tests.
+pub mod ac_fixture;
 /// The backward error of a DC power flow's angles.
 pub mod accuracy;
 /// Hand-built cases for the DC power flow tests.

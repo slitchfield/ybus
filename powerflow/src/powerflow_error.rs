@@ -77,6 +77,12 @@ pub enum PowerflowError {
         /// The 1-based row in the branch table.
         row: usize,
     },
+    /// An in-service branch has zero impedance (`r = x = 0`), so its AC series admittance
+    /// `1 / (r + jx)` is infinite.
+    ZeroImpedance {
+        /// The 1-based row in the branch table.
+        row: usize,
+    },
     /// No bus can be the DC reference: there's no REF bus, and no PV bus with an in-service
     /// generator to take its place.
     NoReferenceBus,
@@ -147,6 +153,9 @@ impl fmt::Display for PowerflowError {
             } => write!(f, "{field} has {found} entries, but should have {expected}"),
             PowerflowError::ZeroReactance { row } => {
                 write!(f, "branch row {row} is in service with zero reactance")
+            }
+            PowerflowError::ZeroImpedance { row } => {
+                write!(f, "branch row {row} is in service with zero impedance")
             }
             PowerflowError::NoReferenceBus => write!(
                 f,

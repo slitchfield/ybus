@@ -4,6 +4,7 @@
 //! a reader for MATPOWER case files ([`case::Case::from_path`]). DC power flow is next; see
 //! Phase 1.5 of the roadmap in `docs/PowerFlowChecklist.md`.
 
+pub mod ac;
 pub mod case;
 pub mod dc;
 pub mod powerflow_error;
