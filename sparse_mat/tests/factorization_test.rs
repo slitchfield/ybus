@@ -3,7 +3,7 @@
 
 mod common;
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, Refactor};
+use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, RefactorOutcome};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
 
@@ -970,7 +970,7 @@ fn refactor_reuses_the_pivots_for_new_values() {
         let permutations = (lu.permutation().to_vec(), lu.column_permutation().to_vec());
         for round in 0..3 {
             let b = new_values(&a, 10 + round);
-            assert_eq!(lu.refactor(&b), Ok(Refactor::Reused), "n = {n}");
+            assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused), "n = {n}");
             // Same pivots and patterns, new values that factor b
             assert_eq!(lu.l().indices(), l_pattern);
             assert_eq!(lu.u().indices(), u_pattern);
@@ -1001,19 +1001,19 @@ fn refactor_repivots_when_a_pivot_becomes_too_small() {
     let mut b = a.clone();
     let p = b.position(0, 0).unwrap().unwrap();
     b.values_mut()[p] = 0.01;
-    assert_eq!(lu.refactor(&b), Ok(Refactor::Repivoted));
+    assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Repivoted));
     assert_eq!(lu.permutation()[0], 1, "row 1 pivots first now");
     assert_lu_reconstructs(&b, &lu);
     // Zeroing (0, 0) no longer touches a pivot, since row 1 pivots column 0 now
     b.values_mut()[p] = 0.0;
-    assert_eq!(lu.refactor(&b), Ok(Refactor::Reused));
+    assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused));
     // From the original pivots, an exactly zero pivot can't be reused
     let mut fresh = a
         .analyze_lu(Ordering::Natural)
         .unwrap()
         .factor(&a, LuOptions::default())
         .unwrap();
-    assert_eq!(fresh.refactor(&b), Ok(Refactor::Repivoted));
+    assert_eq!(fresh.refactor(&b), Ok(RefactorOutcome::Repivoted));
     assert_lu_reconstructs(&b, &fresh);
     assert_close(
         &lu.solve(&[1.0, 2.0, 3.0]).unwrap(),
@@ -1022,7 +1022,7 @@ fn refactor_repivots_when_a_pivot_becomes_too_small() {
     );
     // Back to the original values, the pivots chosen for b fail in column 1 (1 against
     //   0.1 x 15), so it repivots, back to the diagonal
-    assert_eq!(lu.refactor(&a), Ok(Refactor::Repivoted));
+    assert_eq!(lu.refactor(&a), Ok(RefactorOutcome::Repivoted));
     assert_eq!(lu.permutation(), [0, 1, 2]);
     assert_lu_reconstructs(&a, &lu);
 }
@@ -1037,7 +1037,7 @@ fn refactor_handles_complex_values() {
     let a = grid.map(|v| Complex::new(v, -2.0 * v));
     let b = grid.map(|v| Complex::new(0.7 * v, -1.1 * v));
     let mut lu = a.lu().unwrap();
-    assert_eq!(lu.refactor(&b), Ok(Refactor::Reused));
+    assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused));
     let x: Vec<Complex<f64>> = (0..25).map(|i| Complex::new(i as f64, 1.0)).collect();
     let solved = lu.solve(&b.mul_vec(&x).unwrap()).unwrap();
     assert!(solved.iter().zip(&x).all(|(s, x)| (s - x).norm() < 1e-10));
@@ -1060,4 +1060,96 @@ fn refactor_errors_leave_the_factorization_unchanged() {
     ));
     assert_eq!((lu.l().values().to_vec(), lu.u().values().to_vec()), before);
     assert_close(&lu.solve(&[3.0, 4.0]).unwrap(), &[1.0, 1.0], 1e-12);
+}
+
+// Several right-hand sides
+
+fn right_hand_sides(n: usize, count: usize) -> Vec<Vec<f64>> {
+    (0..count)
+        .map(|k| {
+            (0..n)
+                .map(|i| ((i * 7 + k * 13) as f64 * 0.21).sin())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn cholesky_solves_in_place_and_many_like_solve() {
+    let mut rng = Lcg(51);
+    let a = grid_laplacian(9)
+        .permute_symmetric(&rng.permutation(81))
+        .unwrap();
+    let factor = a.cholesky().unwrap();
+    let rhs = right_hand_sides(81, 5);
+    let solved: Vec<Vec<f64>> = rhs.iter().map(|b| factor.solve(b).unwrap()).collect();
+    assert_eq!(factor.solve_many(&rhs).unwrap(), solved, "bit for bit");
+    for (b, x) in rhs.iter().zip(&solved) {
+        let mut in_place = b.clone();
+        factor.solve_in_place(&mut in_place).unwrap();
+        assert_eq!(&in_place, x, "bit for bit");
+        assert_close(&a.mul_vec(x).unwrap(), b, 1e-12);
+    }
+    assert!(factor.solve_many(&[]).unwrap().is_empty());
+
+    // A wrong length is refused, and leaves an in-place argument untouched
+    let mut short = vec![1.0; 80];
+    assert_eq!(
+        factor.solve_in_place(&mut short),
+        Err(SparseError::ShapeMismatch {
+            left: (81, 81),
+            right: (80, 1)
+        })
+    );
+    assert_eq!(short, vec![1.0; 80]);
+    let mut mixed = rhs.clone();
+    mixed.insert(2, vec![0.0; 3]);
+    assert_eq!(
+        factor.solve_many(&mixed).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (81, 81),
+            right: (3, 1)
+        })
+    );
+}
+
+#[test]
+fn lu_solves_in_place_and_many_like_solve() {
+    let a = random_square(50, 8, 0.05, 61).to_csc();
+    let lu = a.lu().unwrap();
+    let rhs = right_hand_sides(50, 4);
+    let solved: Vec<Vec<f64>> = rhs.iter().map(|b| lu.solve(b).unwrap()).collect();
+    assert_eq!(lu.solve_many(&rhs).unwrap(), solved, "bit for bit");
+    for (b, x) in rhs.iter().zip(&solved) {
+        let mut in_place = b.clone();
+        lu.solve_in_place(&mut in_place).unwrap();
+        assert_eq!(&in_place, x, "bit for bit");
+        assert_close(&a.mul_vec(x).unwrap(), b, 1e-10);
+    }
+
+    // Complex right-hand sides
+    let c = a.map(|v| Complex::new(v, 0.5 * v));
+    let complex_lu = c.lu().unwrap();
+    let complex_rhs: Vec<Vec<Complex<f64>>> = rhs
+        .iter()
+        .map(|b| b.iter().map(|&v| Complex::new(v, -v)).collect())
+        .collect();
+    for (b, x) in complex_rhs
+        .iter()
+        .zip(complex_lu.solve_many(&complex_rhs).unwrap())
+    {
+        let residual = c.mul_vec(&x).unwrap();
+        assert!(residual.iter().zip(b).all(|(r, b)| (r - b).norm() < 1e-10));
+    }
+
+    let mut short = vec![2.0; 7];
+    assert_eq!(
+        lu.solve_in_place(&mut short),
+        Err(SparseError::ShapeMismatch {
+            left: (50, 50),
+            right: (7, 1)
+        })
+    );
+    assert_eq!(short, vec![2.0; 7]);
+    assert!(lu.solve_many(&[vec![0.0; 49]]).is_err());
 }

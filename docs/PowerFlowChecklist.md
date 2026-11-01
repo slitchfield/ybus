@@ -251,6 +251,10 @@ Merged in PR #2.
 
 ## Phase 3: Factorization rewrite (the largest piece)
 
+Done in PRs #19 to #22 (2026-10-31 to 2026-11-01). Ordered Cholesky and the Gilbert–Peierls LU
+took the 78 MATPOWER cases' DC solves from 496 s to 0.35 s together, and brought every case's
+backward error below 0.8 ε. COLAMD stays deferred, below.
+
 - [x] **Decide:** the shape of the ordered factorizations, where AMD comes from, whether to
       implement COLAMD, and the LU's pivot threshold.
       Decided (2026-10-31):
@@ -355,7 +359,8 @@ Merged in PR #2.
       and U: each column is a sparse triangular solve over U's known pattern, with no search.
       Each reused pivot is checked against the factorization's threshold; if one fails (or is
       zero), it factors afresh under the same column ordering and returns
-      `Refactor::Repivoted`, otherwise `Refactor::Reused`. A different pattern is
+      `RefactorOutcome::Repivoted`, otherwise `RefactorOutcome::Reused` (named `Refactor` until
+      the PR #21 review asked for a name that reads as a call's result). A different pattern is
       `PatternMismatch`, and on any error the factorization is unchanged. Tested on new values
       (same pivots and patterns, reconstructing P A Q, solving and the determinant), on pivots
       that shrink or vanish, on complex values, and on errors.
@@ -368,7 +373,12 @@ Merged in PR #2.
         from 109× to 2.5×. All 78 cases now solve in 0.35 s together, against 496 s.
       - **Agreement with MATPOWER:** every case within 2.5e-12 of each quantity's largest value,
         against 1.1e-10 before.
-- [ ] `solve_in_place` and `solve_many` (several right-hand sides).
+- [x] `solve_in_place` and `solve_many` (several right-hand sides).
+      On both `Cholesky` and `Lu`. `solve_in_place(&mut rhs)` overwrites its argument with the
+      solution (permuting still takes one scratch vector), and `solve_many(&[b])` returns one
+      solution per right-hand side, sharing one scratch vector. `solve` now runs through the same
+      code, so all three agree bit for bit (tested, with complex right-hand sides for LU). A
+      wrong length is `ShapeMismatch` and leaves an in-place argument untouched.
 - [x] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward
       error: unordered, ours was up to 30 times MATPOWER's on high-fill cases, and correlated
       with fill where MATPOWER's, from an ordered solve, didn't. Rerun `scripts/benchmark-dc.sh`

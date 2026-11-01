@@ -44,9 +44,10 @@ pub struct SymbolicLu {
     a_idx: Vec<usize>,
 }
 
-/// What [`Lu::refactor`] did.
+/// The outcome of a successful [`Lu::refactor`] call: whether the previous pivots were reused or
+/// the matrix had to be factored afresh.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Refactor {
+pub enum RefactorOutcome {
     /// Every pivot of the previous factorization was still large enough, so its pivot
     /// sequence and patterns were reused.
     Reused,
@@ -368,22 +369,67 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
     /// and permutes the result by `Q`. Returns `SparseError::ShapeMismatch` unless `b` has one
     /// entry per row of `A`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
-        let n = self.row_perm.len();
-        if b.len() != n {
-            return Err(SparseError::ShapeMismatch {
-                left: (n, n),
-                right: (b.len(), 1),
-            });
+        let mut x = b.to_vec();
+        self.solve_in_place(&mut x)?;
+        Ok(x)
+    }
+
+    /// Solves `A x = b`, overwriting `rhs` (which holds `b`) with `x`. It saves returning a new
+    /// vector, though permuting still uses one scratch vector of the same length. The result is
+    /// bit for bit `solve`'s. Returns `SparseError::ShapeMismatch`, leaving `rhs` untouched,
+    /// unless `rhs` has one entry per row of `A`.
+    pub fn solve_in_place(&self, rhs: &mut [T]) -> Result<(), SparseError> {
+        self.check_rhs(rhs.len())?;
+        let mut scratch = Vec::with_capacity(rhs.len());
+        self.substitute(rhs, &mut scratch);
+        Ok(())
+    }
+
+    /// Solves `A x = b` for each right-hand side `b` in `rhs`, returning the solutions in the
+    /// same order. One scratch vector serves them all, and each solution is bit for bit what
+    /// `solve` gives. Returns `SparseError::ShapeMismatch` naming the first right-hand side
+    /// whose length isn't the number of rows of `A`.
+    pub fn solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
+        for b in rhs {
+            self.check_rhs(b.len())?;
         }
-        let mut y: Vec<T> = self.row_perm.iter().map(|&row| b[row]).collect();
-        // L has a unit diagonal, stored first in each column
+        let mut scratch = Vec::with_capacity(self.row_perm.len());
+        Ok(rhs
+            .iter()
+            .map(|b| {
+                let mut x = b.clone();
+                self.substitute(&mut x, &mut scratch);
+                x
+            })
+            .collect())
+    }
+
+    fn check_rhs(&self, len: usize) -> Result<(), SparseError> {
+        let n = self.row_perm.len();
+        if len == n {
+            Ok(())
+        } else {
+            Err(SparseError::ShapeMismatch {
+                left: (n, n),
+                right: (len, 1),
+            })
+        }
+    }
+
+    /// Overwrites `x` (holding `b`, already checked) with the solution: `P b` into `scratch`,
+    /// forward substitution with `L` (unit diagonal, stored first in each column) and back
+    /// substitution with `U` (diagonal stored last), by columns, then through `Q` into `x`.
+    fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
+        let n = self.row_perm.len();
+        scratch.clear();
+        scratch.extend(self.row_perm.iter().map(|&row| x[row]));
+        let y = scratch.as_mut_slice();
         for j in 0..n {
             let y_j = y[j];
             for p in self.l.ptr[j] + 1..self.l.ptr[j + 1] {
                 y[self.l.idx[p]] = y[self.l.idx[p]] - self.l.data[p] * y_j;
             }
         }
-        // U's diagonal is stored last in each column
         for j in (0..n).rev() {
             let diagonal = self.u.ptr[j + 1] - 1;
             y[j] = y[j] / self.u.data[diagonal];
@@ -392,11 +438,9 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
                 y[self.u.idx[p]] = y[self.u.idx[p]] - self.u.data[p] * y_j;
             }
         }
-        let mut x = vec![T::zero(); n];
-        for (&col, value) in self.col_perm.iter().zip(y) {
+        for (&col, &value) in self.col_perm.iter().zip(y.iter()) {
             x[col] = value;
         }
-        Ok(x)
     }
 
     /// Factors `matrix`, which must have the pattern of the matrix this factorization came
@@ -405,11 +449,12 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
     ///
     /// Each reused pivot is checked against the threshold this factorization used. If one is
     /// too small (or zero), the matrix is factored afresh with new pivots under the same column
-    /// ordering, and `Refactor::Repivoted` says so; otherwise the result is `Refactor::Reused`.
+    /// ordering, and the outcome is `RefactorOutcome::Repivoted`; otherwise it is
+    /// `RefactorOutcome::Reused`.
     /// Returns `SparseError::PatternMismatch` if `matrix`'s shape or pattern differs, or
     /// `SparseError::SingularMatrix` if the fresh factorization finds no pivot; on an error,
     /// `self` is unchanged.
-    pub fn refactor(&mut self, matrix: &CscMatrix<T>) -> Result<Refactor, SparseError> {
+    pub fn refactor(&mut self, matrix: &CscMatrix<T>) -> Result<RefactorOutcome, SparseError> {
         let n = self.row_perm.len();
         if matrix.shape != (n, n) || matrix.ptr != self.a_ptr || matrix.idx != self.a_idx {
             return Err(SparseError::PatternMismatch);
@@ -449,7 +494,7 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
             if pivot == T::zero() || pivot.abs() < tau * largest {
                 // Too small to reuse: factor afresh, leaving self as it was if that fails
                 *self = gilbert_peierls(matrix, &self.col_perm, self.options)?;
-                return Ok(Refactor::Repivoted);
+                return Ok(RefactorOutcome::Repivoted);
             }
             u_val[diagonal] = pivot;
             x[k] = T::zero();
@@ -462,6 +507,6 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
         }
         self.l.data = l_val;
         self.u.data = u_val;
-        Ok(Refactor::Reused)
+        Ok(RefactorOutcome::Reused)
     }
 }
