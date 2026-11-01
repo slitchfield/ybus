@@ -116,8 +116,10 @@ licensing follows current best practices for AI-assisted software development:
   tests, and benchmark records that hold only case names and measurements. The results' sources
   are credited in
   [`powerflow/tests/data/matpower-reference/README.md`](powerflow/tests/data/matpower-reference/README.md).
-- **Compatible dependencies:** every dependency, including transitive ones, is under a compatible
-  permissive license (MIT, Apache-2.0, Unlicense or Unicode-3.0).
+- **Compatible dependencies:** every dependency, including transitive and development ones, is
+  available under the MIT or Apache-2.0 license (one also under Unicode-3.0, which it requires
+  alongside them); some offer the Unlicense or BSD-2-Clause as further alternatives. `cargo deny`
+  enforces this in CI, allowing only MIT, Apache-2.0 and Unicode-3.0.
 - **Transparency:** AI involvement is disclosed in this document, in commit trailers and in the
   pull requests' implementation reports, and sources are attributed as described above.
 
