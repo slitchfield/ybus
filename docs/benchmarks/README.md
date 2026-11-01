@@ -7,6 +7,7 @@ change. Each record names the code, the machine and the method it used.
 |---|---|
 | [`dc-power-flow-2026-10-31.md`](dc-power-flow-2026-10-31.md) | The DC power flow on every MATPOWER 8.1 case, before Phase 2's fixed-pattern matrices and Phase 3's ordered LU: the Phase 1.5 baseline. The survey's raw output is in the `.csv` beside it. |
 | [`dc-power-flow-rcm-2026-10-31.md`](dc-power-flow-rcm-2026-10-31.md) | The same survey with B′'s Cholesky factorization ordered by reverse Cuthill–McKee (Phase 3), with the first test of the hypothesis that fill-in drives the backward error. |
+| [`dc-power-flow-amd-2026-11-01.md`](dc-power-flow-amd-2026-11-01.md) | The Cholesky cases ordered by approximate minimum degree against RCM (Phase 3): fill, the cost of each stage, and the hypothesis's verdict for Cholesky. |
 
 ## Measuring
 

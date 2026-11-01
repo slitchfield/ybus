@@ -298,19 +298,19 @@ impl DcModel {
     ///
     /// The net injection at each connected bus is `(Pg − Pd − Gs) / baseMVA − pbusinj`, with
     /// `Pg` summed over its in-service generators. Reference bus angles are fixed at their
-    /// `va_deg`, and the remaining angles solve `B′ θ = P′`, by Cholesky ordered by reverse
-    /// Cuthill–McKee, or by LU if B′ isn't positive definite. Branch flows are
+    /// `va_deg`, and the remaining angles solve `B′ θ = P′`, by Cholesky ordered by approximate
+    /// minimum degree, or by LU if B′ isn't positive definite. Branch flows are
     /// `(Bf θ + pfinj) · baseMVA`.
     ///
     /// Returns `PowerflowError::CaseMismatch` if `case`'s tables have different lengths from
     /// the model's case, and `SingularNetwork` if B′ is singular even though every bus reaches
     /// a reference, which takes reactances that cancel out.
     pub fn solve(&self, case: &Case) -> Result<DcSolution, PowerflowError> {
-        self.solve_with_ordering(case, Ordering::Rcm)
+        self.solve_with_ordering(case, Ordering::Amd)
     }
 
     /// [`DcModel::solve`] with B′'s Cholesky factorization ordered by `ordering` instead of the
-    /// default, reverse Cuthill–McKee, for comparing orderings. The LU fallback isn't ordered
+    /// default, approximate minimum degree, for comparing orderings. The LU fallback isn't ordered
     /// yet. Returns the errors of `solve`.
     pub fn solve_with_ordering(
         &self,

@@ -310,14 +310,14 @@ impl<T: Scalar + Float> Cholesky<T> {
 }
 
 impl<T: Scalar + Float> CsrMatrix<T> {
-    /// Factors a symmetric positive definite matrix as `P A Pᵀ = L Lᵀ`, ordered by reverse
-    /// Cuthill–McKee: `analyze_cholesky(Ordering::Rcm)` followed by `factor`. Analyze once
+    /// Factors a symmetric positive definite matrix as `P A Pᵀ = L Lᵀ`, ordered by approximate
+    /// minimum degree: `analyze_cholesky(Ordering::Amd)` followed by `factor`. Analyze once
     /// instead to factor several matrices with the same pattern.
     ///
     /// Returns `SparseError::NotSquare`, `SparseError::NotSymmetric`, or
     /// `SparseError::NotPositiveDefinite` naming the row of `A` whose pivot failed.
     pub fn cholesky(&self) -> Result<Cholesky<T>, SparseError> {
-        self.analyze_cholesky(Ordering::Rcm)?.factor(self)
+        self.analyze_cholesky(Ordering::Amd)?.factor(self)
     }
 
     /// Solves `A x = b` for a symmetric positive definite matrix by an ordered Cholesky
