@@ -251,6 +251,10 @@ Merged in PR #2.
 
 ## Phase 3: Factorization rewrite (the largest piece)
 
+Done in PRs #19 to #22 (2026-10-31 to 2026-11-01). Ordered Cholesky and the Gilbert–Peierls LU
+took the 78 MATPOWER cases' DC solves from 496 s to 0.35 s together, and brought every case's
+backward error below 0.8 ε. COLAMD stays deferred, below.
+
 - [x] **Decide:** the shape of the ordered factorizations, where AMD comes from, whether to
       implement COLAMD, and the LU's pivot threshold.
       Decided (2026-10-31):

@@ -4,7 +4,7 @@ Sparse linear algebra and power flow for Rust. A Cargo workspace with two crates
 
 | Crate | Status | Contents |
 |---|---|---|
-| [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, LU/Cholesky/CG solvers, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
+| [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM), sparse Cholesky and LU (complex too, with refactoring), conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
 | [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, and DC power flow, which agrees with MATPOWER on all 78 of its cases. Next: Newton–Raphson and fast-decoupled AC power flow. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
@@ -92,7 +92,9 @@ translation, and the module documentation names the MATPOWER functions each step
 | `solve_lower_triangular`, `solve_upper_triangular`, `Lu::solve`, `Lu::determinant` | Forward and back substitution; LU factorization with partial pivoting | G. H. Golub and C. F. Van Loan, *Matrix Computations*, 4th ed., Johns Hopkins University Press, 2013, ch. 3. |
 | `lu`, `analyze_lu`, `SymbolicLu::factor` | Left-looking sparse LU: a depth-first search for each column's reach, then a sparse triangular solve, with threshold partial pivoting | J. R. Gilbert and T. Peierls, "Sparse partial pivoting in time proportional to arithmetic operations," *SIAM J. Sci. Stat. Comput.* 9(5):862–874, 1988. [doi:10.1137/0909058](https://doi.org/10.1137/0909058) |
 | | | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 6. |
+| `Lu::refactor` | Refactoring with the previous pivot sequence and factor patterns, checking each reused pivot | T. A. Davis and E. Palamadai Natarajan, "Algorithm 907: KLU, a direct sparse solver for circuit simulation problems," *ACM Trans. Math. Softw.* 37(3), article 36, 2010. [doi:10.1145/1824801.1824814](https://doi.org/10.1145/1824801.1824814) |
 | `cholesky`, `analyze_cholesky` | Up-looking (row-by-row) sparse Cholesky, with symbolic analysis by the elimination tree and row subtrees | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 4. |
+| | | J. W. H. Liu, "The role of elimination trees in sparse factorization," *SIAM J. Matrix Anal. Appl.* 11(1):134–172, 1990. |
 | `conjugate_gradient` | Conjugate gradient | M. R. Hestenes and E. Stiefel, "Methods of conjugate gradients for solving linear systems," *J. Res. Natl. Bur. Stand.* 49(6):409–436, 1952. [doi:10.6028/jres.049.044](https://doi.org/10.6028/jres.049.044) |
 | | | Y. Saad, *Iterative Methods for Sparse Linear Systems*, 2nd ed., SIAM, 2003. |
 | | | J. R. Shewchuk, "An Introduction to the Conjugate Gradient Method Without the Agonizing Pain," Tech. Rep. CMU-CS-94-125, Carnegie Mellon University, 1994. |
@@ -112,7 +114,6 @@ translation, and the module documentation names the MATPOWER functions each step
 
 | Planned work | Reference |
 |---|---|
-| Refactoring circuit-like matrices (Phase 3) | T. A. Davis and E. Palamadai Natarajan, "Algorithm 907: KLU, a direct sparse solver for circuit simulation problems," *ACM Trans. Math. Softw.* 37(3), article 36, 2010. [doi:10.1145/1824801.1824814](https://doi.org/10.1145/1824801.1824814) |
 | COLAMD ordering (deferred: only needed for patterns far from symmetric) | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "A column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):353–376, 2004. |
 | Low-rank updates for contingencies (Phase 5) | J. Sherman and W. J. Morrison, "Adjustment of an inverse matrix corresponding to a change in one element of a given matrix," *Ann. Math. Statist.* 21(1):124–127, 1950. [doi:10.1214/aoms/1177729893](https://doi.org/10.1214/aoms/1177729893) |
 | | M. A. Woodbury, "Inverting modified matrices," Memorandum Report 42, Statistical Research Group, Princeton University, 1950. |
