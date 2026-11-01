@@ -28,3 +28,34 @@ fn committed_ac_references_read_and_describe_their_cases() {
             .any(|(_, _, _, [pf, _, pt, _])| (pf + pt).abs() > 1e-6));
     }
 }
+
+/// The validation tolerance agreed for Phase 4.5, as for the DC power flow: every result
+/// within 1e-9 of MATPOWER's (p.u., degrees, MW, MVAr).
+const TOLERANCE: f64 = 1e-9;
+
+#[test]
+fn newton_raphson_matches_runpf() {
+    for name in ["case14", "case30", "case118"] {
+        let Some(path) = common::matpower_case(name) else {
+            continue; // not fetched; the skip was reported on stderr
+        };
+        let case = powerflow::case::Case::from_path(&path).unwrap();
+        let reference = read_ac(&committed_dir(), name).unwrap();
+        let solution = powerflow::ac::ac_power_flow(&case).unwrap();
+        let deviation = common::reference::ac_deviation(&case, &solution, &reference).unwrap();
+        eprintln!(
+            "{name}: {} iterations (MATPOWER {}), mismatch {:e}, deviation {deviation:?}",
+            solution.iterations, reference.iterations, solution.mismatch_pu
+        );
+        assert_eq!(solution.iterations, reference.iterations, "{name}");
+        assert!(
+            deviation.largest() <= TOLERANCE,
+            "{name}: {deviation:?} exceeds {TOLERANCE}"
+        );
+        assert!(solution.mismatch_pu < 1e-8);
+        assert_eq!(
+            solution.full_factorizations, 1,
+            "{name}: later iterations refactor"
+        );
+    }
+}

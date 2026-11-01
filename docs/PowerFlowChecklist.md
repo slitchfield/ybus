@@ -495,12 +495,29 @@ types through one code path, and every real result is bit for bit what it was.
       and Q, and the iteration count: 2, 3 and 3). Regenerated under Octave 8.4.0, the DC files
       came out byte-for-byte unchanged; `VERSIONS` now names 8.4.0. `tests/common/reference.rs`
       reads them (`read_ac`), and the reference README documents the files.
-- [ ] Newton–Raphson in polar form: mismatch, then the dS/dV Jacobian built with
+- [x] Newton–Raphson in polar form: mismatch, then the dS/dV Jacobian built with
       `scale_rows`/`scale_cols`, `conj` and `select` over the PV/PQ index sets, then a solve
       using `refactor` from the second iteration on. Convergence control: mismatch tolerance,
       iteration limit, and reported iteration count and final mismatch. `pfsoln`'s
       post-processing (generator reactive power, the slack, branch flows). Validated against
       the reference results within 1e-9, with MATPOWER's iteration counts.
+      `AcModel::solve(&case, AcOptions)` and `ac_power_flow` in `powerflow/src/ac.rs`, following
+      `runpf`'s start, `newtonpf`, `dSbus_dV` and `pfsoln`. The Jacobian is factored by
+      AMD-ordered LU once and refactored afterwards; `AcSolution::full_factorizations` counts
+      fresh factorizations (1 on the reference cases). Non-convergence is the new
+      `PowerflowError::NoConvergence { iterations, mismatch_pu }`, and `SingularNetwork` and
+      `CaseMismatch` now describe either power flow.
+      - **Validation:** case14, case30 and case118 take MATPOWER's 2, 3 and 3 iterations and
+        agree within 6.3e-12 in every result (case118's flows the largest).
+      - **Found while validating:** MATPOWER 8.1's `runpf` uses its MP-Core implementation by
+        default under Octave too (`have_feature('mp_core')` is true), so the reference results
+        come from MP-Core, while this code follows the legacy functions (`newtonpf`, `pfsoln`).
+        On case118 the two agree within 6.4e-12, with the same iteration count, measured with
+        `exp.use_legacy_core`.
+      - **Tests:** power balance at every bus and each branch's π-model flows; dropped elements;
+        non-convergence; zero iterations from a solved start; a flat start (agreeing to the
+        tolerance, 1.3e-8 MW measured); and `pfsoln`'s reactive sharing between generators at a
+        bus, with finite and infinite limits.
 - [ ] Fast-decoupled power flow (XB and BX variants), which factors B′ and B″ once, validated
       the same way.
 - [ ] An AC survey of every MATPOWER case against MATPOWER's `runpf`, recorded in

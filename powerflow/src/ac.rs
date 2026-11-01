@@ -8,7 +8,10 @@
 
 use std::f64::consts::PI;
 
-use sparse_mat::compressed_matrix::{AssemblyMap, CsrMatrix};
+use sparse_mat::compressed_matrix::{
+    AssemblyMap, CscMatrix, CsrMatrix, Lu, LuOptions, Ordering, RefactorOutcome,
+};
+use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
 
 use crate::case::{Branch, Case};
@@ -241,4 +244,445 @@ impl AcModel {
     pub fn pq_buses(&self) -> &[usize] {
         &self.topology.pq_buses
     }
+}
+
+/// Options for the AC power flow. `Default` gives MATPOWER's defaults.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct AcOptions {
+    /// Convergence when the largest real or reactive power mismatch is below this (p.u.).
+    /// MATPOWER's `pf.tol`, 1e-8 by default.
+    pub tolerance: f64,
+    /// The most Newton iterations before giving up. MATPOWER's `pf.nr.max_it`, 10 by default.
+    pub max_iterations: usize,
+}
+
+impl Default for AcOptions {
+    fn default() -> AcOptions {
+        AcOptions {
+            tolerance: 1e-8,
+            max_iterations: 10,
+        }
+    }
+}
+
+/// The result of an AC power flow, indexed like the case's tables.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcSolution {
+    /// Each bus's voltage magnitude (p.u.), one per case bus row. An isolated bus keeps its
+    /// value from the case.
+    pub vm_pu: Vec<f64>,
+    /// Each bus's voltage angle (degrees), one per case bus row. An isolated bus keeps its
+    /// angle from the case.
+    pub va_deg: Vec<f64>,
+    /// Each generator's real power output (MW), one per case generator row: its scheduled
+    /// output, except that the first generator at each reference bus takes up the slack. 0.0
+    /// for a generator that's out of service or at an isolated bus.
+    pub pg_mw: Vec<f64>,
+    /// Each generator's reactive power output (MVAr): at a REF or PV bus, what holds its
+    /// voltage, shared among the bus's generators as MATPOWER's `pfsoln` shares it; at a PQ
+    /// bus, its scheduled output. 0.0 for a generator that's out of service or at an isolated
+    /// bus.
+    pub qg_mvar: Vec<f64>,
+    /// Each branch's real power flowing into it at the from end (MW), one per case branch
+    /// row. 0.0 for a branch that's out of service or touches an isolated bus.
+    pub pf_mw: Vec<f64>,
+    /// Each branch's reactive power flowing into it at the from end (MVAr).
+    pub qf_mvar: Vec<f64>,
+    /// Each branch's real power flowing into it at the to end (MW). `pf_mw + pt_mw` is the
+    /// branch's loss.
+    pub pt_mw: Vec<f64>,
+    /// Each branch's reactive power flowing into it at the to end (MVAr).
+    pub qt_mvar: Vec<f64>,
+    /// How many Newton iterations were taken: 0 if the starting point already met the
+    /// tolerance.
+    pub iterations: usize,
+    /// The largest real or reactive power mismatch at the solution (p.u.), below the tolerance.
+    pub mismatch_pu: f64,
+    /// How many times the Jacobian was factored afresh: 1 when every later iteration refactored
+    /// with the first factorization's pivots (0 when no iteration was needed).
+    pub full_factorizations: usize,
+}
+
+/// The Jacobian's real and reactive blocks over the unknowns, as `newtonpf` stacks them.
+struct Unknowns {
+    pv: Vec<usize>,
+    pq: Vec<usize>,
+    pv_pq: Vec<usize>,
+}
+
+impl AcModel {
+    /// Solves the AC power flow for `case`'s injections and voltage setpoints by Newton's
+    /// method in polar form, as MATPOWER's `runpf` does with its default options (`newtonpf`,
+    /// then `pfsoln`).
+    ///
+    /// `case` must be the case the model was built from, or a copy with different injections,
+    /// setpoints or starting voltages: `pd_mw`, `qd_mvar`, `pg_mw`, `qg_mvar`, `vg_pu`,
+    /// `qmax_mvar`, `qmin_mvar`, `vm_pu` and `va_deg` are read from `case`, and everything else
+    /// from the model.
+    ///
+    /// - **Start:** each bus's case voltage, with each in-service generator's `vg_pu` setting
+    ///   the magnitude at REF and PV buses (the last generator listed at a bus wins, as in
+    ///   `runpf`).
+    /// - **Iteration:** the mismatch is `V ∘ conj(Ybus V) − Sbus` (`sbus_pu`); its real part at
+    ///   PV and PQ buses and imaginary part at PQ buses must all fall below
+    ///   `options.tolerance`. The Jacobian `[[Re dS/dVa, Re dS/dVm], [Im dS/dVa, Im dS/dVm]]`
+    ///   over those unknowns is built from Ybus each iteration, keeps one pattern, and is
+    ///   factored by AMD-ordered LU once, then refactored with the same pivots.
+    /// - **Results:** `pfsoln`'s: the slack at each reference bus, reactive output at REF and PV
+    ///   buses, and every in-service branch's flows at both ends.
+    ///
+    /// Reactive power limits aren't enforced, as in `runpf`'s default. Returns
+    /// `PowerflowError::CaseMismatch` if `case`'s tables differ in length from the model's,
+    /// `NoConvergence` if the tolerance isn't met within `options.max_iterations`, and
+    /// `SingularNetwork` if the Jacobian is singular.
+    pub fn solve(&self, case: &Case, options: AcOptions) -> Result<AcSolution, PowerflowError> {
+        self.topology.check_case(case)?;
+        let topology = &self.topology;
+        let unknowns = Unknowns {
+            pv: topology.pv_buses.clone(),
+            pq: topology.pq_buses.clone(),
+            pv_pq: topology.pv_pq(),
+        };
+        let (npv, npq) = (unknowns.pv.len(), unknowns.pq.len());
+
+        // runpf's start: case voltages, with generator setpoints at voltage-controlled buses.
+        //   Each setpoint scales the case voltage, so its angle is kept
+        let start: Vec<Complex<f64>> = topology
+            .bus_rows
+            .iter()
+            .map(|&row| {
+                let bus = &case.bus[row];
+                Complex::from_polar(bus.vm_pu, bus.va_deg * PI / 180.0)
+            })
+            .collect();
+        let mut v = start.clone();
+        let mut voltage_controlled = vec![true; v.len()];
+        for &bus in &unknowns.pq {
+            voltage_controlled[bus] = false;
+        }
+        for (&row, &bus) in topology.gen_rows.iter().zip(&topology.gen_buses) {
+            if voltage_controlled[bus] {
+                v[bus] = start[bus] * (case.generator[row].vg_pu / start[bus].norm());
+            }
+        }
+        let sbus = self.sbus_pu(case);
+
+        let mut vm: Vec<f64> = v.iter().map(|value| value.norm()).collect();
+        let mut va: Vec<f64> = v.iter().map(|value| value.arg()).collect();
+        let (mut f, mut norm_f) = self.mismatch(&v, &sbus, &unknowns);
+        let mut iterations = 0;
+        let mut full_factorizations = 0;
+        let mut lu: Option<Lu<f64>> = None;
+        let mut converged = norm_f < options.tolerance;
+        while !converged && iterations < options.max_iterations {
+            iterations += 1;
+            let jacobian = self.jacobian(&v, &unknowns);
+            let singular = |column: usize| PowerflowError::SingularNetwork {
+                bus_label: case.bus[topology.bus_rows[unknowns.column_bus(column)]].bus_label,
+            };
+            // Factor once, then reuse the pivots while they stay acceptable
+            let factor = match lu.as_mut() {
+                Some(lu) => match lu.refactor(&jacobian) {
+                    Ok(RefactorOutcome::Reused) => Ok(()),
+                    Ok(RefactorOutcome::Repivoted) => {
+                        full_factorizations += 1;
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                },
+                None => jacobian
+                    .analyze_lu(Ordering::Amd)
+                    .and_then(|symbolic| symbolic.factor(&jacobian, LuOptions::default()))
+                    .map(|factored| {
+                        full_factorizations += 1;
+                        lu = Some(factored);
+                    }),
+            };
+            match factor {
+                Ok(()) => {}
+                Err(SparseError::SingularMatrix { pivot }) => return Err(singular(pivot)),
+                Err(err) => unreachable!("LU of a square Jacobian with a fixed pattern: {err}"),
+            }
+            let rhs: Vec<f64> = f.iter().map(|value| -value).collect();
+            let dx = lu
+                .as_ref()
+                .expect("factored above")
+                .solve(&rhs)
+                .expect("one mismatch per unknown");
+
+            // newtonpf's update, then the magnitudes and angles again from V, in case a
+            //   magnitude went negative
+            for (k, &bus) in unknowns.pv.iter().enumerate() {
+                va[bus] += dx[k];
+            }
+            for (k, &bus) in unknowns.pq.iter().enumerate() {
+                va[bus] += dx[npv + k];
+                vm[bus] += dx[npv + npq + k];
+            }
+            for ((value, &magnitude), &angle) in v.iter_mut().zip(&vm).zip(&va) {
+                *value = Complex::from_polar(magnitude, angle);
+            }
+            for ((value, magnitude), angle) in v.iter().zip(&mut vm).zip(&mut va) {
+                *magnitude = value.norm();
+                *angle = value.arg();
+            }
+            (f, norm_f) = self.mismatch(&v, &sbus, &unknowns);
+            converged = norm_f < options.tolerance;
+        }
+        if !converged {
+            return Err(PowerflowError::NoConvergence {
+                iterations,
+                mismatch_pu: norm_f,
+            });
+        }
+        Ok(self.results(case, &v, iterations, norm_f, full_factorizations))
+    }
+
+    /// `newtonpf`'s mismatch vector `[Re mis[pv]; Re mis[pq]; Im mis[pq]]`, with
+    /// `mis = V ∘ conj(Ybus V) − Sbus`, and its infinity norm.
+    fn mismatch(
+        &self,
+        v: &[Complex<f64>],
+        sbus: &[Complex<f64>],
+        unknowns: &Unknowns,
+    ) -> (Vec<f64>, f64) {
+        let current = self.ybus.mul_vec(v).expect("one voltage per bus");
+        let mis: Vec<Complex<f64>> = v
+            .iter()
+            .zip(&current)
+            .zip(sbus)
+            .map(|((&v, &i), &s)| v * i.conj() - s)
+            .collect();
+        let f: Vec<f64> = unknowns
+            .pv_pq
+            .iter()
+            .map(|&bus| mis[bus].re)
+            .chain(unknowns.pq.iter().map(|&bus| mis[bus].im))
+            .collect();
+        let norm = f
+            .iter()
+            .fold(0.0, |largest: f64, value| largest.max(value.abs()));
+        (f, norm)
+    }
+
+    /// `newtonpf`'s Jacobian in CSC form, from `dSbus_dV`:
+    /// `dS/dVa = j·diag(V)·conj(diag(I) − Ybus·diag(V))` and
+    /// `dS/dVm = diag(V)·conj(Ybus·diag(V/|V|)) + conj(diag(I))·diag(V/|V|)`, with `I = Ybus V`,
+    /// stacked as `[[Re dS/dVa[pvpq, pvpq], Re dS/dVm[pvpq, pq]], [Im dS/dVa[pq, pvpq],
+    /// Im dS/dVm[pq, pq]]]`. Ybus stores its whole diagonal, so every iteration's Jacobian has
+    /// the same pattern.
+    fn jacobian(&self, v: &[Complex<f64>], unknowns: &Unknowns) -> CscMatrix<f64> {
+        let shapes = "the factors match Ybus's dimensions";
+        let current = self.ybus.mul_vec(v).expect(shapes);
+        let v_unit: Vec<Complex<f64>> = v.iter().map(|value| value / value.norm()).collect();
+        let j_v: Vec<Complex<f64>> = v.iter().map(|value| value * Complex::i()).collect();
+
+        let ybus_v = self.ybus.scale_cols(v).expect(shapes);
+        let ds_dva = (&CsrMatrix::from_diagonal(current.iter().copied()) - &ybus_v)
+            .conj()
+            .scale_rows(&j_v)
+            .expect(shapes);
+        let ds_dvm = &self
+            .ybus
+            .scale_cols(&v_unit)
+            .expect(shapes)
+            .conj()
+            .scale_rows(v)
+            .expect(shapes)
+            + &CsrMatrix::from_diagonal(current.iter().zip(&v_unit).map(|(i, u)| i.conj() * u));
+
+        let block = |matrix: &CsrMatrix<f64>, rows: &[usize], cols: &[usize]| {
+            matrix.select(rows, cols).expect("bus indices are in range")
+        };
+        let (re_va, im_va) = (ds_dva.real(), ds_dva.imag());
+        let (re_vm, im_vm) = (ds_dvm.real(), ds_dvm.imag());
+        let (pvpq, pq) = (&unknowns.pv_pq, &unknowns.pq);
+        let top = CsrMatrix::hstack([block(&re_va, pvpq, pvpq), block(&re_vm, pvpq, pq)]);
+        let bottom = CsrMatrix::hstack([block(&im_va, pq, pvpq), block(&im_vm, pq, pq)]);
+        CsrMatrix::vstack([top.expect(shapes), bottom.expect(shapes)])
+            .expect(shapes)
+            .to_csc()
+    }
+
+    /// `pfsoln`'s results, indexed like the case's tables.
+    fn results(
+        &self,
+        case: &Case,
+        v: &[Complex<f64>],
+        iterations: usize,
+        mismatch_pu: f64,
+        full_factorizations: usize,
+    ) -> AcSolution {
+        let topology = &self.topology;
+        let base_mva = self.base_mva;
+        let mut vm_pu: Vec<f64> = case.bus.iter().map(|bus| bus.vm_pu).collect();
+        let mut va_deg: Vec<f64> = case.bus.iter().map(|bus| bus.va_deg).collect();
+        for (&row, value) in topology.bus_rows.iter().zip(v) {
+            vm_pu[row] = value.norm();
+            va_deg[row] = value.arg() * 180.0 / PI;
+        }
+
+        // Generators: scheduled outputs for those in service at connected buses, zero for the
+        //   rest, as runpf reports them
+        let mut pg_mw = vec![0.0; case.generator.len()];
+        let mut qg_mvar = vec![0.0; case.generator.len()];
+        for &row in &topology.gen_rows {
+            pg_mw[row] = case.generator[row].pg_mw;
+            qg_mvar[row] = case.generator[row].qg_mvar;
+        }
+        // pfsoln's "on": in service at a bus whose case type isn't PQ
+        let on: Vec<(usize, usize)> = topology
+            .gen_rows
+            .iter()
+            .zip(&topology.gen_buses)
+            .filter(|&(_, &bus)| {
+                case.bus[topology.bus_rows[bus]].bus_type != crate::case::BusType::PQ
+            })
+            .map(|(&row, &bus)| (row, bus))
+            .collect();
+        let injection = |bus: usize| -> Complex<f64> {
+            let row: Complex<f64> = self
+                .ybus
+                .outer(bus)
+                .map(|(cols, values)| {
+                    cols.iter()
+                        .zip(values)
+                        .fold(Complex::new(0.0, 0.0), |sum, (&j, &y)| sum + y * v[j])
+                })
+                .expect("bus indices are in range");
+            v[bus] * row.conj()
+        };
+        let s_on: Vec<Complex<f64>> = on.iter().map(|&(_, bus)| injection(bus)).collect();
+        for (&(row, bus), s) in on.iter().zip(&s_on) {
+            let qd = case.bus[topology.bus_rows[bus]].qd_mvar;
+            qg_mvar[row] = s.im * base_mva + qd;
+        }
+        if on.len() > 1 {
+            share_reactive_power(case, &on, &mut qg_mvar);
+        }
+        // The slack: the first "on" generator at each reference bus takes up the difference
+        for &reference in &topology.ref_buses {
+            let at_bus: Vec<usize> = (0..on.len()).filter(|&k| on[k].1 == reference).collect();
+            let first = *at_bus
+                .first()
+                .expect("a reference bus has an in-service generator");
+            let pd = case.bus[topology.bus_rows[reference]].pd_mw;
+            let others: f64 = at_bus[1..].iter().map(|&k| pg_mw[on[k].0]).sum();
+            pg_mw[on[first].0] = s_on[first].re * base_mva + pd - others;
+        }
+
+        // Branch flows at both ends, zero for branches out of service or touching an isolated
+        //   bus
+        let nl = case.branch.len();
+        let (mut pf_mw, mut qf_mvar, mut pt_mw, mut qt_mvar) =
+            (vec![0.0; nl], vec![0.0; nl], vec![0.0; nl], vec![0.0; nl]);
+        let i_from = self.yf.mul_vec(v).expect("one voltage per bus");
+        let i_to = self.yt.mul_vec(v).expect("one voltage per bus");
+        for (k, (&row, &(f, t))) in topology.branch_rows.iter().zip(&topology.ends).enumerate() {
+            let sf = v[f] * i_from[k].conj() * base_mva;
+            let st = v[t] * i_to[k].conj() * base_mva;
+            (pf_mw[row], qf_mvar[row]) = (sf.re, sf.im);
+            (pt_mw[row], qt_mvar[row]) = (st.re, st.im);
+        }
+        AcSolution {
+            vm_pu,
+            va_deg,
+            pg_mw,
+            qg_mvar,
+            pf_mw,
+            qf_mvar,
+            pt_mw,
+            qt_mvar,
+            iterations,
+            mismatch_pu,
+            full_factorizations,
+        }
+    }
+}
+
+impl Unknowns {
+    /// The bus (internal index) whose angle (the first `pv_pq.len()` columns) or magnitude (the
+    /// rest) Jacobian column `column` stands for.
+    fn column_bus(&self, column: usize) -> usize {
+        match self.pv_pq.get(column) {
+            Some(&bus) => bus,
+            None => self.pq[column - self.pv_pq.len()],
+        }
+    }
+}
+
+/// `pfsoln`'s sharing of each bus's reactive output among its "on" generators (in service at a
+/// REF or PV bus), when there is more than one such generator in the system. `qg_mvar` holds
+/// each one's bus total on entry.
+///
+/// Each generator first gets an equal share. Infinite limits are replaced by a bound `M`: the
+/// generator's share plus its finite limits' magnitudes, summed over the generators at its bus.
+/// Then each generator gets its minimum plus the same fraction of its range, the fraction that
+/// puts the bus's total where it should be. At a bus whose total range is zero (within
+/// `10 ε`), the excess over the minimum is split equally.
+fn share_reactive_power(case: &Case, on: &[(usize, usize)], qg_mvar: &mut [f64]) {
+    let mut count_at: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+    for &(_, bus) in on {
+        *count_at.entry(bus).or_default() += 1.0;
+    }
+    let share: Vec<f64> = on
+        .iter()
+        .map(|&(row, bus)| qg_mvar[row] / count_at[&bus])
+        .collect();
+    let finite_magnitude = |limit: f64| {
+        if limit.is_infinite() {
+            0.0
+        } else {
+            limit.abs()
+        }
+    };
+    let mut bound_at: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+    for (k, &(row, bus)) in on.iter().enumerate() {
+        let generator = &case.generator[row];
+        *bound_at.entry(bus).or_default() += share[k].abs()
+            + finite_magnitude(generator.qmax_mvar)
+            + finite_magnitude(generator.qmin_mvar);
+    }
+    let limit = |value: f64, bus: usize| {
+        if value == f64::INFINITY {
+            bound_at[&bus]
+        } else if value == f64::NEG_INFINITY {
+            -bound_at[&bus]
+        } else {
+            value
+        }
+    };
+    let (qmin, qmax): (Vec<f64>, Vec<f64>) = on
+        .iter()
+        .map(|&(row, bus)| {
+            let generator = &case.generator[row];
+            (
+                limit(generator.qmin_mvar, bus),
+                limit(generator.qmax_mvar, bus),
+            )
+        })
+        .unzip();
+    let mut total: std::collections::HashMap<usize, (f64, f64, f64)> =
+        std::collections::HashMap::new();
+    for (k, &(_, bus)) in on.iter().enumerate() {
+        let entry = total.entry(bus).or_default();
+        entry.0 += share[k];
+        entry.1 += qmin[k];
+        entry.2 += qmax[k];
+    }
+    for (k, &(row, bus)) in on.iter().enumerate() {
+        let (q_total, q_min, q_max) = total[&bus];
+        qg_mvar[row] = if (q_min - q_max).abs() < 10.0 * f64::EPSILON {
+            qmin[k] + (q_total - q_min) / count_at[&bus]
+        } else {
+            qmin[k] + (q_total - q_min) / (q_max - q_min + f64::EPSILON) * (qmax[k] - qmin[k])
+        };
+    }
+}
+
+/// Runs an AC power flow on `case` with MATPOWER's default options: [`AcModel::new`] followed
+/// by [`AcModel::solve`], with their errors.
+pub fn ac_power_flow(case: &Case) -> Result<AcSolution, PowerflowError> {
+    AcModel::new(case)?.solve(case, AcOptions::default())
 }

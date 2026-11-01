@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use powerflow::ac::AcSolution;
 use powerflow::case::Case;
 use powerflow::dc::DcSolution;
 
@@ -199,4 +200,83 @@ fn largest_difference(actual: &[f64], expected: impl Iterator<Item = f64>) -> f6
                 largest
             }
         })
+}
+
+/// The largest absolute differences between an AC solution and `runpf`'s results.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AcDeviation {
+    /// Voltage magnitudes (p.u.).
+    pub vm_pu: f64,
+    /// Voltage angles (degrees).
+    pub va_deg: f64,
+    /// Generator real and reactive outputs (MW, MVAr).
+    pub pg_mw: f64,
+    pub qg_mvar: f64,
+    /// Branch flows at the from end and at the to end (MW, MVAr).
+    pub pf_mw: f64,
+    pub qf_mvar: f64,
+    pub pt_mw: f64,
+    pub qt_mvar: f64,
+}
+
+impl AcDeviation {
+    /// The largest of the differences, or NaN if any is NaN.
+    pub fn largest(&self) -> f64 {
+        [
+            self.vm_pu,
+            self.va_deg,
+            self.pg_mw,
+            self.qg_mvar,
+            self.pf_mw,
+            self.qf_mvar,
+            self.pt_mw,
+            self.qt_mvar,
+        ]
+        .into_iter()
+        .fold(0.0, |largest, d| {
+            if d.is_nan() || d > largest {
+                d
+            } else {
+                largest
+            }
+        })
+    }
+}
+
+/// The largest absolute differences between an AC `solution` and `reference`, after checking
+/// that `reference` describes `case`, as `deviation` does.
+pub fn ac_deviation(
+    case: &Case,
+    solution: &AcSolution,
+    reference: &AcReference,
+) -> Result<AcDeviation, String> {
+    let same_buses = case
+        .bus
+        .iter()
+        .map(|bus| bus.bus_label)
+        .eq(reference.bus.iter().map(|bus| bus.0));
+    let same_branches = case
+        .branch
+        .iter()
+        .map(|branch| (branch.from_label, branch.to_label, branch.status))
+        .eq(reference.branch.iter().map(|b| (b.0, b.1, b.2)));
+    let same_gens = case
+        .generator
+        .iter()
+        .map(|generator| generator.bus_label)
+        .eq(reference.gen.iter().map(|generator| generator.0));
+    if !(same_buses && same_branches && same_gens) {
+        return Err("the reference's tables don't match the case's".to_string());
+    }
+    let flow = |k: usize| reference.branch.iter().map(move |b| b.3[k]);
+    Ok(AcDeviation {
+        vm_pu: largest_difference(&solution.vm_pu, reference.bus.iter().map(|b| b.1)),
+        va_deg: largest_difference(&solution.va_deg, reference.bus.iter().map(|b| b.2)),
+        pg_mw: largest_difference(&solution.pg_mw, reference.gen.iter().map(|g| g.1)),
+        qg_mvar: largest_difference(&solution.qg_mvar, reference.gen.iter().map(|g| g.2)),
+        pf_mw: largest_difference(&solution.pf_mw, flow(0)),
+        qf_mvar: largest_difference(&solution.qf_mvar, flow(1)),
+        pt_mw: largest_difference(&solution.pt_mw, flow(2)),
+        qt_mvar: largest_difference(&solution.qt_mvar, flow(3)),
+    })
 }
