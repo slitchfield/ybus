@@ -610,8 +610,23 @@ item.
       `solve_round` (one solve under given roles and a case's injections) and `results` (which
       takes the roles for its slack). The DC survey (78 cases) and the AC survey (234
       case-and-method rows) match their records in every column but time and memory.
-- [ ] Enforce generator reactive power limits as `runpf`'s `pf.enforce_q_lims` does (both
+- [x] Enforce generator reactive power limits as `runpf`'s `pf.enforce_q_lims` does (both
       modes), with fixture tests.
+      `AcOptions::reactive_limits` (`ReactiveLimits::Ignore` by default, `AllAtOnce`,
+      `OneAtATime`), following legacy `runpf`'s loop: solve, `pfsoln`, find in-service generators
+      past `Qmax + 5e-6` or `Qmin − 5e-6`, hold them (or the largest) at the limit and make their
+      buses PQ, rerun `bustypes`, and solve again from the last voltages, with `pfsoln`'s outputs
+      carried into the next round's injections. Violations are listed in MATPOWER's internal
+      generator order (by bus, then row). `AcSolution::limited_generators` lists the held
+      generators, and `iterations` totals every round. New errors: `ReactiveLimitsInfeasible`,
+      `ReferenceAtReactiveLimit` (MATPOWER's multiple-slack error) and `InvertedReactiveLimits`.
+      Changed from MATPOWER: a generator with `Qmin > Qmax` is refused, since holding it at
+      either limit violates the other and `runpf`'s loop alternates forever (found when a test
+      fixture did exactly that). With proper limits the loop always ends: a bus made PQ stays
+      PQ, and a generator held at a limit can't violate it again. Fixture tests: upper and
+      lower limits, two generators sharing a bus, a reference handing over to a PV bus (with
+      the original angle restored), several references, infeasibility, inverted limits, and
+      one at a time against all at once, each checked for power balance.
 - [ ] MATPOWER's reactive-limit reference results, and the tests against them.
 - [ ] A survey with reactive limits enforced, recorded in `docs/benchmarks/`, and the docs.
 

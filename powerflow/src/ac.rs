@@ -20,7 +20,7 @@ use sparse_mat::compressed_matrix::{
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
 
-use crate::case::{Branch, Case};
+use crate::case::{Branch, BusType, Case};
 use crate::powerflow_error::PowerflowError;
 use crate::topology::{Roles, Topology};
 
@@ -281,6 +281,20 @@ pub enum AcMethod {
     FastDecoupledBx,
 }
 
+/// Whether and how to enforce generators' reactive power limits, as MATPOWER's
+/// `pf.enforce_q_lims` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReactiveLimits {
+    /// Ignore them (`enforce_q_lims = 0`, MATPOWER's default).
+    Ignore,
+    /// After each solve, hold every generator outside its limits at the limit, make its bus PQ,
+    /// and solve again, until none is (`enforce_q_lims = 1`).
+    AllAtOnce,
+    /// The same, but only the largest violation each round (`enforce_q_lims = 2`).
+    OneAtATime,
+}
+
 /// Options for the AC power flow. `Default` gives MATPOWER's defaults, for Newton's method.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -293,11 +307,13 @@ pub struct AcOptions {
     pub max_iterations: usize,
     /// The solution method.
     pub method: AcMethod,
+    /// Whether to enforce generators' reactive power limits. Ignored by default, as in MATPOWER.
+    pub reactive_limits: ReactiveLimits,
 }
 
 impl AcOptions {
-    /// MATPOWER's defaults for `method`: tolerance 1e-8, and at most 10 Newton iterations or
-    /// 30 fast-decoupled ones.
+    /// MATPOWER's defaults for `method`: tolerance 1e-8, at most 10 Newton iterations or 30
+    /// fast-decoupled ones, and reactive limits ignored.
     pub fn for_method(method: AcMethod) -> AcOptions {
         AcOptions {
             tolerance: 1e-8,
@@ -306,6 +322,7 @@ impl AcOptions {
                 AcMethod::FastDecoupledXb | AcMethod::FastDecoupledBx => 30,
             },
             method,
+            reactive_limits: ReactiveLimits::Ignore,
         }
     }
 }
@@ -345,12 +362,16 @@ pub struct AcSolution {
     /// Each branch's reactive power flowing into it at the to end (MVAr).
     pub qt_mvar: Vec<f64>,
     /// How many iterations were taken: Newton iterations, or for fast-decoupled, P
-    /// half-iterations, as MATPOWER counts them. 0 if the starting point already met the
-    /// tolerance.
+    /// half-iterations, as MATPOWER counts them, summed over every solve when reactive limits
+    /// are enforced. 0 if the starting point already met the tolerance.
     pub iterations: usize,
     /// The largest real or reactive power mismatch at the solution (p.u.), below the tolerance.
     /// Fast-decoupled measures it divided by each bus's voltage magnitude, as `fdpf` does.
     pub mismatch_pu: f64,
+    /// The case generator rows held at a reactive power limit when limits are enforced, in the
+    /// order they were found (each round's in MATPOWER's internal order: by bus, then by row).
+    /// Empty when limits are ignored or none was reached.
+    pub limited_generators: Vec<usize>,
     /// How many matrices were factored afresh. Newton's method: 1 when every later iteration
     /// refactored the Jacobian with the first factorization's pivots. Fast-decoupled: 2, B′ and
     /// B″. 0 when no iteration was needed.
@@ -404,10 +425,195 @@ impl AcModel {
     /// infinite once resistance is ignored.
     pub fn solve(&self, case: &Case, options: AcOptions) -> Result<AcSolution, PowerflowError> {
         self.topology.check_case(case)?;
-        let roles = self.topology.roles();
-        let v = self.start(case, &roles);
-        let solved = self.solve_round(case, &roles, v, options)?;
-        Ok(self.results(case, &roles, &solved))
+        match options.reactive_limits {
+            ReactiveLimits::Ignore => {
+                let roles = self.topology.roles();
+                let v = self.start(case, &roles);
+                let solved = self.solve_round(case, &roles, v, options)?;
+                Ok(self.results(case, &roles, &solved))
+            }
+            ReactiveLimits::AllAtOnce => self.solve_with_limits(case, options, false),
+            ReactiveLimits::OneAtATime => self.solve_with_limits(case, options, true),
+        }
+    }
+
+    /// `runpf`'s enforcement of reactive power limits (`pf.enforce_q_lims` 1, or 2 if
+    /// `one_at_a_time`), around `solve_round`.
+    ///
+    /// Each round solves, then computes `pfsoln`'s results, whose outputs (the slack's `Pg`,
+    /// and `Qg` at REF and PV buses) carry into the next round's injections, as `runpf`'s
+    /// generator table does. A generator in service at a connected bus violates its limits if
+    /// `Qg > Qmax + 5e-6` or `Qg < Qmin − 5e-6` (MATPOWER's `opf.violation`), whatever its bus
+    /// type (generators with `Qmin > Qmax` are refused first, as `InvertedReactiveLimits`, since
+    /// MATPOWER's loop never ends on them). If none does, the last round's results stand. If the violators are exactly the
+    /// remaining generators at REF and PV buses, all past the same limit, the problem is
+    /// infeasible. Otherwise each violator (or only the largest, one at a time) is held at its
+    /// limit and its bus made PQ, `bustypes` reruns (possibly promoting a PV bus to reference),
+    /// and the next round starts from this round's voltages. At the end, if the reference moved,
+    /// every connected bus's angle is shifted so the original reference keeps its case angle.
+    fn solve_with_limits(
+        &self,
+        case: &Case,
+        options: AcOptions,
+        one_at_a_time: bool,
+    ) -> Result<AcSolution, PowerflowError> {
+        const VIOLATION: f64 = 5e-6;
+        let topology = &self.topology;
+        // With Qmin > Qmax, holding a generator at one limit violates the other, and runpf's loop
+        //   would alternate forever; with proper limits it ends, since a bus made PQ stays PQ
+        if let Some(&row) = topology.gen_rows.iter().find(|&&row| {
+            let generator = &case.generator[row];
+            generator.qmin_mvar > generator.qmax_mvar
+        }) {
+            return Err(PowerflowError::InvertedReactiveLimits { row: row + 1 });
+        }
+        let mut working = case.clone();
+        let mut roles = topology.roles();
+        let original_ref = roles.ref_buses.clone();
+        let original_ref_angle: Vec<f64> = original_ref
+            .iter()
+            .map(|&bus| case.bus[topology.bus_rows[bus]].va_deg)
+            .collect();
+        // MATPOWER's internal generator order: by internal bus, then by case row
+        let mut order: Vec<usize> = (0..topology.gen_rows.len()).collect();
+        order.sort_by_key(|&k| topology.gen_buses[k]);
+        let bus_type = |working: &Case, k: usize| {
+            working.bus[topology.bus_rows[topology.gen_buses[k]]].bus_type
+        };
+
+        let mut limited = vec![];
+        let mut iterations = 0;
+        let mut factorizations = 0;
+        let mut v = self.start(case, &roles);
+        loop {
+            let solved = match self.solve_round(&working, &roles, v.clone(), options) {
+                Ok(solved) => solved,
+                Err(PowerflowError::NoConvergence {
+                    iterations: round,
+                    mismatch_pu,
+                }) => {
+                    return Err(PowerflowError::NoConvergence {
+                        iterations: iterations + round,
+                        mismatch_pu,
+                    })
+                }
+                Err(err) => return Err(err),
+            };
+            iterations += solved.iterations;
+            factorizations += solved.full_factorizations;
+            let mut result = self.results(&working, &roles, &solved);
+            // pfsoln's outputs carry into the next round's generator table
+            for &row in &topology.gen_rows {
+                working.generator[row].pg_mw = result.pg_mw[row];
+                working.generator[row].qg_mvar = result.qg_mvar[row];
+            }
+
+            // Violations, in MATPOWER's internal generator order
+            let (mut above, mut below): (Vec<usize>, Vec<usize>) = (vec![], vec![]);
+            for &k in &order {
+                let row = topology.gen_rows[k];
+                let generator = &working.generator[row];
+                if result.qg_mvar[row] > generator.qmax_mvar + VIOLATION {
+                    above.push(k);
+                } else if result.qg_mvar[row] < generator.qmin_mvar - VIOLATION {
+                    below.push(k);
+                }
+            }
+            if above.is_empty() && below.is_empty() {
+                if roles.ref_buses != original_ref {
+                    let shift = va_at(&result, topology, original_ref[0]) - original_ref_angle[0];
+                    for &row in &topology.bus_rows {
+                        result.va_deg[row] -= shift;
+                    }
+                }
+                result.iterations = iterations;
+                result.full_factorizations = factorizations;
+                result.limited_generators = limited;
+                return Ok(result);
+            }
+
+            // Infeasible: every remaining generator at a REF or PV bus violates, all the same way
+            let mut violating: Vec<usize> = above.iter().chain(&below).copied().collect();
+            violating.sort_by_key(|&k| order.iter().position(|&o| o == k));
+            let remaining: Vec<usize> = order
+                .iter()
+                .copied()
+                .filter(|&k| matches!(bus_type(&working, k), BusType::PV | BusType::Ref))
+                .collect();
+            if violating == remaining && (above.is_empty() || below.is_empty()) {
+                return Err(PowerflowError::ReactiveLimitsInfeasible {
+                    generators: violating.len(),
+                });
+            }
+
+            // One at a time: only the largest violation (the first, on a tie)
+            if one_at_a_time {
+                let excess = |k: usize, upper: bool| {
+                    let row = topology.gen_rows[k];
+                    let generator = &working.generator[row];
+                    if upper {
+                        result.qg_mvar[row] - generator.qmax_mvar
+                    } else {
+                        generator.qmin_mvar - result.qg_mvar[row]
+                    }
+                };
+                let candidates: Vec<(usize, bool)> = above
+                    .iter()
+                    .map(|&k| (k, true))
+                    .chain(below.iter().map(|&k| (k, false)))
+                    .collect();
+                let mut best = candidates[0];
+                for &candidate in &candidates[1..] {
+                    if excess(candidate.0, candidate.1) > excess(best.0, best.1) {
+                        best = candidate;
+                    }
+                }
+                (above, below) = if best.1 {
+                    (vec![best.0], vec![])
+                } else {
+                    (vec![], vec![best.0])
+                };
+            }
+
+            // Hold each at its limit and make its bus PQ
+            let converted: Vec<(usize, f64)> = above
+                .iter()
+                .map(|&k| (k, working.generator[topology.gen_rows[k]].qmax_mvar))
+                .chain(
+                    below
+                        .iter()
+                        .map(|&k| (k, working.generator[topology.gen_rows[k]].qmin_mvar)),
+                )
+                .collect();
+            if roles.ref_buses.len() > 1 {
+                if let Some(&(k, _)) = converted
+                    .iter()
+                    .find(|&&(k, _)| bus_type(&working, k) == BusType::Ref)
+                {
+                    return Err(PowerflowError::ReferenceAtReactiveLimit {
+                        bus_label: working.bus[topology.bus_rows[topology.gen_buses[k]]].bus_label,
+                    });
+                }
+            }
+            for &(k, limit) in &converted {
+                let row = topology.gen_rows[k];
+                working.generator[row].qg_mvar = limit;
+                working.bus[topology.bus_rows[topology.gen_buses[k]]].bus_type = BusType::PQ;
+                limited.push(row);
+            }
+            let previous_ref = roles.ref_buses.clone();
+            roles = topology.bustypes(&working)?;
+            // bustypes may have promoted a new reference; record it in the bus types, as runpf does
+            if roles.ref_buses != previous_ref {
+                for &bus in &roles.ref_buses {
+                    working.bus[topology.bus_rows[bus]].bus_type = BusType::Ref;
+                }
+                for &bus in &roles.pv_buses {
+                    working.bus[topology.bus_rows[bus]].bus_type = BusType::PV;
+                }
+            }
+            v = solved.v;
+        }
     }
 
     /// `runpf`'s starting voltages: each connected bus's case voltage, with each in-service
@@ -798,9 +1004,7 @@ impl AcModel {
             .gen_rows
             .iter()
             .zip(&topology.gen_buses)
-            .filter(|&(_, &bus)| {
-                case.bus[topology.bus_rows[bus]].bus_type != crate::case::BusType::PQ
-            })
+            .filter(|&(_, &bus)| case.bus[topology.bus_rows[bus]].bus_type != BusType::PQ)
             .map(|(&row, &bus)| (row, bus))
             .collect();
         let injection = |bus: usize| -> Complex<f64> {
@@ -858,6 +1062,7 @@ impl AcModel {
             qt_mvar,
             iterations,
             mismatch_pu,
+            limited_generators: vec![],
             full_factorizations,
         }
     }
@@ -1098,6 +1303,11 @@ fn share_reactive_power(case: &Case, on: &[(usize, usize)], qg_mvar: &mut [f64])
             qmin[k] + (q_total - q_min) / (q_max - q_min + f64::EPSILON) * (qmax[k] - qmin[k])
         };
     }
+}
+
+/// The solved angle (degrees) of internal bus `bus`.
+fn va_at(solution: &AcSolution, topology: &Topology, bus: usize) -> f64 {
+    solution.va_deg[topology.bus_rows[bus]]
 }
 
 /// Runs an AC power flow on `case` with MATPOWER's default options (Newton's method):

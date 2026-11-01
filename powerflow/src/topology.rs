@@ -130,6 +130,14 @@ impl Topology {
         }
     }
 
+    /// The bus roles `case`'s bus types give over this topology's connected buses and
+    /// in-service generators, by `bustypes`. `case` may differ from the topology's own case in
+    /// its bus types (as a power flow enforcing reactive limits changes them), not in its
+    /// tables or which elements are in service.
+    pub(crate) fn bustypes(&self, case: &Case) -> Result<Roles, PowerflowError> {
+        bustypes(case, &self.bus_rows, &self.gen_buses)
+    }
+
     /// The PV then PQ buses, the unknowns of a power flow, in MATPOWER's order.
     pub(crate) fn pv_pq(&self) -> Vec<usize> {
         self.pv_buses
