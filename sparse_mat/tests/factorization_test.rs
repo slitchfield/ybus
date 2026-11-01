@@ -536,3 +536,126 @@ fn cholesky_keeps_a_diagonal_matrix_diagonal() {
     }
     assert_eq!(diagonal, [2.0, 3.0, 4.0]);
 }
+
+// Approximate minimum degree
+
+/// The SPD matrix of a graph's Laplacian plus the identity, from its edges.
+fn graph_matrix(n: usize, edges: &[(usize, usize)]) -> CsrMatrix<f64> {
+    let mut degree = vec![0.0; n];
+    let mut triplets = vec![];
+    for &(i, j) in edges {
+        triplets.extend([(i, j, -1.0), (j, i, -1.0)]);
+        degree[i] += 1.0;
+        degree[j] += 1.0;
+    }
+    triplets.extend(degree.iter().enumerate().map(|(i, d)| (i, i, d + 1.0)));
+    CsrMatrix::from_triplets(n, n, triplets).unwrap()
+}
+
+/// Entries of a Cholesky factor that the matrix's lower triangle doesn't already hold.
+fn fill_in(a: &CsrMatrix<f64>, ordering: Ordering) -> usize {
+    let lower = a.iter().filter(|&(i, j, _)| j <= i).count();
+    a.analyze_cholesky(ordering).unwrap().predicted_entries() - lower
+}
+
+#[test]
+fn amd_returns_a_permutation_that_depends_only_on_the_pattern() {
+    let mut rng = Lcg(21);
+    for (n, fill, seed) in [(1, 0, 1), (2, 100, 2), (17, 30, 3), (80, 5, 4), (150, 2, 5)] {
+        let a = random_spd(n, fill, seed);
+        let perm = a.ordering(Ordering::Amd).unwrap();
+        assert!(is_permutation(&perm, n), "n = {n}");
+        assert_eq!(a.to_csc().ordering(Ordering::Amd).unwrap(), perm);
+        assert_eq!(a.map(|v| v * -2.0).ordering(Ordering::Amd).unwrap(), perm);
+        assert_eq!(a.ordering(Ordering::Amd).unwrap(), perm, "deterministic");
+    }
+    let shuffled = grid_laplacian(9)
+        .permute_symmetric(&rng.permutation(81))
+        .unwrap();
+    assert!(is_permutation(
+        &shuffled.ordering(Ordering::Amd).unwrap(),
+        81
+    ));
+    assert!(CsrMatrix::<f64>::default()
+        .ordering(Ordering::Amd)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn amd_orders_trees_and_arrowheads_without_fill() {
+    // Random trees: each node joins an earlier one, then the numbering is shuffled
+    let mut rng = Lcg(8);
+    for n in [10, 100, 1000] {
+        let parent_edges: Vec<(usize, usize)> =
+            (1..n).map(|i| (i, rng.next() as usize % i)).collect();
+        let tree = graph_matrix(n, &parent_edges)
+            .permute_symmetric(&rng.permutation(n))
+            .unwrap();
+        assert_eq!(fill_in(&tree, Ordering::Amd), 0, "tree of {n}");
+    }
+    // Arrowheads: a hub joined to every other node. Small, the hub waits until only one leaf is
+    //   left (then either may go last); large, it's a dense row, set aside to come last
+    for (n, hub) in [(12, 5), (500, 123)] {
+        let edges: Vec<(usize, usize)> = (0..n).filter(|&i| i != hub).map(|i| (hub, i)).collect();
+        let arrow = graph_matrix(n, &edges);
+        let perm = arrow.ordering(Ordering::Amd).unwrap();
+        assert!(perm[n - 2..].contains(&hub), "n = {n}");
+        if n > 160 {
+            assert_eq!(perm.last(), Some(&hub), "n = {n}");
+        }
+        assert_eq!(fill_in(&arrow, Ordering::Amd), 0);
+        assert!(fill_in(&arrow, Ordering::Natural) > 0);
+    }
+}
+
+#[test]
+fn amd_sets_dense_rows_aside() {
+    // A 30 x 30 grid (900 nodes; dense means more than 300 neighbours) with two extra nodes
+    //   joined to every grid node
+    let k = 30;
+    let mut edges = vec![];
+    for r in 0..k {
+        for c in 0..k {
+            let i = r * k + c;
+            if c + 1 < k {
+                edges.push((i, i + 1));
+            }
+            if r + 1 < k {
+                edges.push((i, i + k));
+            }
+            edges.extend([(i, 900), (i, 901)]);
+        }
+    }
+    let a = graph_matrix(902, &edges);
+    let perm = a.ordering(Ordering::Amd).unwrap();
+    assert!(is_permutation(&perm, 902));
+    assert_eq!(&perm[900..], [900, 901]);
+}
+
+#[test]
+fn amd_fills_grids_less_than_rcm() {
+    let mut rng = Lcg(13);
+    for k in [10, 20, 40] {
+        let grid = grid_laplacian(k)
+            .permute_symmetric(&rng.permutation(k * k))
+            .unwrap();
+        let (amd, rcm) = (fill_in(&grid, Ordering::Amd), fill_in(&grid, Ordering::Rcm));
+        assert!(amd < rcm, "k = {k}: AMD fill {amd}, RCM fill {rcm}");
+    }
+}
+
+#[test]
+fn amd_factors_solve_correctly() {
+    let mut rng = Lcg(17);
+    let a = grid_laplacian(15)
+        .permute_symmetric(&rng.permutation(225))
+        .unwrap();
+    let factor = a
+        .analyze_cholesky(Ordering::Amd)
+        .unwrap()
+        .factor(&a)
+        .unwrap();
+    let x: Vec<f64> = (0..225).map(|i| (i as f64 * 0.3).sin()).collect();
+    assert_close(&factor.solve(&a.mul_vec(&x).unwrap()).unwrap(), &x, 1e-12);
+}

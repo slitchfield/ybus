@@ -311,6 +311,12 @@ Merged in PR #2.
         falls 15.5 times, so fill explains the large excesses, not the whole gap.
 - [ ] AMD ordering, for Cholesky and (on the pattern of A+Aᵀ) for LU. Benchmark fill and time
       against RCM on the large case.
+      `Ordering::Amd` (`compressed_matrix/ordering.rs`), written from the paper and the book:
+      quotient graph, approximate degrees, aggressive absorption, supervariables found by
+      hashing, and rows with more than max(16, 10√n) neighbours ordered last. Tested for no
+      fill on random trees and arrowheads, dense rows last, and less fill than RCM on shuffled
+      grids: 184,412 fill entries against 651,750 on a 100×100 grid, ordered in 7.2 ms
+      (119 ms for 300×300).
 - [ ] Keep the current `BTreeMap` LU as a test-only reference implementation, and compare the
       two on pseudo-random and power flow matrices.
 - [ ] Gilbert–Peierls left-looking LU with threshold partial pivoting, generic over
