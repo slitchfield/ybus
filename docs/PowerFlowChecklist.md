@@ -359,9 +359,17 @@ Merged in PR #2.
       `PatternMismatch`, and on any error the factorization is unchanged. Tested on new values
       (same pivots and patterns, reconstructing P A Q, solving and the determinant), on pivots
       that shrink or vanish, on complex values, and on errors.
-- [ ] The DC power flow's LU fallback uses the new LU.
+- [x] The DC power flow's LU fallback uses the new LU.
+      With the same ordering as Cholesky (AMD by default). Recorded in
+      `docs/benchmarks/dc-power-flow-lu-2026-11-01.md`, on the 19 LU cases:
+      - **Speed:** their solves take 0.33 s together instead of 478.5 s (case13659pegase 15 ms
+        instead of 83 s). Unordered, the new LU fills about as much as the old one but runs
+        26 times faster at the median; AMD gives another factor of 40, cutting the worst fill
+        from 109× to 2.5×. All 78 cases now solve in 0.35 s together, against 496 s.
+      - **Agreement with MATPOWER:** every case within 2.5e-12 of each quantity's largest value,
+        against 1.1e-10 before.
 - [ ] `solve_in_place` and `solve_many` (several right-hand sides).
-- [ ] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward
+- [x] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward
       error: unordered, ours was up to 30 times MATPOWER's on high-fill cases, and correlated
       with fill where MATPOWER's, from an ordered solve, didn't. Rerun `scripts/benchmark-dc.sh`
       with the orderings, and compare `backward_error` with `factor_entries` and
@@ -371,8 +379,12 @@ Merged in PR #2.
       **Cholesky verdict (2026-11-01): supported.** Ordered by AMD, the 59 Cholesky cases' median
       ratio of our backward error to MATPOWER's is 1.00, the largest backward error is 0.78 ε
       (10.7 ε unordered), and its rank correlation with fill is −0.03 (0.45 unordered).
-      case8387pegase, which RCM left at 2.35 ε, falls to 0.71 ε, below MATPOWER's 0.94 ε. The
-      LU cases remain, for the ordered LU.
+      case8387pegase, which RCM left at 2.35 ε, falls to 0.71 ε, below MATPOWER's 0.94 ε.
+      **LU verdict (2026-11-01): supported.** The same new LU, unordered, gives the old excess
+      back (median ratio 2.57, largest 28); ordered by AMD, the median ratio is 1.23, the
+      largest 2.7, and the largest backward error 0.49 ε (6.5 ε before). So the excess followed
+      the fill, not the algorithm, and threshold pivoting at 0.1 cost no stability here. Every
+      case's backward error is now below 0.8 ε.
 - [ ] Deferred: COLAMD, for LU of a matrix whose pattern is far from symmetric. Nothing in power
       flow needs it yet.
 
