@@ -7,3 +7,4 @@
 pub mod case;
 pub mod dc;
 pub mod powerflow_error;
+mod topology;

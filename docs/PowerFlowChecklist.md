@@ -471,8 +471,12 @@ types through one code path, and every real result is bit for bit what it was.
       Like the DC power flow, the AC code reproduces MATPOWER 8.1's `runpf` with its default
       options, following `ext2int`, `bustypes`, `makeYbus`, `makeSbus`, `newtonpf`, `dSbus_dV`,
       `makeB`, `fdpf` and `pfsoln`.
-- [ ] Extract the topology `DcModel` derives (connected buses, in-service elements, bus types,
+- [x] Extract the topology `DcModel` derives (connected buses, in-service elements, bus types,
       the island check) into a module both power flows share, with no change to the DC results.
+      `powerflow/src/topology.rs` (crate-private). Each model passes its own branch check
+      (`x = 0` for DC), run as branches are found, so errors keep their precedence. The DC tests
+      pass unchanged, and a survey rerun matches the AMD and LU records in every column but
+      time and memory, on all 78 cases.
 - [ ] Ybus assembly with `from_triplets` (complex branch π-models, taps, shifts, shunts), then
       converted to `CsrMatrix` with an assembly map for re-stamping.
 - [ ] MATPOWER's AC reference results (`runpf`, Newton–Raphson) for case14, case30 and case118,
