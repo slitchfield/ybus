@@ -30,6 +30,7 @@ mod access;
 mod assembly;
 mod blocks;
 mod cholesky;
+mod lu;
 mod ops;
 mod ordering;
 #[cfg(feature = "rayon")]
@@ -42,8 +43,8 @@ mod solvers;
 
 pub use assembly::AssemblyMap;
 pub use cholesky::{Cholesky, SymbolicCholesky};
+pub use lu::{Lu, LuOptions, SymbolicLu};
 pub use ordering::Ordering;
-pub use solvers::Lu;
 
 mod sealed {
     pub trait Sealed {}

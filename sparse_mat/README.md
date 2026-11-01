@@ -51,7 +51,7 @@ fn main() -> Result<(), SparseError> {
     // on shape mismatches instead.
     let a: CsrMatrix = built.to_csr();
     let b = [1.0, 0.0, 2.0];
-    let x = a.solve(&b)?; // LU with partial pivoting
+    let x = a.to_csc().solve(&b)?; // LU: AMD-ordered, threshold partial pivoting
     let residual = a.mul_vec(&x)?;
     assert!(residual.iter().zip(&b).all(|(r, b)| (r - b).abs() < 1e-12));
 
@@ -123,9 +123,12 @@ fn main() -> Result<(), SparseError> {
 - **Properties:** `is_square`, `is_symmetric`, `density`, `sum`, `trace`, and `norm_frobenius`,
   `norm_1` and `norm_inf` (float element types).
 - **Solvers** (float element types): `solve_lower_triangular` and `solve_upper_triangular` in
-  either orientation; on `CsrMatrix`, `lu()` (an `Lu` with `solve`, `determinant`, `l`, `u` and
-  `permutation`) and `solve`; `cholesky()` (a `Cholesky` of P A Pᵀ, ordered by AMD, with
-  `solve`, `l` and `permutation`) and `solve_spd`; and `conjugate_gradient`.
+  either orientation, and `conjugate_gradient`; on `CsrMatrix`, `cholesky()` (a `Cholesky` of
+  P A Pᵀ, ordered by AMD, with `solve`, `l` and `permutation`) and `solve_spd`.
+- **LU** (real or complex element types): on `CscMatrix`, `lu()` and `solve`, Gilbert and
+  Peierls's left-looking LU of P A Q, AMD-ordered, with threshold partial pivoting (0.1 by
+  default; `LuOptions`). The `Lu` has `solve`, `determinant`, `l`, `u`, `permutation` and
+  `column_permutation`. `analyze_lu(ordering)` separates the ordering from `factor`.
 - **Orderings and symbolic analysis:** `ordering(Ordering::Amd)` (approximate minimum degree)
   and `ordering(Ordering::Rcm)` (reverse Cuthill–McKee), on the pattern of A + Aᵀ in either
   orientation, with `bandwidth` and `profile` to measure the latter;
@@ -139,9 +142,10 @@ fn main() -> Result<(), SparseError> {
 
 Both types accept any `Scalar`, meaning any `Copy + PartialEq + num_traits::Num` type. That
 covers `f32`, `f64`, every integer type and `num_complex::Complex` (re-exported as
-`sparse_mat::Complex`). Arithmetic, products and conversions work for all of them. Norms and
-solvers need `num_traits::Float`, so today they cover `f32` and `f64` but not complex numbers.
-Complex-capable solvers are on the roadmap.
+`sparse_mat::Complex`). Arithmetic, products and conversions work for all of them. LU works
+for any `num_complex::ComplexFloat` type: `f32`, `f64` and their complex numbers. The norms and
+the other solvers need `num_traits::Float`, so they cover `f32` and `f64` but not complex
+numbers yet; Phase 4 of the roadmap migrates them.
 
 Rust does not apply a type parameter's default in expressions, so a call with nothing to infer
 `T` from needs it spelled out: `SparseMatrix::<f64>::new()`.
@@ -160,8 +164,6 @@ Rust does not apply a type parameter's default in expressions, so a call with no
   compressed matrix for repeated work.
 
 Known performance limits:
-- `lu()` searches for pivots in O(n²) of the dimension, which suits systems up to thousands of
-  rows, not hundreds of thousands.
 - `to_dense` and `mul_dense` allocate `rows × cols`.
 
 ## Errors

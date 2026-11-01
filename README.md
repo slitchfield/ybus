@@ -89,7 +89,9 @@ translation, and the module documentation names the MATPOWER functions each step
 
 | Where (in `sparse_mat` unless a crate is named) | Algorithm | Reference |
 |---|---|---|
-| `solve_lower_triangular`, `solve_upper_triangular`, `lu`, `Lu::determinant` | Forward and back substitution; Gaussian elimination with partial pivoting | G. H. Golub and C. F. Van Loan, *Matrix Computations*, 4th ed., Johns Hopkins University Press, 2013, ch. 3. |
+| `solve_lower_triangular`, `solve_upper_triangular`, `Lu::solve`, `Lu::determinant` | Forward and back substitution; LU factorization with partial pivoting | G. H. Golub and C. F. Van Loan, *Matrix Computations*, 4th ed., Johns Hopkins University Press, 2013, ch. 3. |
+| `lu`, `analyze_lu`, `SymbolicLu::factor` | Left-looking sparse LU: a depth-first search for each column's reach, then a sparse triangular solve, with threshold partial pivoting | J. R. Gilbert and T. Peierls, "Sparse partial pivoting in time proportional to arithmetic operations," *SIAM J. Sci. Stat. Comput.* 9(5):862–874, 1988. [doi:10.1137/0909058](https://doi.org/10.1137/0909058) |
+| | | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 6. |
 | `cholesky`, `analyze_cholesky` | Up-looking (row-by-row) sparse Cholesky, with symbolic analysis by the elimination tree and row subtrees | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 4. |
 | `conjugate_gradient` | Conjugate gradient | M. R. Hestenes and E. Stiefel, "Methods of conjugate gradients for solving linear systems," *J. Res. Natl. Bur. Stand.* 49(6):409–436, 1952. [doi:10.6028/jres.049.044](https://doi.org/10.6028/jres.049.044) |
 | | | Y. Saad, *Iterative Methods for Sparse Linear Systems*, 2nd ed., SIAM, 2003. |
@@ -110,7 +112,6 @@ translation, and the module documentation names the MATPOWER functions each step
 
 | Planned work | Reference |
 |---|---|
-| Left-looking sparse LU (Phase 3) | J. R. Gilbert and T. Peierls, "Sparse partial pivoting in time proportional to arithmetic operations," *SIAM J. Sci. Stat. Comput.* 9(5):862–874, 1988. [doi:10.1137/0909058](https://doi.org/10.1137/0909058) |
 | Refactoring circuit-like matrices (Phase 3) | T. A. Davis and E. Palamadai Natarajan, "Algorithm 907: KLU, a direct sparse solver for circuit simulation problems," *ACM Trans. Math. Softw.* 37(3), article 36, 2010. [doi:10.1145/1824801.1824814](https://doi.org/10.1145/1824801.1824814) |
 | COLAMD ordering (deferred: only needed for patterns far from symmetric) | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "A column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):353–376, 2004. |
 | Low-rank updates for contingencies (Phase 5) | J. Sherman and W. J. Morrison, "Adjustment of an inverse matrix corresponding to a change in one element of a given matrix," *Ann. Math. Statist.* 21(1):124–127, 1950. [doi:10.1214/aoms/1177729893](https://doi.org/10.1214/aoms/1177729893) |

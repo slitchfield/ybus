@@ -1,73 +1,13 @@
-//! Solvers for linear systems `A x = b`: triangular solves, LU with partial pivoting and
-//! conjugate gradient. The ordered Cholesky factorization is in `cholesky.rs`.
+//! Solvers for linear systems `A x = b`: triangular solves and conjugate gradient. The ordered
+//! Cholesky factorization is in `cholesky.rs`, and LU in `lu.rs`.
 //!
-//! All of them need a float element type, since they divide. The factorizations work by rows,
-//! so they're on `CsrMatrix`; the triangular solves and conjugate gradient work in either
-//! orientation.
-
-use std::collections::BTreeMap;
+//! Both need a float element type, since they divide, and work in either orientation.
 
 use num_traits::Float;
 
-use super::{CompressedMatrix, CsrMatrix, Orientation};
+use super::{CompressedMatrix, Orientation};
 use crate::sparse_error::SparseError;
 use crate::Scalar;
-
-/// An LU factorization with partial pivoting, `P A = L U`, from `CsrMatrix::lu`.
-///
-/// `L` is unit lower triangular and `U` upper triangular, both in CSR form. Keep it around to
-/// solve many right-hand sides against the same matrix.
-#[derive(Clone, Debug)]
-pub struct Lu<T: Scalar = f64> {
-    l: CsrMatrix<T>,
-    u: CsrMatrix<T>,
-    perm: Vec<usize>,
-    swaps: usize,
-}
-
-impl<T: Scalar + Float> Lu<T> {
-    /// The unit lower triangular factor `L`, including its unit diagonal.
-    pub fn l(&self) -> &CsrMatrix<T> {
-        &self.l
-    }
-
-    /// The upper triangular factor `U`.
-    pub fn u(&self) -> &CsrMatrix<T> {
-        &self.u
-    }
-
-    /// The row permutation: row `i` of `P A` is row `permutation()[i]` of `A`.
-    pub fn permutation(&self) -> &[usize] {
-        &self.perm
-    }
-
-    /// The determinant of the original matrix: the product of `U`'s diagonal, negated once
-    /// per row swap.
-    pub fn determinant(&self) -> T {
-        let sign = if self.swaps.is_multiple_of(2) {
-            T::one()
-        } else {
-            -T::one()
-        };
-        (0..self.perm.len()).fold(sign, |det, i| {
-            det * self.u.stored_value(i, i).unwrap_or(T::zero())
-        })
-    }
-
-    /// Solves `A x = b` for `x`. Returns `SparseError::ShapeMismatch` unless `b` has one
-    /// entry per row of `A`.
-    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
-        if b.len() != self.perm.len() {
-            return Err(SparseError::ShapeMismatch {
-                left: self.l.shape,
-                right: (b.len(), 1),
-            });
-        }
-        let permuted: Vec<T> = self.perm.iter().map(|&row| b[row]).collect();
-        let y = self.l.solve_lower_triangular(&permuted)?;
-        self.u.solve_upper_triangular(&y)
-    }
-}
 
 impl<T: Scalar + Float, O: Orientation> CompressedMatrix<T, O> {
     /// Checks that `self` is square and `b_len` matches, returning the size.
@@ -233,113 +173,5 @@ impl<T: Scalar + Float, O: Orientation> CompressedMatrix<T, O> {
                 iterations: max_iterations,
             })
         }
-    }
-}
-
-impl<T: Scalar + Float> CsrMatrix<T> {
-    /// Factors a square matrix as `P A = L U` with partial (row) pivoting, returning `L` and
-    /// `U` as CSR matrices that store no zeros (except `L`'s unit diagonal is always stored).
-    ///
-    /// Rows are kept as ordered sparse maps, so only the entries that fill in are ever
-    /// touched; the pivot search still looks at every remaining row for each column, so
-    /// the cost is at least quadratic in the dimension.
-    ///
-    /// Returns `SparseError::NotSquare`, or `SparseError::SingularMatrix` if a column has no
-    /// usable pivot.
-    pub fn lu(&self) -> Result<Lu<T>, SparseError> {
-        if !self.is_square() {
-            return Err(SparseError::NotSquare { shape: self.shape });
-        }
-        let n = self.shape.0;
-        let mut rows: Vec<BTreeMap<usize, T>> = self
-            .ptr
-            .windows(2)
-            .map(|bounds| {
-                let range = bounds[0]..bounds[1];
-                self.idx[range.clone()]
-                    .iter()
-                    .copied()
-                    .zip(self.data[range].iter().copied())
-                    .collect()
-            })
-            .collect();
-        let mut perm: Vec<usize> = (0..n).collect();
-        let mut swaps = 0;
-
-        for k in 0..n {
-            let magnitude = |row: &BTreeMap<usize, T>| row.get(&k).map_or(T::zero(), |v| v.abs());
-            let mut best = k;
-            let mut best_magnitude = magnitude(&rows[k]);
-            for (i, row) in rows.iter().enumerate().skip(k + 1) {
-                if magnitude(row) > best_magnitude {
-                    best = i;
-                    best_magnitude = magnitude(row);
-                }
-            }
-            if best_magnitude == T::zero() {
-                return Err(SparseError::SingularMatrix { pivot: k });
-            }
-            if best != k {
-                rows.swap(k, best);
-                perm.swap(k, best);
-                swaps += 1;
-            }
-
-            let pivot = rows[k][&k];
-            let pivot_row: Vec<(usize, T)> =
-                rows[k].range(k + 1..).map(|(&j, &v)| (j, v)).collect();
-            for row in rows.iter_mut().skip(k + 1) {
-                let Some(&below) = row.get(&k) else {
-                    continue;
-                };
-                let multiplier = below / pivot;
-                if multiplier == T::zero() {
-                    row.remove(&k);
-                    continue;
-                }
-                row.insert(k, multiplier);
-                for &(j, u_kj) in &pivot_row {
-                    let current = row.get(&j).copied().unwrap_or(T::zero());
-                    let updated = current - multiplier * u_kj;
-                    if updated == T::zero() {
-                        row.remove(&j);
-                    } else {
-                        row.insert(j, updated);
-                    }
-                }
-            }
-        }
-
-        // Each row splits into L's part (left of the diagonal, plus the unit diagonal) and
-        //   U's; the maps iterate in column order, so the rows come out sorted
-        let (mut l_ptr, mut l_idx, mut l_data) = (vec![0], vec![], vec![]);
-        let (mut u_ptr, mut u_idx, mut u_data) = (vec![0], vec![], vec![]);
-        for (i, row) in rows.iter().enumerate() {
-            for (&j, &value) in row.range(..i).filter(|(_, &value)| value != T::zero()) {
-                l_idx.push(j);
-                l_data.push(value);
-            }
-            l_idx.push(i);
-            l_data.push(T::one());
-            l_ptr.push(l_idx.len());
-            for (&j, &value) in row.range(i..).filter(|(_, &value)| value != T::zero()) {
-                u_idx.push(j);
-                u_data.push(value);
-            }
-            u_ptr.push(u_idx.len());
-        }
-        Ok(Lu {
-            l: CsrMatrix::from_parts_unchecked((n, n), l_ptr, l_idx, l_data),
-            u: CsrMatrix::from_parts_unchecked((n, n), u_ptr, u_idx, u_data),
-            perm,
-            swaps,
-        })
-    }
-
-    /// Solves `A x = b` for a general square matrix by LU factorization. Factor once with
-    /// `lu` instead when solving several right-hand sides.
-    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
-        self.check_system(b.len())?;
-        self.lu()?.solve(b)
     }
 }

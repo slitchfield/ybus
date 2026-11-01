@@ -332,9 +332,23 @@ Merged in PR #2.
       code ships in the library. It matches the library's LU bit for bit (factors, permutation
       and determinant) before the new LU replaces it; the comparisons with the new LU come with
       it.
-- [ ] Gilbert–Peierls left-looking LU with threshold partial pivoting, generic over
+- [x] Gilbert–Peierls left-looking LU with threshold partial pivoting, generic over
       `ComplexFloat` from the start (review note 2). Keep the current `Lu` API (`solve`,
       `determinant`, `l`, `u`, `permutation`) as the front end.
+      `CscMatrix::analyze_lu(ordering)` and `SymbolicLu::factor(&A, LuOptions)` in
+      `compressed_matrix/lu.rs`; `lu()` and `solve` (AMD, threshold 0.1) moved from `CsrMatrix`
+      to `CscMatrix`, since the algorithm works by columns. `Lu` keeps `solve`, `determinant`,
+      `l`, `u` (now CSC) and `permutation`, and adds `column_permutation`: P A Q = L U.
+      - **Pivoting:** the diagonal of the ordered matrix is kept while its magnitude is at least
+        the threshold times the column's largest; otherwise the largest is taken. Checked: 0.1
+        is UMFPACK's default partial pivot tolerance (its separate 0.001 applies only to its
+        symmetric strategy's diagonal pivots).
+      - **Tested:** P A Q = L U under every ordering and thresholds 0.001, 0.1 and 1.0; solves
+        matching the reference LU; at threshold 1.0 with no ordering, the same pivots as the
+        reference; complex matrices (a Ybus-like grid, and an unsymmetric one needing
+        pivoting, with its determinant); the determinant's sign from both permutations.
+      - **Errors:** `SingularMatrix` names the column of A with no pivot, which the DC solve
+        maps to a bus, as before.
 - [ ] `refactor(values)`, which reuses the analysis and pivot sequence when only values change.
       If a pivot becomes too small, fall back to a full factorization and report that.
 - [ ] The DC power flow's LU fallback uses the new LU.
