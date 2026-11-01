@@ -6,7 +6,7 @@ mod common;
 use sparse_mat::compressed_matrix::{CsrMatrix, Ordering};
 use sparse_mat::sparse_error::SparseError;
 
-use common::{reference_cholesky, reference_solve_spd};
+use common::{reference_cholesky, reference_lu, reference_solve_spd};
 
 /// Deterministic pseudo-random numbers (a linear congruential generator).
 struct Lcg(u64);
@@ -658,4 +658,58 @@ fn amd_factors_solve_correctly() {
         .unwrap();
     let x: Vec<f64> = (0..225).map(|i| (i as f64 * 0.3).sin()).collect();
     assert_close(&factor.solve(&a.mul_vec(&x).unwrap()).unwrap(), &x, 1e-12);
+}
+
+// LU
+
+/// A pseudo-random square matrix with about `fill_percent` of its off-diagonal positions
+/// stored, and a diagonal that is `diagonal_scale` times its row's largest entry, so a small
+/// scale forces pivoting off the diagonal.
+fn random_square(n: usize, fill_percent: u64, diagonal_scale: f64, seed: u64) -> CsrMatrix<f64> {
+    let mut rng = Lcg(seed);
+    let mut triplets = vec![];
+    for i in 0..n {
+        let mut largest: f64 = 1.0;
+        for j in 0..n {
+            if i != j && rng.next() % 100 < fill_percent {
+                let value = ((rng.next() % 2001) as f64 - 1000.0) / 313.0;
+                largest = largest.max(value.abs());
+                triplets.push((i, j, value));
+            }
+        }
+        let sign = if rng.next().is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        triplets.push((
+            i,
+            i,
+            sign * diagonal_scale * largest * (1.0 + i as f64 / n as f64),
+        ));
+    }
+    CsrMatrix::from_triplets(n, n, triplets).unwrap()
+}
+
+#[test]
+fn reference_lu_is_the_previous_library_lu() {
+    for (n, fill, scale, seed) in [(10, 30, 0.1, 1), (40, 10, 2.0, 2), (60, 5, 0.01, 3)] {
+        let a = random_square(n, fill, scale, seed);
+        let (library, reference) = (a.lu().unwrap(), reference_lu(&a).unwrap());
+        assert_eq!(library.permutation(), reference.perm);
+        assert!(same_bits(library.l(), &reference.l));
+        assert!(same_bits(library.u(), &reference.u));
+        let sign = if reference.swaps.is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        let determinant = reference
+            .u
+            .diagonal()
+            .values()
+            .iter()
+            .fold(sign, |det, &d| det * d);
+        assert_eq!(library.determinant().to_bits(), determinant.to_bits());
+    }
 }

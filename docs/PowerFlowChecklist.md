@@ -326,8 +326,12 @@ Merged in PR #2.
         RCM's, but its factor is about twice as fast and its solve two to four times, so it pays
         off wherever an analysis is reused.
       - **Backward error:** see the hypothesis item below.
-- [ ] Keep the current `BTreeMap` LU as a test-only reference implementation, and compare the
+- [x] Keep the current `BTreeMap` LU as a test-only reference implementation, and compare the
       two on pseudo-random and power flow matrices.
+      `reference_lu` in `sparse_mat/tests/common`, rewritten against the public API, so no test
+      code ships in the library. It matches the library's LU bit for bit (factors, permutation
+      and determinant) before the new LU replaces it; the comparisons with the new LU come with
+      it.
 - [ ] Gilbert–Peierls left-looking LU with threshold partial pivoting, generic over
       `ComplexFloat` from the start (review note 2). Keep the current `Lu` API (`solve`,
       `determinant`, `l`, `u`, `permutation`) as the front end.
