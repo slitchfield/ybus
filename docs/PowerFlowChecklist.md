@@ -432,7 +432,15 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
       `tolerance` is `T::Real` (still `f64` for `f64` callers). A real solution's bits, recorded
       before the change, are unchanged (a permanent test). Tested on a Hermitian grid matrix,
       matching the Cholesky solution, with CSR and CSC agreeing bit for bit.
-- [ ] Run every solver test for both `f64` and `Complex<f64>`.
+- [x] Run every solver test for both `f64` and `Complex<f64>`.
+      Done as one generic suite in `factorization_test.rs`, run for each type: triangular solves
+      (both orientations), Cholesky under every ordering with `solve_many` and `solve_in_place`,
+      LU under every ordering with a refactor, conjugate gradient against Cholesky, and the
+      norms against sums taken from the dense matrix. A small `Element` trait lifts the real
+      fixtures (off-diagonals `v ↦ v·(1 + 0.5i)`, mirrored conjugated where Hermitian is
+      needed). Changed from the plan: the existing real-only tests stay as they are rather than
+      being rewritten generically, since many check exact values or bit-for-bit agreement with
+      the old algorithms, which only make sense for `f64`.
 - [ ] Note in the docs which float types keep solver support. Corrected while planning:
       `ComplexFloat` is sealed, but its seal is implemented for every `Float + FloatConst` type
       (`num-complex` 0.4.6, `complex_float.rs`), so a user-defined float type keeps solver support
