@@ -406,9 +406,16 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
       such as the DC solve's LU fallback. Every real result stays bit for bit what it was: for
       `f64`, `conj` is the identity and re² + im² is x·x + 0, so each change keeps the same
       operations in the same order.
-- [ ] Change the bounds of the triangular solves, conjugate gradient and the norms from `Float`
+- [x] Change the bounds of the triangular solves, conjugate gradient and the norms from `Float`
       to `Scalar + ComplexFloat`, with norms returning `Real`. (`solve`, the general one, is the
       LU's, which Phase 3 already made generic.)
+      Done for the triangular solves and the norms; conjugate gradient changes with its
+      Hermitian item below. The norms return `T::Real`: Frobenius sums re² + im² (exactly x·x for
+      a real x), and the 1- and infinity norms sum `abs()`. New `is_hermitian()` (A equals Aᴴ
+      mathematically; `is_symmetric` for real types). `check_system` needs no numeric bound, so it
+      moved to an impl bound only by `Scalar`. Tested with complex triangular solves in both
+      orientations, complex norms against hand-computed values, and `is_hermitian` on Hermitian,
+      symmetric-but-not-Hermitian and real matrices.
 - [ ] Hermitian Cholesky (`A = L Lᴴ`): replace the symmetry check with a Hermitian check, and
       take real square roots of the diagonal (review note 3).
 - [ ] Hermitian conjugate gradient: use conjugated inner products.

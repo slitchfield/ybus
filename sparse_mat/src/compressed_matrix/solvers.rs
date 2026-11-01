@@ -1,15 +1,17 @@
 //! Solvers for linear systems `A x = b`: triangular solves and conjugate gradient. The ordered
 //! Cholesky factorization is in `cholesky.rs`, and LU in `lu.rs`.
 //!
-//! Both need a float element type, since they divide, and work in either orientation.
+//! Both work in either orientation. The triangular solves take any `ComplexFloat` element type,
+//! real or complex; conjugate gradient needs a real `Float` one.
 
+use num_complex::ComplexFloat;
 use num_traits::Float;
 
 use super::{CompressedMatrix, Orientation};
 use crate::sparse_error::SparseError;
 use crate::Scalar;
 
-impl<T: Scalar + Float, O: Orientation> CompressedMatrix<T, O> {
+impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
     /// Checks that `self` is square and `b_len` matches, returning the size.
     pub(crate) fn check_system(&self, b_len: usize) -> Result<usize, SparseError> {
         if !self.is_square() {
@@ -23,7 +25,9 @@ impl<T: Scalar + Float, O: Orientation> CompressedMatrix<T, O> {
         }
         Ok(self.shape.0)
     }
+}
 
+impl<T: Scalar + ComplexFloat, O: Orientation> CompressedMatrix<T, O> {
     /// Solves `L x = b` by forward substitution, reading only the lower triangle of `self`
     /// (entries above the diagonal are ignored). CSR substitutes row by row and CSC column by
     /// column; both subtract each `x[i]`'s terms in the same order, so they agree bit for bit.
@@ -115,7 +119,9 @@ impl<T: Scalar + Float, O: Orientation> CompressedMatrix<T, O> {
             Ok(x)
         }
     }
+}
 
+impl<T: Scalar + Float, O: Orientation> CompressedMatrix<T, O> {
     /// Solves `A x = b` for a symmetric positive definite matrix by the conjugate gradient
     /// method, starting from zero.
     ///
