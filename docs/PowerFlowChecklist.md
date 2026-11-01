@@ -585,8 +585,14 @@ item.
       - **References:** if MATPOWER's MP-Core and legacy results agree within 1e-9, use
         `runpf`'s defaults; otherwise the legacy code this implementation follows, recording the
         gap, as for fast-decoupled.
-- [ ] Build the Newton Jacobian through an assembly map from Ybus's entries, refilling its values
+- [x] Build the Newton Jacobian through an assembly map from Ybus's entries, refilling its values
       in place each iteration, bit for bit equal to the matrix-operation build it replaces.
+      `JacobianAssembly` in `powerflow/src/ac.rs` lays the Jacobian out once per set of bus
+      roles with `from_triplets_mapped` (each Ybus entry feeds up to one position per block)
+      and refills it each iteration, computing each entry with the operations the old build
+      performed on it. Tested bit for bit against the old build (kept in
+      `tests/ac_jacobian_test.rs` as `reference_jacobian`) on the AC fixtures, case14, case30,
+      case118 and case2383wp, at four voltage states each, and a refill against a fresh layout.
 - [ ] Measure it: criterion before and after, and an AC survey rerun that matches the record.
 - [ ] Let the AC solve take changing bus roles (REF, PV, PQ), with a `bustypes` shared with the
       topology, and no change in results.

@@ -15,7 +15,7 @@
 use std::f64::consts::PI;
 
 use sparse_mat::compressed_matrix::{
-    AssemblyMap, CscMatrix, CsrMatrix, Lu, LuOptions, Ordering, RefactorOutcome,
+    AssemblyMap, Csc, CscMatrix, CsrMatrix, Lu, LuOptions, Ordering, RefactorOutcome,
 };
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
@@ -469,15 +469,19 @@ impl AcModel {
         let mut full_factorizations = 0;
         let mut lu: Option<Lu<f64>> = None;
         let mut converged = norm_f < options.tolerance;
+        // The Jacobian's pattern is fixed by the bus roles, so it's laid out once and its
+        //   values refilled each iteration
+        let mut assembly = JacobianAssembly::new(&self.ybus, unknowns);
         while !converged && iterations < options.max_iterations {
             iterations += 1;
-            let jacobian = self.jacobian_over(&v, unknowns);
+            assembly.refill(&self.ybus, &v);
+            let jacobian = &assembly.jacobian;
             let singular = |column: usize| PowerflowError::SingularNetwork {
                 bus_label: case.bus[topology.bus_rows[unknowns.column_bus(column)]].bus_label,
             };
             // Factor once, then reuse the pivots while they stay acceptable
             let factor = match lu.as_mut() {
-                Some(lu) => match lu.refactor(&jacobian) {
+                Some(lu) => match lu.refactor(jacobian) {
                     Ok(RefactorOutcome::Reused) => Ok(()),
                     Ok(RefactorOutcome::Repivoted) => {
                         full_factorizations += 1;
@@ -487,7 +491,7 @@ impl AcModel {
                 },
                 None => jacobian
                     .analyze_lu(Ordering::Amd)
-                    .and_then(|symbolic| symbolic.factor(&jacobian, LuOptions::default()))
+                    .and_then(|symbolic| symbolic.factor(jacobian, LuOptions::default()))
                     .map(|factored| {
                         full_factorizations += 1;
                         lu = Some(factored);
@@ -753,57 +757,9 @@ impl AcModel {
             pq: self.topology.pq_buses.clone(),
             pv_pq: self.topology.pv_pq(),
         };
-        self.jacobian_over(v, &unknowns)
-    }
-
-    /// `newtonpf`'s Jacobian in CSC form, at the voltages `v`, from the derivatives MATPOWER's
-    /// `dSbus_dV` computes, as R. D. Zimmerman's MATPOWER Technical Note 2 (2010) derives them:
-    /// `dS/dVa = j·diag(V)·conj(diag(I) − Ybus·diag(V))` and
-    /// `dS/dVm = diag(V)·conj(Ybus·diag(V/|V|)) + conj(diag(I))·diag(V/|V|)`, with `I = Ybus V`,
-    /// stacked as `[[Re dS/dVa[pvpq, pvpq], Re dS/dVm[pvpq, pq]], [Im dS/dVa[pq, pvpq],
-    /// Im dS/dVm[pq, pq]]]`. Ybus stores its whole diagonal, so every iteration's Jacobian has
-    /// the same pattern.
-    ///
-    /// `v` is the current Newton iterate: the complex voltage phasor `Vm·e^{jVa}` of every
-    /// connected bus, in per unit and in the model's internal bus order (entry `i` is case bus
-    /// row `bus_rows()[i]`), so it has one entry per row of Ybus. Every bus is included, the
-    /// reference buses too, since their voltages enter `I = Ybus V`; `unknowns` picks the rows
-    /// and columns that form the Jacobian. No magnitude may be zero, since `V/|V|` divides by
-    /// it; a power flow iterate never reaches zero in practice.
-    fn jacobian_over(&self, v: &[Complex<f64>], unknowns: &Unknowns) -> CscMatrix<f64> {
-        let shapes_match_message = "v and the factors have one entry per bus, matching Ybus";
-        let current = self.ybus.mul_vec(v).expect(shapes_match_message);
-        let v_unit: Vec<Complex<f64>> = v.iter().map(|value| value / value.norm()).collect();
-        let j_v: Vec<Complex<f64>> = v.iter().map(|value| value * Complex::i()).collect();
-
-        let ybus_v = self.ybus.scale_cols(v).expect(shapes_match_message);
-        let ds_dva = (&CsrMatrix::from_diagonal(current.iter().copied()) - &ybus_v)
-            .conj()
-            .scale_rows(&j_v)
-            .expect(shapes_match_message);
-        let ds_dvm = &self
-            .ybus
-            .scale_cols(&v_unit)
-            .expect(shapes_match_message)
-            .conj()
-            .scale_rows(v)
-            .expect(shapes_match_message)
-            + &CsrMatrix::from_diagonal(current.iter().zip(&v_unit).map(|(i, u)| i.conj() * u));
-
-        let block = |matrix: &CsrMatrix<f64>, rows: &[usize], cols: &[usize]| {
-            matrix.select(rows, cols).expect("bus indices are in range")
-        };
-        let (re_va, im_va) = (ds_dva.real(), ds_dva.imag());
-        let (re_vm, im_vm) = (ds_dvm.real(), ds_dvm.imag());
-        let (pvpq, pq) = (&unknowns.pv_pq, &unknowns.pq);
-        let top = CsrMatrix::hstack([block(&re_va, pvpq, pvpq), block(&re_vm, pvpq, pq)]);
-        let bottom = CsrMatrix::hstack([block(&im_va, pq, pvpq), block(&im_vm, pq, pq)]);
-        CsrMatrix::vstack([
-            top.expect(shapes_match_message),
-            bottom.expect(shapes_match_message),
-        ])
-        .expect(shapes_match_message)
-        .to_csc()
+        let mut assembly = JacobianAssembly::new(&self.ybus, &unknowns);
+        assembly.refill(&self.ybus, v);
+        assembly.jacobian
     }
 
     /// `pfsoln`'s results, indexed like the case's tables.
@@ -913,6 +869,153 @@ impl Unknowns {
     }
 }
 
+/// Which derivative and part of it a Jacobian entry takes from its Ybus entry.
+#[derive(Clone, Copy)]
+enum Part {
+    /// `Re dS/dVa`: the J11 block
+    ReVa,
+    /// `Re dS/dVm`: J12
+    ReVm,
+    /// `Im dS/dVa`: J21
+    ImVa,
+    /// `Im dS/dVm`: J22
+    ImVm,
+}
+
+/// Where one Jacobian entry's value comes from: Ybus's entry at slot `slot`, in row `i` and
+/// column `j`, and which part of which derivative of it.
+#[derive(Clone, Copy)]
+struct Source {
+    slot: usize,
+    i: usize,
+    j: usize,
+    part: Part,
+}
+
+/// `newtonpf`'s Jacobian, laid out once for a set of bus roles and refilled in place for each
+/// voltage state, through an assembly map (`from_triplets_mapped`).
+///
+/// The Jacobian `[[Re dS/dVa[pvpq, pvpq], Re dS/dVm[pvpq, pq]], [Im dS/dVa[pq, pvpq],
+/// Im dS/dVm[pq, pq]]]` takes each entry from one Ybus entry, since `dS/dVa` and `dS/dVm` have
+/// Ybus's pattern (which includes its whole diagonal). Each Ybus entry `(i, j)` feeds up to one
+/// position in each block, depending on whether `i` and `j` are PV or PQ buses, so the pattern
+/// is the one `select` and stacking would give, stored zeros included.
+struct JacobianAssembly {
+    jacobian: CscMatrix<f64>,
+    map: AssemblyMap<Csc>,
+    sources: Vec<Source>,
+    values: Vec<f64>,
+}
+
+impl JacobianAssembly {
+    /// The layout of the Jacobian over `unknowns` for `ybus`'s pattern, with zero values.
+    fn new(ybus: &CsrMatrix<Complex<f64>>, unknowns: &Unknowns) -> JacobianAssembly {
+        let nb = ybus.shape().0;
+        let npvpq = unknowns.pv_pq.len();
+        // Each bus's position among the PV and PQ buses, and among the PQ buses
+        let mut in_pvpq = vec![None; nb];
+        for (k, &bus) in unknowns.pv_pq.iter().enumerate() {
+            in_pvpq[bus] = Some(k);
+        }
+        let mut in_pq = vec![None; nb];
+        for (k, &bus) in unknowns.pq.iter().enumerate() {
+            in_pq[bus] = Some(k);
+        }
+        let mut positions = vec![];
+        let mut sources = vec![];
+        for i in 0..nb {
+            let (cols, _) = ybus.outer(i).expect("rows are in range");
+            let start = ybus.pointers()[i];
+            for (offset, &j) in cols.iter().enumerate() {
+                let slot = start + offset;
+                let blocks = [
+                    (in_pvpq[i], in_pvpq[j], Part::ReVa),
+                    (in_pvpq[i], in_pq[j].map(|c| npvpq + c), Part::ReVm),
+                    (in_pq[i].map(|r| npvpq + r), in_pvpq[j], Part::ImVa),
+                    (
+                        in_pq[i].map(|r| npvpq + r),
+                        in_pq[j].map(|c| npvpq + c),
+                        Part::ImVm,
+                    ),
+                ];
+                for (row, col, part) in blocks {
+                    if let (Some(row), Some(col)) = (row, col) {
+                        positions.push((row, col, 0.0));
+                        sources.push(Source { slot, i, j, part });
+                    }
+                }
+            }
+        }
+        let n = npvpq + unknowns.pq.len();
+        let (jacobian, map) = CscMatrix::from_triplets_mapped(n, n, positions)
+            .expect("Jacobian positions are in range");
+        let values = vec![0.0; sources.len()];
+        JacobianAssembly {
+            jacobian,
+            map,
+            sources,
+            values,
+        }
+    }
+
+    /// Refills the Jacobian's values at the voltages `v`, from the derivatives MATPOWER's
+    /// `dSbus_dV` computes, as R. D. Zimmerman's MATPOWER Technical Note 2 (2010) derives them:
+    /// `dS/dVa = j·diag(V)·conj(diag(I) − Ybus·diag(V))` and
+    /// `dS/dVm = diag(V)·conj(Ybus·diag(V/|V|)) + conj(diag(I))·diag(V/|V|)`, with `I = Ybus V`,
+    /// stacked as `[[Re dS/dVa[pvpq, pvpq], Re dS/dVm[pvpq, pq]], [Im dS/dVa[pq, pvpq],
+    /// Im dS/dVm[pq, pq]]]`. Ybus stores its whole diagonal, so every iteration's Jacobian has
+    /// the same pattern.
+    ///
+    /// `v` is the current Newton iterate: the complex voltage phasor `Vm·e^{jVa}` of every
+    /// connected bus, in per unit and in the model's internal bus order (entry `i` is case bus
+    /// row `bus_rows()[i]`), so it has one entry per row of Ybus. Every bus is included, the
+    /// reference buses too, since their voltages enter `I = Ybus V`; `unknowns` picks the rows
+    /// and columns that form the Jacobian. No magnitude may be zero, since `V/|V|` divides by
+    /// it; a power flow iterate never reaches zero in practice.
+    ///
+    /// Each entry is computed with the operations the matrix-operation build (`try_sub`,
+    /// `try_add`, `scale_rows`, `scale_cols`, `conj`) performs on it, so the values are bit for
+    /// bit what it gives: for Ybus entry `y` at `(i, j)`, with `u = V/|V|`,
+    /// `dVa = (V_i·j)·conj(0 − y·V_j)` off the diagonal and `(V_i·j)·conj(I_i − y·V_i)` on it, and
+    /// `dVm = V_i·conj(y·u_j)` off the diagonal and `V_i·conj(y·u_i) + conj(I_i)·u_i` on it.
+    fn refill(&mut self, ybus: &CsrMatrix<Complex<f64>>, v: &[Complex<f64>]) {
+        let shapes_match_message = "v has one entry per bus, matching Ybus";
+        let current = ybus.mul_vec(v).expect(shapes_match_message);
+        let y = ybus.values();
+        let zero = Complex::new(0.0, 0.0);
+        for (value, source) in self.values.iter_mut().zip(&self.sources) {
+            let Source { slot, i, j, part } = *source;
+            let entry = y[slot];
+            let derivative = match part {
+                Part::ReVa | Part::ImVa => {
+                    let inner = if i == j {
+                        current[i] - entry * v[i]
+                    } else {
+                        zero - entry * v[j]
+                    };
+                    (v[i] * Complex::i()) * inner.conj()
+                }
+                Part::ReVm | Part::ImVm => {
+                    let unit_j = v[j] / v[j].norm();
+                    let scaled = v[i] * (entry * unit_j).conj();
+                    if i == j {
+                        scaled + current[i].conj() * unit_j
+                    } else {
+                        scaled
+                    }
+                }
+            };
+            *value = match part {
+                Part::ReVa | Part::ReVm => derivative.re,
+                Part::ImVa | Part::ImVm => derivative.im,
+            };
+        }
+        self.jacobian
+            .refill(&self.map, &self.values)
+            .expect("the map was built for this Jacobian from these sources");
+    }
+}
+
 /// `pfsoln`'s sharing of each bus's reactive output among its "on" generators (in service at a
 /// REF or PV bus), when there is more than one such generator in the system. `qg_mvar` holds
 /// each one's bus total on entry.
@@ -986,4 +1089,48 @@ fn share_reactive_power(case: &Case, on: &[(usize, usize)], qg_mvar: &mut [f64])
 /// [`AcModel::new`] followed by [`AcModel::solve`], with their errors.
 pub fn ac_power_flow(case: &Case) -> Result<AcSolution, PowerflowError> {
     AcModel::new(case)?.solve(case, AcOptions::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refill_equals_a_fresh_assembly() {
+        // A three-bus triangle: reference, PV and PQ, so every block of the Jacobian is used
+        let text = "function mpc = t\nmpc.version = '2';\nmpc.baseMVA = 100;\nmpc.bus = [\n\
+            1 3 0 0 0 0 1 1 0 135 1 1.1 0.9;\n2 2 20 5 0 0 1 1 0 135 1 1.1 0.9;\n\
+            3 1 40 15 0 8 1 1 0 135 1 1.1 0.9;\n];\nmpc.gen = [\n\
+            1 0 0 100 -100 1.03 100 1 1000 0 0 0 0 0 0 0 0 0 0 0 0;\n\
+            2 30 0 50 -50 1.01 100 1 1000 0 0 0 0 0 0 0 0 0 0 0 0;\n];\nmpc.branch = [\n\
+            1 2 0.02 0.06 0.03 0 0 0 0 0 1 -360 360;\n2 3 0.03 0.09 0.02 0 0 0 0 0 1 -360 360;\n\
+            1 3 0.01 0.05 0.02 0 0 0 0.98 2 1 -360 360;\n];\n";
+        let case = Case::parse(text).unwrap();
+        let model = AcModel::new(&case).unwrap();
+        let unknowns = Unknowns {
+            pv: model.topology.pv_buses.clone(),
+            pq: model.topology.pq_buses.clone(),
+            pv_pq: model.topology.pv_pq(),
+        };
+        let first: Vec<Complex<f64>> = (0..3)
+            .map(|k| Complex::from_polar(1.0 + 0.01 * k as f64, -0.05 * k as f64))
+            .collect();
+        let second: Vec<Complex<f64>> = (0..3)
+            .map(|k| Complex::from_polar(0.97 - 0.02 * k as f64, 0.03 * k as f64))
+            .collect();
+        let mut reused = JacobianAssembly::new(&model.ybus, &unknowns);
+        reused.refill(&model.ybus, &first);
+        reused.refill(&model.ybus, &second);
+        let mut fresh = JacobianAssembly::new(&model.ybus, &unknowns);
+        fresh.refill(&model.ybus, &second);
+        assert_eq!(reused.jacobian.pointers(), fresh.jacobian.pointers());
+        assert_eq!(reused.jacobian.indices(), fresh.jacobian.indices());
+        let bits = |m: &CscMatrix<f64>| m.values().iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&reused.jacobian), bits(&fresh.jacobian));
+        assert_eq!(
+            reused.jacobian.shape(),
+            (3, 3),
+            "PV and PQ angles, PQ magnitude"
+        );
+    }
 }
