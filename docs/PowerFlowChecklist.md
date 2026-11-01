@@ -627,7 +627,18 @@ item.
       lower limits, two generators sharing a bus, a reference handing over to a PV bus (with
       the original angle restored), several references, infeasibility, inverted limits, and
       one at a time against all at once, each checked for power balance.
-- [ ] MATPOWER's reactive-limit reference results, and the tests against them.
+- [x] MATPOWER's reactive-limit reference results, and the tests against them.
+      - **Which code:** MP-Core and legacy agree within 5.1e-12 on case14, case30 and case118,
+        but over all cases they differ (up to 71 MW on case_SyntheticUSA; case6470rte converges
+        only in legacy; case_ACTIVSg10k takes 17 iterations in MP-Core against 16). So, by the
+        agreed rule, the `qlim1`/`qlim2` references come from the legacy `runpf`.
+      - **Files:** `generate_reference.m` writes them, plus `_limited.csv`, the generators held at
+        a limit (in service at a bus made PQ, at exactly one limit), since `runpf` doesn't report
+        them. Its `write_csv` no longer leaves a blank line in a table with no rows.
+      - **Validation:** all six runs (three cases, two modes) take MATPOWER's iteration counts
+        (case14 5 and 5, case30 3 and 3, case118 6 and 16), hold the same generators, and agree
+        within 8.1e-12. case14 holds its reference generator, so the reference moves to a PV bus;
+        case30's limits don't bind; case118 holds six generators.
 - [ ] A survey with reactive limits enforced, recorded in `docs/benchmarks/`, and the docs.
 
 ## Phase 5: DC studies

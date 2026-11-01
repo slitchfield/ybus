@@ -92,3 +92,42 @@ fn fast_decoupled_matches_runpf() {
         }
     }
 }
+
+#[test]
+fn reactive_limits_match_runpf() {
+    use powerflow::ac::{AcModel, AcOptions, ReactiveLimits};
+    for name in ["case14", "case30", "case118"] {
+        let Some(path) = common::matpower_case(name) else {
+            continue; // not fetched; the skip was reported on stderr
+        };
+        let case = powerflow::case::Case::from_path(&path).unwrap();
+        let model = AcModel::new(&case).unwrap();
+        for (run, mode) in [
+            ("qlim1", ReactiveLimits::AllAtOnce),
+            ("qlim2", ReactiveLimits::OneAtATime),
+        ] {
+            let reference = common::reference::read_ac_run(&committed_dir(), name, run).unwrap();
+            let held = common::reference::read_limited(&committed_dir(), name, run).unwrap();
+            let mut options = AcOptions::default();
+            options.reactive_limits = mode;
+            let solution = model.solve(&case, options).unwrap();
+            let deviation = common::reference::ac_deviation(&case, &solution, &reference).unwrap();
+            eprintln!(
+                "{name} {run}: {} iterations (MATPOWER {}), held {:?} (MATPOWER {held:?}), largest \
+                 deviation {:e}",
+                solution.iterations,
+                reference.iterations,
+                solution.limited_generators,
+                deviation.largest()
+            );
+            assert_eq!(solution.iterations, reference.iterations, "{name} {run}");
+            let mut ours: Vec<usize> = solution.limited_generators.iter().map(|r| r + 1).collect();
+            ours.sort_unstable();
+            assert_eq!(ours, held, "{name} {run}");
+            assert!(
+                deviation.largest() <= TOLERANCE,
+                "{name} {run}: {deviation:?} exceeds {TOLERANCE}"
+            );
+        }
+    }
+}
