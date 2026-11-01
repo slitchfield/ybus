@@ -1245,3 +1245,38 @@ fn cholesky_rejects_complex_matrices_that_are_not_hermitian_positive_definite() 
         Some(SparseError::NotPositiveDefinite { .. })
     ));
 }
+
+#[test]
+fn conjugate_gradient_solves_hermitian_systems() {
+    let a = hermitian_grid(8, 81);
+    let x: Vec<Complex<f64>> = (0..64)
+        .map(|i| Complex::new(1.0 + (i % 3) as f64, (i as f64 * 0.2).sin()))
+        .collect();
+    let b = a.mul_vec(&x).unwrap();
+    let by_cg = a.conjugate_gradient(&b, 1e-13, 500).unwrap();
+    let by_cholesky = a.solve_spd(&b).unwrap();
+    for ((cg, chol), x) in by_cg.iter().zip(&by_cholesky).zip(&x) {
+        assert!((cg - chol).norm() < 1e-10, "{cg} vs {chol}");
+        assert!((cg - x).norm() < 1e-10);
+    }
+    // Both orientations agree bit for bit, as for real matrices
+    assert_eq!(
+        a.to_csc().conjugate_gradient(&b, 1e-13, 500).unwrap(),
+        by_cg
+    );
+    // CG assumes a Hermitian matrix without checking. On [[0, i], [i, 0]], which is symmetric
+    //   but not Hermitian, the first curvature ⟨b, A b⟩ is zero, so it stops at once
+    let not_hermitian = CsrMatrix::from_dense(&[
+        [Complex::new(0.0, 0.0), Complex::new(0.0, 1.0)],
+        [Complex::new(0.0, 1.0), Complex::new(0.0, 0.0)],
+    ])
+    .unwrap();
+    assert!(matches!(
+        not_hermitian.conjugate_gradient(
+            &[Complex::new(1.0, 0.0), Complex::new(0.0, 0.0)],
+            1e-12,
+            10
+        ),
+        Err(SparseError::NoConvergence { iterations: 0 })
+    ));
+}

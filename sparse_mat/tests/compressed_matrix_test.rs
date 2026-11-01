@@ -1910,3 +1910,27 @@ fn complex_triangular_solves_in_both_orientations() {
         Err(SparseError::SingularMatrix { pivot: 1 })
     );
 }
+
+#[test]
+fn conjugate_gradient_real_results_are_unchanged_by_complex_support() {
+    // The solution's bits as recorded before conjugate gradient became generic over
+    //   ComplexFloat (2026-11-01): for a real element type it must do the same arithmetic
+    let a = spd(12, 7);
+    let b: Vec<f64> = (0..12).map(|i| (i as f64 * 0.9).sin()).collect();
+    let x = a.conjugate_gradient(&b, 1e-13, 200).unwrap();
+    let recorded: [u64; 12] = [
+        0xbf937a220b38cbb4,
+        0x3fa6632e3b4907c2,
+        0x3fa1176dcf767ee9,
+        0x3f8cc7e3077051e2,
+        0xbf96ba9623f3915f,
+        0xbf97c3bd986db13c,
+        0xbf9ea2074bd9bb61,
+        0x3f56f4e2590efdfd,
+        0x3fad4dd5e3d674a8,
+        0x3fa8011ea7abc637,
+        0x3f9d54e1e84d5ec6,
+        0xbf840481611b8cc7,
+    ];
+    assert_eq!(x.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), recorded);
+}

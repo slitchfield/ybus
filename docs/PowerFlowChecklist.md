@@ -426,7 +426,12 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
       Cholesky still passes bit for bit. Tested on a Hermitian (not symmetric) grid matrix under
       every ordering (P A Pᵀ = L Lᴴ, a real positive diagonal, solves agreeing with LU), and on
       a complex symmetric matrix (`NotSymmetric`) and a Hermitian indefinite one.
-- [ ] Hermitian conjugate gradient: use conjugated inner products.
+- [x] Hermitian conjugate gradient: use conjugated inner products.
+      `conjugate_gradient` takes any `ComplexFloat` element type, with ⟨u, v⟩ = Σ conj(uᵢ) vᵢ.
+      The residual's squared norm, the curvature and the step lengths are real (`T::Real`), and
+      `tolerance` is `T::Real` (still `f64` for `f64` callers). A real solution's bits, recorded
+      before the change, are unchanged (a permanent test). Tested on a Hermitian grid matrix,
+      matching the Cholesky solution, with CSR and CSC agreeing bit for bit.
 - [ ] Run every solver test for both `f64` and `Complex<f64>`.
 - [ ] Note in the docs which float types keep solver support. Corrected while planning:
       `ComplexFloat` is sealed, but its seal is implemented for every `Float + FloatConst` type
