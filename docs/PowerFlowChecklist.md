@@ -568,11 +568,47 @@ types through one code path, and every real result is bit for bit what it was.
         how it was checked (references kept in tests, MATPOWER validation and surveys), the CI
         jobs, the test data, and the dependencies' licences, which it listed slightly wrong
         (the Unlicense only ever appears as an alternative to MIT).
-- [ ] Follow-up: build the Newton Jacobian through an assembly map from Ybus's entries, refilling
-      its values in place each iteration instead of building intermediate matrices, now that the
-      build is measured at about half of a Newton solve on case2383wp.
-- [ ] Deferred: enforcing generator reactive power limits (`runpf`'s `pf.enforce_q_lims`),
-      switching a PV bus to PQ at a limit and re-solving.
+- [x] Moved to the next section: an assembly-map Jacobian, and enforcing generator reactive
+      power limits.
+
+## Before Phase 5: AC follow-ups
+
+Moved ahead of Phase 5 by the maintainer (2026-11-01): the Phase 4.5 follow-up and deferred
+item.
+
+- [x] **Decide:** which reactive-limit modes, how to split the work, and which MATPOWER results
+      to validate against.
+      Decided (2026-11-01):
+      - **Both of MATPOWER's modes:** all violators converted at once (`enforce_q_lims = 1`)
+        and only the largest per round (`= 2`), off by default.
+      - **Two PRs:** the Jacobian first, then reactive limits stacked on it.
+      - **References:** if MATPOWER's MP-Core and legacy results agree within 1e-9, use
+        `runpf`'s defaults; otherwise the legacy code this implementation follows, recording the
+        gap, as for fast-decoupled.
+- [x] Build the Newton Jacobian through an assembly map from Ybus's entries, refilling its values
+      in place each iteration, bit for bit equal to the matrix-operation build it replaces.
+      `JacobianAssembly` in `powerflow/src/ac.rs` lays the Jacobian out once per set of bus
+      roles with `from_triplets_mapped` (each Ybus entry feeds up to one position per block)
+      and refills it each iteration, computing each entry with the operations the old build
+      performed on it. Tested bit for bit against the old build (kept in
+      `tests/ac_jacobian_test.rs` as `reference_jacobian`) on the AC fixtures, case14, case30,
+      case118 and case2383wp, at four voltage states each, and a refill against a fresh layout.
+- [x] Measure it: criterion before and after, and an AC survey rerun that matches the record.
+      - **Results unchanged:** the AC survey rerun (NR, FDXB, FDBX) matches
+        `docs/benchmarks/ac-power-flow-2026-11-01.csv` in every column but time and memory, on
+        all 234 case-and-method rows.
+      - **Faster:** case2383wp's Newton solve takes 7.15 ms instead of 11.8 ms in criterion
+        (−40%), and the survey's Newton solves 1.67 s together instead of 2.17 s. Fast-decoupled
+        is unchanged, as it should be.
+      - **Inferred refill cost:** the solve saved 4.7 ms over 6 iterations, so a refill costs
+        about 0.18 ms where the old build took 0.96 ms. The `jacobian` benchmark measures a
+        layout and one fill (0.86 ms), since `AcModel::jacobian` makes a fresh layout each call.
+- [ ] Let the AC solve take changing bus roles (REF, PV, PQ), with a `bustypes` shared with the
+      topology, and no change in results.
+- [ ] Enforce generator reactive power limits as `runpf`'s `pf.enforce_q_lims` does (both
+      modes), with fixture tests.
+- [ ] MATPOWER's reactive-limit reference results, and the tests against them.
+- [ ] A survey with reactive limits enforced, recorded in `docs/benchmarks/`, and the docs.
 
 ## Phase 5: DC studies
 
