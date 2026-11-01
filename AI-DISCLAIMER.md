@@ -67,8 +67,9 @@ Considerable care went into attributing the ideas this code is built on:
   descriptions in papers and textbooks, and no source code from other libraries was knowingly
   copied or ported. The DC and AC power flows are the exception: they reproduce MATPOWER's
   results, and were written with reference to MATPOWER's BSD-licensed source code as well as
-  its documentation. They are reimplementations in Rust, not translations; the README's
-  [References](README.md#references) section describes how they relate to MATPOWER.
+  its documentation and technical notes. They are reimplementations in Rust, not translations;
+  the README's [References](README.md#references) section names the MATPOWER files consulted,
+  and the parts written from published formulas instead.
 - **References:** the [References](README.md#references) section of the README lists the
   publication behind each implemented algorithm, and behind each planned one.
 - **Checked citations:** each citation's details (authors, venue, pages, DOI) were checked against
@@ -110,8 +111,10 @@ licensing follows current best practices for AI-assisted software development:
 - **No third-party code:** no source code from other projects is included, so there are no
   inherited license obligations to track.
 - **Third-party test data:** MATPOWER's case files are not included; a script downloads them
-  for testing. The repository does include DC power flow results that MATPOWER computed from
-  three public test cases, as expected values for tests. Their sources are credited in
+  for testing. The repository does include power flow results that MATPOWER computed from three
+  public test cases (DC, and AC by Newton's method and fast-decoupled), as expected values for
+  tests, and benchmark records that hold only case names and measurements. The results' sources
+  are credited in
   [`powerflow/tests/data/matpower-reference/README.md`](powerflow/tests/data/matpower-reference/README.md).
 - **Compatible dependencies:** every dependency, including transitive ones, is under a compatible
   permissive license (MIT, Apache-2.0, Unlicense or Unicode-3.0).
