@@ -593,7 +593,16 @@ item.
       performed on it. Tested bit for bit against the old build (kept in
       `tests/ac_jacobian_test.rs` as `reference_jacobian`) on the AC fixtures, case14, case30,
       case118 and case2383wp, at four voltage states each, and a refill against a fresh layout.
-- [ ] Measure it: criterion before and after, and an AC survey rerun that matches the record.
+- [x] Measure it: criterion before and after, and an AC survey rerun that matches the record.
+      - **Results unchanged:** the AC survey rerun (NR, FDXB, FDBX) matches
+        `docs/benchmarks/ac-power-flow-2026-11-01.csv` in every column but time and memory, on
+        all 234 case-and-method rows.
+      - **Faster:** case2383wp's Newton solve takes 7.15 ms instead of 11.8 ms in criterion
+        (−40%), and the survey's Newton solves 1.67 s together instead of 2.17 s. Fast-decoupled
+        is unchanged, as it should be.
+      - **Inferred refill cost:** the solve saved 4.7 ms over 6 iterations, so a refill costs
+        about 0.18 ms where the old build took 0.96 ms. The `jacobian` benchmark measures a
+        layout and one fill (0.86 ms), since `AcModel::jacobian` makes a fresh layout each call.
 - [ ] Let the AC solve take changing bus roles (REF, PV, PQ), with a `bustypes` shared with the
       topology, and no change in results.
 - [ ] Enforce generator reactive power limits as `runpf`'s `pf.enforce_q_lims` does (both

@@ -1,7 +1,8 @@
 //! Criterion benchmarks of the AC power flow on MATPOWER's case2383wp, the case the DC benchmark
 //! uses (`dc_power_flow.rs`): building the model, solving by Newton's method and by
-//! fast-decoupled XB and BX, and building one Newton Jacobian, to measure the Jacobian build's
-//! share of a Newton solve.
+//! fast-decoupled XB and BX, and `AcModel::jacobian`. That lays the Jacobian out and fills it
+//! once; inside a Newton solve the layout is made once per solve and only the refill repeats,
+//! so the solve's time is the better measure of the Jacobian's cost.
 //!
 //! Run with `cargo bench -p powerflow --bench ac_power_flow`. Like `dc_power_flow`, it's skipped
 //! without the fetched case unless `YBUS_REQUIRE_CASES=1`, and `cargo test --all-targets` runs
