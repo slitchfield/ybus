@@ -5,7 +5,7 @@ Sparse linear algebra and power flow for Rust. A Cargo workspace with two crates
 | Crate | Status | Contents |
 |---|---|---|
 | [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM), sparse Cholesky and LU (complex too, with refactoring), conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
-| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), which match MATPOWER's `runpf` on its reference cases. Next: a survey of every case. |
+| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
 formulation is built around.
@@ -41,9 +41,9 @@ API overview, and [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for
     [`powerflow/tests/data/matpower-reference/`](powerflow/tests/data/matpower-reference/). It
     needs Octave. Given an output directory and cases, it generates MATPOWER's results for any
     case instead, for local comparisons; never commit those.
-- **Benchmarks:** `cargo bench -p powerflow` times, with criterion, the DC power flow on
-  case2383wp and reassembling its matrices through an assembly map, and
-  `scripts/benchmark-dc.sh` surveys every MATPOWER case once, comparing the results with
+- **Benchmarks:** `cargo bench -p powerflow` times, with criterion, the DC and AC power flows on
+  case2383wp and reassembling matrices through an assembly map, and `scripts/benchmark-dc.sh`
+  and `scripts/benchmark-ac.sh` survey every MATPOWER case once, comparing the results with
   MATPOWER's. [`docs/benchmarks/`](docs/benchmarks/) records the results.
 
 ## Documentation

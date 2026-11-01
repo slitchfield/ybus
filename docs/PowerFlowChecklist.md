@@ -535,11 +535,27 @@ types through one code path, and every real result is bit for bit what it was.
         fast-decoupled results differ by exactly that (and by up to 9.7e-9 on the other runs),
         while this code follows the legacy `fdpf`. So the fast-decoupled references are generated
         with `exp.use_legacy_core`, and the tolerance stays 1e-9.
-- [ ] An AC survey of every MATPOWER case against MATPOWER's `runpf`, recorded in
+- [x] An AC survey of every MATPOWER case against MATPOWER's `runpf`, recorded in
       `docs/benchmarks/`, and criterion benchmarks on case2383wp, including the Jacobian build's
       share of the Newton–Raphson time.
+      Recorded in `docs/benchmarks/ac-power-flow-2026-11-01.md` (`ac_survey`,
+      `scripts/benchmark-ac.sh`, and the `ac_power_flow` criterion bench):
+      - **Convergence:** NR converges on 77 cases, FDXB on 67 and FDBX on 66: exactly the cases
+        MATPOWER converges on, each in MATPOWER's number of iterations.
+      - **Agreement:** within 2.3e-9 (NR), 4.0e-9 (FDXB) and 1.9e-10 (FDBX) of each quantity's
+        largest value. In 10 cases MATPOWER's MP-Core and legacy post-processing share
+        generator reactive output differently (MP-Core even reports NaN on case6470rte); there
+        this code matches the legacy `pfsoln`, which it follows, within 2.9e-9.
+      - **Time:** NR solves all 77 in 2.17 s; fast-decoupled solves its cases about three times
+        faster than NR. On case2383wp, NR takes 12.9 ms, FDXB 4.15 ms and FDBX 3.87 ms.
+      - **The Jacobian build is about half of Newton's time** (6 builds of 1.12 ms in 12.9 ms),
+        so an assembly-map Jacobian becomes the follow-up item below. `AcModel::jacobian` is
+        public, so the benchmark measures the solver's own build.
 - [ ] Review the README's references, the attribution of MATPOWER and of committed data, and
       `AI-DISCLAIMER.md` against the repository as it stands.
+- [ ] Follow-up: build the Newton Jacobian through an assembly map from Ybus's entries, refilling
+      its values in place each iteration instead of building intermediate matrices, now that the
+      build is measured at about half of a Newton solve on case2383wp.
 - [ ] Deferred: enforcing generator reactive power limits (`runpf`'s `pf.enforce_q_lims`),
       switching a PV bus to PQ at a limit and re-solving.
 

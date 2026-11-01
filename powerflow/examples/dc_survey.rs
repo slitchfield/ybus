@@ -30,8 +30,8 @@ use powerflow::case::Case;
 use powerflow::dc::{DcModel, DcSolver};
 use sparse_mat::compressed_matrix::{LuOptions, Ordering};
 
-/// `ordering` is the Cholesky factorization's. `negative_branches` counts the in-service branches with a negative series susceptance,
-/// which can make B′ indefinite. `bprime_dimension` and `bprime_entries` give B′'s size and
+/// `ordering` is the factorization's, Cholesky or LU. `negative_branches` counts the in-service
+/// branches with a negative series susceptance, which can make B′ indefinite. `bprime_dimension` and `bprime_entries` give B′'s size and
 /// stored entries, and `factor_entries` counts those of the factor the solve used: L for
 /// Cholesky, or L and U for LU, counting their diagonal once. `backward_error` is the
 /// normwise backward error of the solve's angles (`tests/common/accuracy.rs`), and
