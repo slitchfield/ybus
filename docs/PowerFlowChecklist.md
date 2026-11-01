@@ -369,7 +369,12 @@ Merged in PR #2.
         from 109× to 2.5×. All 78 cases now solve in 0.35 s together, against 496 s.
       - **Agreement with MATPOWER:** every case within 2.5e-12 of each quantity's largest value,
         against 1.1e-10 before.
-- [ ] `solve_in_place` and `solve_many` (several right-hand sides).
+- [x] `solve_in_place` and `solve_many` (several right-hand sides).
+      On both `Cholesky` and `Lu`. `solve_in_place(&mut rhs)` overwrites its argument with the
+      solution (permuting still takes one scratch vector), and `solve_many(&[b])` returns one
+      solution per right-hand side, sharing one scratch vector. `solve` now runs through the same
+      code, so all three agree bit for bit (tested, with complex right-hand sides for LU). A
+      wrong length is `ShapeMismatch` and leaves an in-place argument untouched.
 - [x] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward
       error: unordered, ours was up to 30 times MATPOWER's on high-fill cases, and correlated
       with fill where MATPOWER's, from an ordered solve, didn't. Rerun `scripts/benchmark-dc.sh`

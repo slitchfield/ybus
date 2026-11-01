@@ -292,20 +292,91 @@ impl<T: Scalar + Float> Cholesky<T> {
     /// permutes the result back. Returns `SparseError::ShapeMismatch` unless `b` has one entry
     /// per row of `A`.
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
-        if b.len() != self.perm.len() {
-            return Err(SparseError::ShapeMismatch {
-                left: self.l.shape,
-                right: (b.len(), 1),
-            });
+        let mut x = b.to_vec();
+        self.solve_in_place(&mut x)?;
+        Ok(x)
+    }
+
+    /// Solves `A x = b`, overwriting `rhs` (which holds `b`) with `x`. It saves returning a new
+    /// vector, though permuting still uses one scratch vector of the same length. The result is
+    /// bit for bit `solve`'s. Returns `SparseError::ShapeMismatch`, leaving `rhs` untouched,
+    /// unless `rhs` has one entry per row of `A`.
+    pub fn solve_in_place(&self, rhs: &mut [T]) -> Result<(), SparseError> {
+        self.check_rhs(rhs.len())?;
+        let mut scratch = Vec::with_capacity(rhs.len());
+        self.substitute(rhs, &mut scratch);
+        Ok(())
+    }
+
+    /// Solves `A x = b` for each right-hand side `b` in `rhs`, returning the solutions in the
+    /// same order. One scratch vector serves them all, and each solution is bit for bit what
+    /// `solve` gives. Returns `SparseError::ShapeMismatch` naming the first right-hand side
+    /// whose length isn't the number of rows of `A`.
+    pub fn solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
+        for b in rhs {
+            self.check_rhs(b.len())?;
         }
-        let permuted: Vec<T> = self.perm.iter().map(|&row| b[row]).collect();
-        let y = self.l.solve_lower_triangular(&permuted)?;
-        let z = self.l_transpose.solve_upper_triangular(&y)?;
-        let mut x = vec![T::zero(); z.len()];
-        for (&row, value) in self.perm.iter().zip(z) {
+        let mut scratch = Vec::with_capacity(self.perm.len());
+        Ok(rhs
+            .iter()
+            .map(|b| {
+                let mut x = b.clone();
+                self.substitute(&mut x, &mut scratch);
+                x
+            })
+            .collect())
+    }
+
+    fn check_rhs(&self, len: usize) -> Result<(), SparseError> {
+        if len == self.perm.len() {
+            Ok(())
+        } else {
+            Err(SparseError::ShapeMismatch {
+                left: self.l.shape,
+                right: (len, 1),
+            })
+        }
+    }
+
+    /// Overwrites `x` (holding `b`, already checked) with the solution: `P b` into `scratch`,
+    /// forward substitution with `L` and back substitution with `Lᵀ` by rows, in the order
+    /// `solve_lower_triangular` and `solve_upper_triangular` use, then back through `P`. The
+    /// factor's diagonal is positive, so there is no zero to divide by.
+    fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
+        scratch.clear();
+        scratch.extend(self.perm.iter().map(|&row| x[row]));
+        let y = scratch.as_mut_slice();
+        let (l, lt) = (&self.l, &self.l_transpose);
+        for i in 0..y.len() {
+            let mut remainder = y[i];
+            let mut diagonal = T::one();
+            for p in l.ptr[i]..l.ptr[i + 1] {
+                let col = l.idx[p];
+                if col < i {
+                    remainder = remainder - l.data[p] * y[col];
+                } else {
+                    diagonal = l.data[p];
+                    break;
+                }
+            }
+            y[i] = remainder / diagonal;
+        }
+        for i in (0..y.len()).rev() {
+            let mut remainder = y[i];
+            let mut diagonal = T::one();
+            for p in lt.ptr[i]..lt.ptr[i + 1] {
+                let col = lt.idx[p];
+                if col == i {
+                    diagonal = lt.data[p];
+                } else if col > i {
+                    remainder = remainder - lt.data[p] * y[col];
+                }
+            }
+            y[i] = remainder / diagonal;
+        }
+        for (&row, &value) in self.perm.iter().zip(y.iter()) {
             x[row] = value;
         }
-        Ok(x)
     }
 }
 

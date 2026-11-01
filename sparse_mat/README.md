@@ -124,11 +124,14 @@ fn main() -> Result<(), SparseError> {
   `norm_1` and `norm_inf` (float element types).
 - **Solvers** (float element types): `solve_lower_triangular` and `solve_upper_triangular` in
   either orientation, and `conjugate_gradient`; on `CsrMatrix`, `cholesky()` (a `Cholesky` of
-  P A Pᵀ, ordered by AMD, with `solve`, `l` and `permutation`) and `solve_spd`.
+  P A Pᵀ, ordered by AMD, with `solve`, `solve_in_place`, `solve_many`, `l` and
+  `permutation`) and `solve_spd`.
 - **LU** (real or complex element types): on `CscMatrix`, `lu()` and `solve`, Gilbert and
   Peierls's left-looking LU of P A Q, AMD-ordered, with threshold partial pivoting (0.1 by
-  default; `LuOptions`). The `Lu` has `solve`, `determinant`, `l`, `u`, `permutation` and
-  `column_permutation`. `analyze_lu(ordering)` separates the ordering from `factor`.
+  default; `LuOptions`). The `Lu` has `solve`, `solve_in_place`, `solve_many`, `determinant`,
+  `l`, `u`, `permutation` and `column_permutation`, and `refactor` reuses its pivots and
+  patterns for new values with the same pattern. `analyze_lu(ordering)` separates the
+  ordering from `factor`.
 - **Orderings and symbolic analysis:** `ordering(Ordering::Amd)` (approximate minimum degree)
   and `ordering(Ordering::Rcm)` (reverse Cuthill–McKee), on the pattern of A + Aᵀ in either
   orientation, with `bandwidth` and `profile` to measure the latter;
