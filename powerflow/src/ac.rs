@@ -173,12 +173,16 @@ impl AcModel {
             check_impedance(row + 1, &case.branch[row])?;
         }
         let stamps = Self::stamps(case, &self.topology);
-        let refilled = "the maps were built for these matrices from the same stamp list";
+        let same_stamps_message = "the maps were built for these matrices from the same stamp list";
         self.ybus
             .refill(&self.ybus_map, &stamps.ybus)
-            .expect(refilled);
-        self.yf.refill(&self.yf_map, &stamps.yf).expect(refilled);
-        self.yt.refill(&self.yt_map, &stamps.yt).expect(refilled);
+            .expect(same_stamps_message);
+        self.yf
+            .refill(&self.yf_map, &stamps.yf)
+            .expect(same_stamps_message);
+        self.yt
+            .refill(&self.yt_map, &stamps.yt)
+            .expect(same_stamps_message);
         self.base_mva = case.base_mva;
         Ok(())
     }
@@ -732,23 +736,23 @@ impl AcModel {
     /// Im dS/dVm[pq, pq]]]`. Ybus stores its whole diagonal, so every iteration's Jacobian has
     /// the same pattern.
     fn jacobian(&self, v: &[Complex<f64>], unknowns: &Unknowns) -> CscMatrix<f64> {
-        let shapes = "the factors match Ybus's dimensions";
-        let current = self.ybus.mul_vec(v).expect(shapes);
+        let shapes_match_message = "v and the factors have one entry per bus, matching Ybus";
+        let current = self.ybus.mul_vec(v).expect(shapes_match_message);
         let v_unit: Vec<Complex<f64>> = v.iter().map(|value| value / value.norm()).collect();
         let j_v: Vec<Complex<f64>> = v.iter().map(|value| value * Complex::i()).collect();
 
-        let ybus_v = self.ybus.scale_cols(v).expect(shapes);
+        let ybus_v = self.ybus.scale_cols(v).expect(shapes_match_message);
         let ds_dva = (&CsrMatrix::from_diagonal(current.iter().copied()) - &ybus_v)
             .conj()
             .scale_rows(&j_v)
-            .expect(shapes);
+            .expect(shapes_match_message);
         let ds_dvm = &self
             .ybus
             .scale_cols(&v_unit)
-            .expect(shapes)
+            .expect(shapes_match_message)
             .conj()
             .scale_rows(v)
-            .expect(shapes)
+            .expect(shapes_match_message)
             + &CsrMatrix::from_diagonal(current.iter().zip(&v_unit).map(|(i, u)| i.conj() * u));
 
         let block = |matrix: &CsrMatrix<f64>, rows: &[usize], cols: &[usize]| {
@@ -759,9 +763,12 @@ impl AcModel {
         let (pvpq, pq) = (&unknowns.pv_pq, &unknowns.pq);
         let top = CsrMatrix::hstack([block(&re_va, pvpq, pvpq), block(&re_vm, pvpq, pq)]);
         let bottom = CsrMatrix::hstack([block(&im_va, pq, pvpq), block(&im_vm, pq, pq)]);
-        CsrMatrix::vstack([top.expect(shapes), bottom.expect(shapes)])
-            .expect(shapes)
-            .to_csc()
+        CsrMatrix::vstack([
+            top.expect(shapes_match_message),
+            bottom.expect(shapes_match_message),
+        ])
+        .expect(shapes_match_message)
+        .to_csc()
     }
 
     /// `pfsoln`'s results, indexed like the case's tables.
