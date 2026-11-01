@@ -9,6 +9,7 @@ change. Each record names the code, the machine and the method it used.
 | [`dc-power-flow-rcm-2026-10-31.md`](dc-power-flow-rcm-2026-10-31.md) | The same survey with B′'s Cholesky factorization ordered by reverse Cuthill–McKee (Phase 3), with the first test of the hypothesis that fill-in drives the backward error. |
 | [`dc-power-flow-amd-2026-11-01.md`](dc-power-flow-amd-2026-11-01.md) | The Cholesky cases ordered by approximate minimum degree against RCM (Phase 3): fill, the cost of each stage, and the hypothesis's verdict for Cholesky. |
 | [`dc-power-flow-lu-2026-11-01.md`](dc-power-flow-lu-2026-11-01.md) | The LU cases with the Gilbert–Peierls LU (Phase 3), unordered and AMD-ordered, against the old LU, and the hypothesis's verdict for LU. |
+| [`ac-power-flow-2026-11-01.md`](ac-power-flow-2026-11-01.md) | The AC power flow on every case by Newton's method and fast-decoupled XB and BX (Phase 4.5), against MATPOWER's `runpf`, with criterion benchmarks on case2383wp. |
 
 ## Measuring
 
@@ -18,6 +19,10 @@ change. Each record names the code, the machine and the method it used.
 - **Reassembly:** `cargo bench -p powerflow --bench assembly` times refilling case2383wp's
   B stamps, and a Jacobian-shaped pattern of 2×2 blocks built from them, through an assembly
   map against building them afresh with `from_triplets` (`powerflow/benches/assembly.rs`).
+- **The AC power flow:** `cargo bench -p powerflow --bench ac_power_flow` times the AC model,
+  the three solution methods and one Newton Jacobian on case2383wp, and
+  `scripts/benchmark-ac.sh [<output.csv>]` surveys every case with the `ac_survey` example, the
+  method chosen by `YBUS_BENCH_METHOD` (`nr`, `fdxb` or `fdbx`).
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example
   on each MATPOWER case in its own process, under a time and memory limit, and compares the
   results with MATPOWER's own. `YBUS_BENCH_ORDERING` chooses the Cholesky ordering. Its header comment lists what it needs and its settings.

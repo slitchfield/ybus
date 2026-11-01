@@ -24,3 +24,7 @@ harness = false
 [[bench]]
 name = "assembly"
 harness = false
+
+[[bench]]
+name = "ac_power_flow"
+harness = false
