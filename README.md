@@ -5,7 +5,7 @@ Sparse linear algebra and power flow for Rust. A Cargo workspace with two crates
 | Crate | Status | Contents |
 |---|---|---|
 | [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM), sparse Cholesky and LU (complex too, with refactoring), conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
-| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, and DC power flow, which agrees with MATPOWER on all 78 of its cases. Next: Newton–Raphson and fast-decoupled AC power flow. |
+| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and Newton–Raphson AC power flow, which matches MATPOWER's `runpf` on its reference cases. Next: fast-decoupled AC power flow and a survey of every case. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
 formulation is built around.
@@ -82,8 +82,10 @@ descriptions below; no source code from other libraries was copied or ported.
 MATPOWER's to within 1e-9. Its DC power flow (`powerflow::dc`) was written from MATPOWER's
 documentation and with reference to its BSD-licensed source code (`ext2int`, `bustypes`,
 `makeBdc`, `dcpf` and `runpf`), to match its handling of every case, including isolated
-buses, out-of-service elements and phase shifters. It is a reimplementation in Rust, not a
-translation, and the module documentation names the MATPOWER functions each step follows.
+buses, out-of-service elements and phase shifters. Its AC power flow (`powerflow::ac`) was
+written the same way, with reference to `makeYbus`, `makeSbus`, `newtonpf`, `dSbus_dV` and
+`pfsoln` as well. Both are reimplementations in Rust, not translations, and the module
+documentation names the MATPOWER functions each step follows.
 
 ### Implemented
 
@@ -107,7 +109,7 @@ translation, and the module documentation names the MATPOWER functions each step
 | `powerflow`'s tests and `dc_survey` example (`tests/common/accuracy.rs`) | Normwise backward error, η = ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) | J. L. Rigal and J. Gaches, "On the compatibility of a given solution with the data of a linear system," *J. ACM* 14(3):543–548, 1967. |
 | | | N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed., SIAM, 2002, ch. 7. [doi:10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027) |
 | `powerflow::case` (`Case::parse`) | The MATPOWER case format, as `caseformat.m` defines it | R. D. Zimmerman and C. E. Murillo-Sánchez, *MATPOWER User's Manual*, Version 8.1, 2025. [doi:10.5281/zenodo.15871661](https://doi.org/10.5281/zenodo.15871661) |
-| `powerflow::dc`, and the reference results its tests compare against | DC power flow as MATPOWER's `rundcpf` computes it (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
+| `powerflow::dc` and `powerflow::ac`, and the reference results their tests compare against | DC power flow as MATPOWER's `rundcpf` computes it, and Newton–Raphson AC power flow as its `runpf` does (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
 | | | R. D. Zimmerman and C. E. Murillo-Sánchez, MATPOWER, Version 8.1 [software], 2025. <https://matpower.org>, [doi:10.5281/zenodo.15871662](https://doi.org/10.5281/zenodo.15871662) |
 
 ### Planned (see [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md))
@@ -117,7 +119,6 @@ translation, and the module documentation names the MATPOWER functions each step
 | COLAMD ordering (deferred: only needed for patterns far from symmetric) | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "A column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):353–376, 2004. |
 | Low-rank updates for contingencies (Phase 5) | J. Sherman and W. J. Morrison, "Adjustment of an inverse matrix corresponding to a change in one element of a given matrix," *Ann. Math. Statist.* 21(1):124–127, 1950. [doi:10.1214/aoms/1177729893](https://doi.org/10.1214/aoms/1177729893) |
 | | M. A. Woodbury, "Inverting modified matrices," Memorandum Report 42, Statistical Research Group, Princeton University, 1950. |
-| Newton–Raphson power flow and its Jacobian (Phase 4.5) | The MATPOWER paper and manual above |
 | Fast-decoupled power flow (Phase 4.5) | B. Stott and O. Alsaç, "Fast decoupled load flow," *IEEE Trans. Power App. Syst.* PAS-93(3):859–869, 1974. |
 
 ### Licenses of related software

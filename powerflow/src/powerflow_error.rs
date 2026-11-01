@@ -77,6 +77,12 @@ pub enum PowerflowError {
         /// The 1-based row in the branch table.
         row: usize,
     },
+    /// An in-service branch has zero impedance (`r = x = 0`), so its AC series admittance
+    /// `1 / (r + jx)` is infinite.
+    ZeroImpedance {
+        /// The 1-based row in the branch table.
+        row: usize,
+    },
     /// No bus can be the DC reference: there's no REF bus, and no PV bus with an in-service
     /// generator to take its place.
     NoReferenceBus,
@@ -86,21 +92,30 @@ pub enum PowerflowError {
         /// The label of the first such bus, in case order.
         bus_label: usize,
     },
-    /// The DC system is singular although every bus reaches a reference bus, which takes
-    /// branch reactances that cancel out (for example a series capacitor in parallel with an
-    /// equal and opposite line).
+    /// The power flow's linear system is singular although every bus reaches a reference bus.
+    /// In a DC power flow that takes branch reactances that cancel out (for example a series
+    /// capacitor in parallel with an equal and opposite line); in an AC one, a singular Newton
+    /// Jacobian.
     SingularNetwork {
-        /// The label of the bus whose angle couldn't be determined: the elimination step that
-        /// failed, or the first angle that came out non-finite or over 10⁵ radians.
+        /// The label of the bus whose voltage couldn't be determined: whose angle or (AC)
+        /// magnitude has no pivot, or (DC) whose angle came out non-finite or over 10⁵
+        /// radians.
         bus_label: usize,
     },
-    /// A DC model was asked to solve a case whose tables don't match the case it was built
-    /// from.
+    /// A model was asked to solve (or, for AC, re-stamp) a case whose tables don't match the
+    /// case it was built from.
     CaseMismatch {
         /// The model's case's table lengths: buses, generators, branches.
         expected: (usize, usize, usize),
         /// The given case's table lengths.
         found: (usize, usize, usize),
+    },
+    /// The AC power flow didn't meet its tolerance within its iteration limit.
+    NoConvergence {
+        /// How many Newton iterations were taken.
+        iterations: usize,
+        /// The largest real or reactive power mismatch after the last one (p.u.).
+        mismatch_pu: f64,
     },
 }
 
@@ -148,6 +163,9 @@ impl fmt::Display for PowerflowError {
             PowerflowError::ZeroReactance { row } => {
                 write!(f, "branch row {row} is in service with zero reactance")
             }
+            PowerflowError::ZeroImpedance { row } => {
+                write!(f, "branch row {row} is in service with zero impedance")
+            }
             PowerflowError::NoReferenceBus => write!(
                 f,
                 "no reference bus: no REF bus, and no PV bus with an in-service generator"
@@ -158,12 +176,21 @@ impl fmt::Display for PowerflowError {
             ),
             PowerflowError::SingularNetwork { bus_label } => write!(
                 f,
-                "the DC system is singular: the angle at bus {bus_label} can't be determined"
+                "the power flow system is singular: the voltage at bus {bus_label} can't be \
+                 determined"
             ),
             PowerflowError::CaseMismatch { expected, found } => write!(
                 f,
-                "the DC model was built for a case with (buses, generators, branches) = \
+                "the model was built for a case with (buses, generators, branches) = \
                  {expected:?}, not {found:?}"
+            ),
+            PowerflowError::NoConvergence {
+                iterations,
+                mismatch_pu,
+            } => write!(
+                f,
+                "the AC power flow didn't converge in {iterations} iterations (largest mismatch \
+                 {mismatch_pu:e} p.u.)"
             ),
         }
     }

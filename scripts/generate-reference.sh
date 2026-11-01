@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Regenerates the committed DC power flow reference results in
-#   powerflow/tests/data/matpower-reference/ by running MATPOWER's rundcpf under Octave.
+# Regenerates the committed DC and AC power flow reference results in
+#   powerflow/tests/data/matpower-reference/ by running MATPOWER's rundcpf and runpf under Octave.
 #   Needs Octave on PATH; fetches MATPOWER with scripts/fetch-matpower.sh (or uses MATPOWER_DIR).
 #
 # Usage: scripts/generate-reference.sh [<output-dir> <case>...]

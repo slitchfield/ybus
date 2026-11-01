@@ -17,14 +17,14 @@
 //!   results are reported as 0.0, as `runpf` reports them (lines 474–480 of MATPOWER 8.1's
 //!   `runpf.m`).
 
-use std::collections::{HashMap, VecDeque};
 use std::f64::consts::PI;
 
 use sparse_mat::compressed_matrix::{CsrMatrix, LuOptions, Ordering};
 use sparse_mat::sparse_error::SparseError;
 
-use crate::case::{BusType, Case};
+use crate::case::Case;
 use crate::powerflow_error::PowerflowError;
+use crate::topology::Topology;
 
 /// The DC model of a case: the B matrices and phase-shifter injections in per unit, over the
 /// connected buses and in-service branches, with each bus's role in the solve.
@@ -38,16 +38,7 @@ pub struct DcModel {
     bf: CsrMatrix<f64>,
     pbusinj_pu: Vec<f64>,
     pfinj_pu: Vec<f64>,
-    bus_rows: Vec<usize>,
-    branch_rows: Vec<usize>,
-    gen_rows: Vec<usize>,
-    /// The internal bus of each in-service generator, parallel to `gen_rows`
-    gen_buses: Vec<usize>,
-    ref_buses: Vec<usize>,
-    pv_buses: Vec<usize>,
-    pq_buses: Vec<usize>,
-    /// The table lengths of the case the model was built from: buses, generators, branches
-    case_shape: (usize, usize, usize),
+    topology: Topology,
 }
 
 impl DcModel {
@@ -72,40 +63,15 @@ impl DcModel {
     /// connected bus can't reach a reference bus through in-service branches, which would make
     /// the solve singular.
     pub fn new(case: &Case) -> Result<DcModel, PowerflowError> {
-        // Only Case::parse validates, so a case edited since needs checking here
-        case.validate()?;
-
-        // ext2int: connected buses, in case order, and the label → internal index map
-        let bus_rows: Vec<usize> = (0..case.bus.len())
-            .filter(|&row| case.bus[row].bus_type != BusType::Isolated)
-            .collect();
-        let mut internal = HashMap::with_capacity(bus_rows.len());
-        for (index, &row) in bus_rows.iter().enumerate() {
-            internal.insert(case.bus[row].bus_label, index);
-        }
-        let nb = bus_rows.len();
-
-        // Generators and branches count only when in service and fully connected
-        let (mut gen_rows, mut gen_buses) = (vec![], vec![]);
-        for (row, generator) in case.generator.iter().enumerate() {
-            if let (true, Some(&bus)) = (generator.status, internal.get(&generator.bus_label)) {
-                gen_rows.push(row);
-                gen_buses.push(bus);
+        let topology = Topology::new(case, |row, branch| {
+            if branch.x == 0.0 {
+                Err(PowerflowError::ZeroReactance { row })
+            } else {
+                Ok(())
             }
-        }
-        let mut branch_rows = vec![];
-        let mut ends = vec![];
-        for (row, branch) in case.branch.iter().enumerate() {
-            let from = internal.get(&branch.from_label);
-            let to = internal.get(&branch.to_label);
-            if let (true, Some(&from), Some(&to)) = (branch.status, from, to) {
-                if branch.x == 0.0 {
-                    return Err(PowerflowError::ZeroReactance { row: row + 1 });
-                }
-                branch_rows.push(row);
-                ends.push((from, to));
-            }
-        }
+        })?;
+        let nb = topology.bus_rows.len();
+        let (branch_rows, ends) = (&topology.branch_rows, &topology.ends);
 
         // makeBdc. Each branch's (from, to) and (to, from) stamps are pushed together, so both
         //   positions sum the same values in the same order and Bbus is exactly symmetric,
@@ -116,7 +82,7 @@ impl DcModel {
         let mut bf_triplets = Vec::with_capacity(2 * nl);
         let mut pfinj_pu = Vec::with_capacity(nl);
         let mut pbusinj_pu = vec![0.0; nb];
-        for (k, (&row, &(from, to))) in branch_rows.iter().zip(&ends).enumerate() {
+        for (k, (&row, &(from, to))) in branch_rows.iter().zip(ends).enumerate() {
             let branch = &case.branch[row];
             let b = 1.0 / branch.x / branch.effective_tap();
             bbus_triplets.extend([(from, from, b), (from, to, -b), (to, from, -b), (to, to, b)]);
@@ -131,68 +97,13 @@ impl DcModel {
         let bf = CsrMatrix::from_triplets(nl, nb, bf_triplets)
             .expect("internal branch and bus indices are in range");
 
-        // bustypes
-        let mut has_gen = vec![false; nb];
-        for &bus in &gen_buses {
-            has_gen[bus] = true;
-        }
-        let (mut ref_buses, mut pv_buses, mut pq_buses) = (vec![], vec![], vec![]);
-        for (index, &row) in bus_rows.iter().enumerate() {
-            match case.bus[row].bus_type {
-                BusType::Ref if has_gen[index] => ref_buses.push(index),
-                BusType::PV if has_gen[index] => pv_buses.push(index),
-                _ => pq_buses.push(index),
-            }
-        }
-        if ref_buses.is_empty() {
-            if pv_buses.is_empty() {
-                return Err(PowerflowError::NoReferenceBus);
-            }
-            ref_buses.push(pv_buses.remove(0));
-        }
-
-        // Every connected bus must reach a reference bus, or B′ is singular: an island with
-        //   no reference has no fixed angle. Checked here rather than inferred from a failed
-        //   factorization, which can't name the island and may not fail at all, since
-        //   rounding can leave a tiny positive pivot.
-        let mut neighbours = vec![vec![]; nb];
-        for &(from, to) in &ends {
-            neighbours[from].push(to);
-            neighbours[to].push(from);
-        }
-        let mut reached = vec![false; nb];
-        let mut queue: VecDeque<usize> = ref_buses.iter().copied().collect();
-        for &bus in &ref_buses {
-            reached[bus] = true;
-        }
-        while let Some(bus) = queue.pop_front() {
-            for &next in &neighbours[bus] {
-                if !reached[next] {
-                    reached[next] = true;
-                    queue.push_back(next);
-                }
-            }
-        }
-        if let Some(stranded) = reached.iter().position(|&reached| !reached) {
-            return Err(PowerflowError::IslandWithoutReference {
-                bus_label: case.bus[bus_rows[stranded]].bus_label,
-            });
-        }
-
         Ok(DcModel {
             base_mva: case.base_mva,
             bbus,
             bf,
             pbusinj_pu,
             pfinj_pu,
-            bus_rows,
-            branch_rows,
-            gen_rows,
-            gen_buses,
-            ref_buses,
-            pv_buses,
-            pq_buses,
-            case_shape: (case.bus.len(), case.generator.len(), case.branch.len()),
+            topology,
         })
     }
 
@@ -225,33 +136,33 @@ impl DcModel {
 
     /// The case bus row of each internal bus.
     pub fn bus_rows(&self) -> &[usize] {
-        &self.bus_rows
+        &self.topology.bus_rows
     }
 
     /// The case branch row of each internal branch.
     pub fn branch_rows(&self) -> &[usize] {
-        &self.branch_rows
+        &self.topology.branch_rows
     }
 
     /// The case generator rows of the in-service generators at connected buses.
     pub fn gen_rows(&self) -> &[usize] {
-        &self.gen_rows
+        &self.topology.gen_rows
     }
 
     /// The reference buses (internal indices), in case order.
     pub fn ref_buses(&self) -> &[usize] {
-        &self.ref_buses
+        &self.topology.ref_buses
     }
 
     /// The PV buses (internal indices), in case order.
     pub fn pv_buses(&self) -> &[usize] {
-        &self.pv_buses
+        &self.topology.pv_buses
     }
 
     /// The PQ buses (internal indices), in case order. Includes REF and PV buses that have no
     /// in-service generator.
     pub fn pq_buses(&self) -> &[usize] {
-        &self.pq_buses
+        &self.topology.pq_buses
     }
 }
 
@@ -319,18 +230,13 @@ impl DcModel {
         case: &Case,
         ordering: Ordering,
     ) -> Result<DcSolution, PowerflowError> {
-        let found = (case.bus.len(), case.generator.len(), case.branch.len());
-        if found != self.case_shape {
-            return Err(PowerflowError::CaseMismatch {
-                expected: self.case_shape,
-                found,
-            });
-        }
+        self.topology.check_case(case)?;
         let base_mva = self.base_mva;
         let to_radians = PI / 180.0;
 
         // makeSbus's real part, less the phase-shifter injections and shunt conductance
         let mut pbus: Vec<f64> = self
+            .topology
             .bus_rows
             .iter()
             .zip(&self.pbusinj_pu)
@@ -339,10 +245,11 @@ impl DcModel {
                 -(bus.pd_mw + bus.gs_mw) / base_mva - pbusinj
             })
             .collect();
-        for (&row, &bus) in self.gen_rows.iter().zip(&self.gen_buses) {
+        for (&row, &bus) in self.topology.gen_rows.iter().zip(&self.topology.gen_buses) {
             pbus[bus] += case.generator[row].pg_mw / base_mva;
         }
         let mut theta: Vec<f64> = self
+            .topology
             .bus_rows
             .iter()
             .map(|&row| case.bus[row].va_deg * to_radians)
@@ -350,12 +257,7 @@ impl DcModel {
 
         // dcpf: θ[pv, pq] = B[pv, pq; pv, pq] \ (P[pv, pq] − B[pv, pq; ref] · θ[ref]), with
         //   the unknowns in MATPOWER's order
-        let unknown: Vec<usize> = self
-            .pv_buses
-            .iter()
-            .chain(&self.pq_buses)
-            .copied()
-            .collect();
+        let unknown = self.topology.pv_pq();
         let solver = if unknown.is_empty() {
             DcSolver::NoSolve
         } else {
@@ -365,9 +267,14 @@ impl DcModel {
                 .expect("indices in range");
             let b_ref = self
                 .bbus
-                .select(&unknown, &self.ref_buses)
+                .select(&unknown, &self.topology.ref_buses)
                 .expect("indices in range");
-            let theta_ref: Vec<f64> = self.ref_buses.iter().map(|&bus| theta[bus]).collect();
+            let theta_ref: Vec<f64> = self
+                .topology
+                .ref_buses
+                .iter()
+                .map(|&bus| theta[bus])
+                .collect();
             let coupling = b_ref
                 .mul_vec(&theta_ref)
                 .expect("one angle per reference bus");
@@ -377,7 +284,7 @@ impl DcModel {
                 .map(|(&bus, coupling)| pbus[bus] - coupling)
                 .collect();
             let singular = |position: usize| PowerflowError::SingularNetwork {
-                bus_label: case.bus[self.bus_rows[unknown[position]]].bus_label,
+                bus_label: case.bus[self.topology.bus_rows[unknown[position]]].bus_label,
             };
             // Bbus is built exactly symmetric, but LU is the fallback for NotSymmetric too, in
             //   case that ever changes: a slower solve beats a panic
@@ -418,30 +325,37 @@ impl DcModel {
         };
 
         let mut va_deg: Vec<f64> = case.bus.iter().map(|bus| bus.va_deg).collect();
-        for (&row, angle) in self.bus_rows.iter().zip(&theta) {
+        for (&row, angle) in self.topology.bus_rows.iter().zip(&theta) {
             va_deg[row] = angle / to_radians;
         }
 
         let mut pf_mw = vec![0.0; case.branch.len()];
         let bf_theta = self.bf.mul_vec(&theta).expect("one angle per bus");
-        for ((&row, flow), pfinj) in self.branch_rows.iter().zip(bf_theta).zip(&self.pfinj_pu) {
+        for ((&row, flow), pfinj) in self
+            .topology
+            .branch_rows
+            .iter()
+            .zip(bf_theta)
+            .zip(&self.pfinj_pu)
+        {
             pf_mw[row] = (flow + pfinj) * base_mva;
         }
 
         // The slack: the first in-service generator at each reference bus takes up the
         //   difference between the bus's solved injection and its scheduled one
         let mut pg_mw = vec![0.0; case.generator.len()];
-        for &row in &self.gen_rows {
+        for &row in &self.topology.gen_rows {
             pg_mw[row] = case.generator[row].pg_mw;
         }
         let injection = self.bbus.mul_vec(&theta).expect("one angle per bus");
-        for &bus in &self.ref_buses {
+        for &bus in &self.topology.ref_buses {
             let first = self
+                .topology
                 .gen_buses
                 .iter()
                 .position(|&gen_bus| gen_bus == bus)
                 .expect("a reference bus has an in-service generator");
-            pg_mw[self.gen_rows[first]] += (injection[bus] - pbus[bus]) * base_mva;
+            pg_mw[self.topology.gen_rows[first]] += (injection[bus] - pbus[bus]) * base_mva;
         }
 
         Ok(DcSolution {

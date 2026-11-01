@@ -1,10 +1,11 @@
-//! MATPOWER's DC power flow results, as `scripts/generate-reference.sh` writes them: committed
+//! MATPOWER's DC and AC power flow results, as `scripts/generate-reference.sh` writes them: committed
 //! for case14, case30 and case118 in `tests/data/matpower-reference/`, whose README describes
 //! the files, and generated locally for any other case, whose results can't be committed.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use powerflow::ac::AcSolution;
 use powerflow::case::Case;
 use powerflow::dc::DcSolution;
 
@@ -50,9 +51,9 @@ impl Deviation {
 /// Reads `<case>_dcpf_bus.csv`, `_branch.csv` and `_gen.csv` from `dir`, checking their headers
 /// and row numbers.
 pub fn read(dir: &Path, case: &str) -> Result<Reference, String> {
-    let bus = table(dir, case, "bus", "bus,va_deg")?;
-    let branch = table(dir, case, "branch", "row,from,to,status,pf_mw")?;
-    let gen = table(dir, case, "gen", "row,bus,pg_mw")?;
+    let bus = table(dir, case, "dcpf", "bus", "bus,va_deg")?;
+    let branch = table(dir, case, "dcpf", "branch", "row,from,to,status,pf_mw")?;
+    let gen = table(dir, case, "dcpf", "gen", "row,bus,pg_mw")?;
     // Bus numbers and statuses are written with %d, so they convert exactly
     Ok(Reference {
         bus: bus.iter().map(|f| (f[0] as usize, f[1])).collect(),
@@ -64,10 +65,16 @@ pub fn read(dir: &Path, case: &str) -> Result<Reference, String> {
     })
 }
 
-/// The rows of `<dir>/<case>_dcpf_<kind>.csv` as numbers, without the leading `row` column
+/// The rows of `<dir>/<case>_<run>_<kind>.csv` as numbers, without the leading `row` column
 /// where the header has one, after checking that it counts from 1.
-fn table(dir: &Path, case: &str, kind: &str, header: &str) -> Result<Vec<Vec<f64>>, String> {
-    let path = dir.join(format!("{case}_dcpf_{kind}.csv"));
+fn table(
+    dir: &Path,
+    case: &str,
+    run: &str,
+    kind: &str,
+    header: &str,
+) -> Result<Vec<Vec<f64>>, String> {
+    let path = dir.join(format!("{case}_{run}_{kind}.csv"));
     let text = fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
     let mut lines = text.lines();
     if lines.next() != Some(header) {
@@ -90,6 +97,58 @@ fn table(dir: &Path, case: &str, kind: &str, header: &str) -> Result<Vec<Vec<f64
             Ok(fields[usize::from(numbered)..].to_vec())
         })
         .collect()
+}
+
+/// One case's `runpf` results (Newton's method, MATPOWER's defaults), each table in the case's
+/// row order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcReference {
+    /// Each bus's number, voltage magnitude (p.u.) and angle (degrees).
+    pub bus: Vec<(usize, f64, f64)>,
+    /// Each branch's from and to bus numbers, status, and real and reactive power flows at the
+    /// from end and at the to end (MW, MVAr).
+    pub branch: Vec<(usize, usize, bool, [f64; 4])>,
+    /// Each generator's bus number and real and reactive power output (MW, MVAr).
+    pub gen: Vec<(usize, f64, f64)>,
+    /// How many Newton iterations `runpf` took.
+    pub iterations: usize,
+    /// Whether `runpf` converged.
+    pub success: bool,
+}
+
+/// Reads `<case>_acpf_bus.csv`, `_branch.csv`, `_gen.csv` and `_summary.csv` from `dir`,
+/// checking their headers and row numbers.
+pub fn read_ac(dir: &Path, case: &str) -> Result<AcReference, String> {
+    let bus = table(dir, case, "acpf", "bus", "bus,vm_pu,va_deg")?;
+    let branch = table(
+        dir,
+        case,
+        "acpf",
+        "branch",
+        "row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar",
+    )?;
+    let gen = table(dir, case, "acpf", "gen", "row,bus,pg_mw,qg_mvar")?;
+    let summary = table(dir, case, "acpf", "summary", "iterations,success")?;
+    let [run] = summary.as_slice() else {
+        return Err(format!("{case}: the AC summary should have one row"));
+    };
+    Ok(AcReference {
+        bus: bus.iter().map(|f| (f[0] as usize, f[1], f[2])).collect(),
+        branch: branch
+            .iter()
+            .map(|f| {
+                (
+                    f[0] as usize,
+                    f[1] as usize,
+                    f[2] != 0.0,
+                    [f[3], f[4], f[5], f[6]],
+                )
+            })
+            .collect(),
+        gen: gen.iter().map(|f| (f[0] as usize, f[1], f[2])).collect(),
+        iterations: run[0] as usize,
+        success: run[1] != 0.0,
+    })
 }
 
 /// The largest absolute differences between `solution` and `reference`, after checking that
@@ -141,4 +200,83 @@ fn largest_difference(actual: &[f64], expected: impl Iterator<Item = f64>) -> f6
                 largest
             }
         })
+}
+
+/// The largest absolute differences between an AC solution and `runpf`'s results.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AcDeviation {
+    /// Voltage magnitudes (p.u.).
+    pub vm_pu: f64,
+    /// Voltage angles (degrees).
+    pub va_deg: f64,
+    /// Generator real and reactive outputs (MW, MVAr).
+    pub pg_mw: f64,
+    pub qg_mvar: f64,
+    /// Branch flows at the from end and at the to end (MW, MVAr).
+    pub pf_mw: f64,
+    pub qf_mvar: f64,
+    pub pt_mw: f64,
+    pub qt_mvar: f64,
+}
+
+impl AcDeviation {
+    /// The largest of the differences, or NaN if any is NaN.
+    pub fn largest(&self) -> f64 {
+        [
+            self.vm_pu,
+            self.va_deg,
+            self.pg_mw,
+            self.qg_mvar,
+            self.pf_mw,
+            self.qf_mvar,
+            self.pt_mw,
+            self.qt_mvar,
+        ]
+        .into_iter()
+        .fold(0.0, |largest, d| {
+            if d.is_nan() || d > largest {
+                d
+            } else {
+                largest
+            }
+        })
+    }
+}
+
+/// The largest absolute differences between an AC `solution` and `reference`, after checking
+/// that `reference` describes `case`, as `deviation` does.
+pub fn ac_deviation(
+    case: &Case,
+    solution: &AcSolution,
+    reference: &AcReference,
+) -> Result<AcDeviation, String> {
+    let same_buses = case
+        .bus
+        .iter()
+        .map(|bus| bus.bus_label)
+        .eq(reference.bus.iter().map(|bus| bus.0));
+    let same_branches = case
+        .branch
+        .iter()
+        .map(|branch| (branch.from_label, branch.to_label, branch.status))
+        .eq(reference.branch.iter().map(|b| (b.0, b.1, b.2)));
+    let same_gens = case
+        .generator
+        .iter()
+        .map(|generator| generator.bus_label)
+        .eq(reference.gen.iter().map(|generator| generator.0));
+    if !(same_buses && same_branches && same_gens) {
+        return Err("the reference's tables don't match the case's".to_string());
+    }
+    let flow = |k: usize| reference.branch.iter().map(move |b| b.3[k]);
+    Ok(AcDeviation {
+        vm_pu: largest_difference(&solution.vm_pu, reference.bus.iter().map(|b| b.1)),
+        va_deg: largest_difference(&solution.va_deg, reference.bus.iter().map(|b| b.2)),
+        pg_mw: largest_difference(&solution.pg_mw, reference.gen.iter().map(|g| g.1)),
+        qg_mvar: largest_difference(&solution.qg_mvar, reference.gen.iter().map(|g| g.2)),
+        pf_mw: largest_difference(&solution.pf_mw, flow(0)),
+        qf_mvar: largest_difference(&solution.qf_mvar, flow(1)),
+        pt_mw: largest_difference(&solution.pt_mw, flow(2)),
+        qt_mvar: largest_difference(&solution.qt_mvar, flow(3)),
+    })
 }

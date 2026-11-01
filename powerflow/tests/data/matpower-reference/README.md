@@ -1,8 +1,9 @@
-# MATPOWER DC power flow reference results
+# MATPOWER power flow reference results
 
-Expected results for the `powerflow` DC power flow tests: bus voltage angles, branch flows and
-generator outputs computed by MATPOWER's `rundcpf`. The versions used are in
-[`VERSIONS`](VERSIONS).
+Expected results for the `powerflow` power flow tests, computed by MATPOWER: the DC power flow
+by `rundcpf`, and the AC power flow by `runpf` with its default options (Newton's method,
+tolerance 1e-8 on the largest mismatch, reactive power limits not enforced). The versions used
+are in [`VERSIONS`](VERSIONS).
 
 These files are **generated**. Don't edit them by hand; regenerate them with
 `scripts/generate-reference.sh`, which fetches MATPOWER (`scripts/fetch-matpower.sh`) and runs
@@ -18,9 +19,15 @@ For each case:
 | `<case>_dcpf_bus.csv` | `bus` (bus number), `va_deg` (voltage angle, degrees) |
 | `<case>_dcpf_branch.csv` | `row` (1-based row in the case file's branch matrix), `from`, `to`, `status`, `pf_mw` (real power flow at the from end, MW) |
 | `<case>_dcpf_gen.csv` | `row` (1-based row in the gen matrix), `bus`, `pg_mw` (real power output, MW) |
+| `<case>_acpf_bus.csv` | `bus`, `vm_pu` (voltage magnitude, p.u.), `va_deg` (voltage angle, degrees) |
+| `<case>_acpf_branch.csv` | `row`, `from`, `to`, `status`, `pf_mw`, `qf_mvar` (power flowing into the branch at the from end), `pt_mw`, `qt_mvar` (at the to end) |
+| `<case>_acpf_gen.csv` | `row`, `bus`, `pg_mw`, `qg_mvar` (real and reactive power output) |
+| `<case>_acpf_summary.csv` | `iterations` (Newton iterations), `success` (1 if `runpf` converged) |
 
 Values have 17 significant digits, so they parse back to the exact doubles MATPOWER computed.
-In a DC power flow the flow at the to end is `-pf_mw`.
+In a DC power flow the flow at the to end is `-pf_mw`; in an AC one, `pf_mw + pt_mw` is the
+branch's loss. The DC results came out byte-for-byte the same when regenerated under Octave
+8.4.0, the version that added the AC results.
 
 ## Sources and attribution
 
