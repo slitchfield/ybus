@@ -99,8 +99,8 @@ fn table(
         .collect()
 }
 
-/// One case's `runpf` results (Newton's method, MATPOWER's defaults), each table in the case's
-/// row order.
+/// One case's `runpf` results (Newton's method with MATPOWER's defaults, or fast-decoupled),
+/// each table in the case's row order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AcReference {
     /// Each bus's number, voltage magnitude (p.u.) and angle (degrees).
@@ -110,25 +110,31 @@ pub struct AcReference {
     pub branch: Vec<(usize, usize, bool, [f64; 4])>,
     /// Each generator's bus number and real and reactive power output (MW, MVAr).
     pub gen: Vec<(usize, f64, f64)>,
-    /// How many Newton iterations `runpf` took.
+    /// How many iterations `runpf` took (for fast-decoupled, P half-iterations).
     pub iterations: usize,
     /// Whether `runpf` converged.
     pub success: bool,
 }
 
-/// Reads `<case>_acpf_bus.csv`, `_branch.csv`, `_gen.csv` and `_summary.csv` from `dir`,
-/// checking their headers and row numbers.
+/// Reads the Newton results, `<case>_acpf_bus.csv`, `_branch.csv`, `_gen.csv` and
+/// `_summary.csv`, from `dir`, checking their headers and row numbers.
 pub fn read_ac(dir: &Path, case: &str) -> Result<AcReference, String> {
-    let bus = table(dir, case, "acpf", "bus", "bus,vm_pu,va_deg")?;
+    read_ac_run(dir, case, "acpf")
+}
+
+/// Reads an AC run's results, `<case>_<run>_*.csv`, from `dir`: `run` is `acpf` (Newton),
+/// `fdxb` or `fdbx` (fast-decoupled).
+pub fn read_ac_run(dir: &Path, case: &str, run: &str) -> Result<AcReference, String> {
+    let bus = table(dir, case, run, "bus", "bus,vm_pu,va_deg")?;
     let branch = table(
         dir,
         case,
-        "acpf",
+        run,
         "branch",
         "row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar",
     )?;
-    let gen = table(dir, case, "acpf", "gen", "row,bus,pg_mw,qg_mvar")?;
-    let summary = table(dir, case, "acpf", "summary", "iterations,success")?;
+    let gen = table(dir, case, run, "gen", "row,bus,pg_mw,qg_mvar")?;
+    let summary = table(dir, case, run, "summary", "iterations,success")?;
     let [run] = summary.as_slice() else {
         return Err(format!("{case}: the AC summary should have one row"));
     };

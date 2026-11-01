@@ -2,8 +2,14 @@
 
 Expected results for the `powerflow` power flow tests, computed by MATPOWER: the DC power flow
 by `rundcpf`, and the AC power flow by `runpf` with its default options (Newton's method,
-tolerance 1e-8 on the largest mismatch, reactive power limits not enforced). The versions used
-are in [`VERSIONS`](VERSIONS).
+tolerance 1e-8 on the largest mismatch, reactive power limits not enforced) and with its
+fast-decoupled XB and BX methods. The versions used are in [`VERSIONS`](VERSIONS).
+
+MATPOWER 8.1's `runpf` uses its newer MP-Core implementation by default, under Octave too. The
+Newton results come from it, and agree with the legacy `newtonpf` within 6.4e-12 (case118). The
+fast-decoupled results come from the legacy `fdpf` (`exp.use_legacy_core`), which `powerflow`
+follows: MP-Core's fast-decoupled results differ from it by up to 2.3e-7 (case14, FDXB) at the
+same iteration counts.
 
 These files are **generated**. Don't edit them by hand; regenerate them with
 `scripts/generate-reference.sh`, which fetches MATPOWER (`scripts/fetch-matpower.sh`) and runs
@@ -23,6 +29,7 @@ For each case:
 | `<case>_acpf_branch.csv` | `row`, `from`, `to`, `status`, `pf_mw`, `qf_mvar` (power flowing into the branch at the from end), `pt_mw`, `qt_mvar` (at the to end) |
 | `<case>_acpf_gen.csv` | `row`, `bus`, `pg_mw`, `qg_mvar` (real and reactive power output) |
 | `<case>_acpf_summary.csv` | `iterations` (Newton iterations), `success` (1 if `runpf` converged) |
+| `<case>_fdxb_*.csv`, `<case>_fdbx_*.csv` | The same four tables for fast-decoupled XB and BX; `iterations` counts P half-iterations |
 
 Values have 17 significant digits, so they parse back to the exact doubles MATPOWER computed.
 In a DC power flow the flow at the to end is `-pf_mw`; in an AC one, `pf_mw + pt_mw` is the

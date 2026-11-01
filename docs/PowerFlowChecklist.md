@@ -518,8 +518,23 @@ types through one code path, and every real result is bit for bit what it was.
         non-convergence; zero iterations from a solved start; a flat start (agreeing to the
         tolerance, 1.3e-8 MW measured); and `pfsoln`'s reactive sharing between generators at a
         bus, with finite and infinite limits.
-- [ ] Fast-decoupled power flow (XB and BX variants), which factors B′ and B″ once, validated
+- [x] Fast-decoupled power flow (XB and BX variants), which factors B′ and B″ once, validated
       the same way.
+      `AcOptions::method` (`AcMethod::Newton`, `FastDecoupledXb`, `FastDecoupledBx`), with
+      `AcOptions::for_method` giving MATPOWER's defaults (30 iterations for fast-decoupled).
+      `makeB`'s B′ and B″ are factored once each, then `fdpf`'s alternating P and Q
+      half-iterations run, with mismatches divided by `Vm`. All six runs (case14, case30,
+      case118, XB and BX) take MATPOWER's iteration counts and agree within 7.8e-12. A branch
+      with `x = 0` is `ZeroReactance` here, where MATPOWER would divide by zero.
+      Changed from the plan:
+      - **LU, not Cholesky:** B′ keeps the phase shifts (only taps, charging and shunts are
+        removed), so it's unsymmetric whenever a phase shifter is in service. Both matrices are
+        factored by AMD-ordered LU, as MATPOWER does.
+      - **References from the legacy code:** against MATPOWER's default MP-Core results, case14
+        FDXB differed by 2.3e-7 at the same iteration count. MATPOWER's own MP-Core and legacy
+        fast-decoupled results differ by exactly that (and by up to 9.7e-9 on the other runs),
+        while this code follows the legacy `fdpf`. So the fast-decoupled references are generated
+        with `exp.use_legacy_core`, and the tolerance stays 1e-9.
 - [ ] An AC survey of every MATPOWER case against MATPOWER's `runpf`, recorded in
       `docs/benchmarks/`, and criterion benchmarks on case2383wp, including the Jacobian build's
       share of the Newton–Raphson time.
