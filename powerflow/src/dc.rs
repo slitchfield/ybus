@@ -388,7 +388,11 @@ impl DcModel {
             let (solved, solver) = match cholesky {
                 Ok(solved) => (solved, DcSolver::Cholesky),
                 Err(SparseError::NotPositiveDefinite { .. } | SparseError::NotSymmetric) => {
-                    // LU names a singular column of B′, which is a position in `unknown`
+                    // If B′ is singular, LU's error names a column of the matrix it factored
+                    //   that has no usable pivot, numbered as in B′ itself (not in the AMD
+                    //   order it factored in). B′ was selected from Bbus with `unknown` as its
+                    //   columns, so column j of B′ is bus `unknown[j]`, which `singular` turns
+                    //   into that bus's label for the error
                     let b_columns = b_unknown.to_csc();
                     let lu = b_columns
                         .analyze_lu(ordering)
