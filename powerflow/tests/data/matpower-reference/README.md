@@ -44,6 +44,12 @@ The results were computed with MATPOWER:
 > planning, and analysis tools for power systems research and education," *IEEE Trans. Power
 > Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168)
 
+> R. D. Zimmerman and C. E. Murillo-Sánchez, MATPOWER, Version 8.1 [software], 2025.
+> <https://matpower.org>, [doi:10.5281/zenodo.15871662](https://doi.org/10.5281/zenodo.15871662)
+
+MATPOWER's `CITATION` file asks results derived from it to cite the 2011 paper, and recommends
+citing the specific software version for reproducibility; both are given above.
+
 MATPOWER's code is under the BSD 3-clause license. Its case files are not covered by that
 license, so they are not included in this repository; the fetch script downloads them. Only
 results are committed here, and only for cases that come from public sources, as recorded in

@@ -5,6 +5,12 @@
 //! parameters can be re-stamped without rebuilding them ([`AcModel::restamp`]). Elements are
 //! dropped as in the DC power flow: isolated buses, and out-of-service generators and branches
 //! or those attached to an isolated bus.
+//!
+//! [`AcModel::solve`] follows `runpf`, `newtonpf` or `fdpf` with `makeB`, and `pfsoln`, written
+//! with reference to their (BSD-licensed) source. The bus injections follow the User's Manual's
+//! definition (what MATPOWER's `makeSbus` computes), and the Newton Jacobian's derivatives
+//! follow MATPOWER Technical Note 2's formulas (what its `dSbus_dV` computes); the source of
+//! those two wasn't consulted.
 
 use std::f64::consts::PI;
 
@@ -750,7 +756,8 @@ impl AcModel {
         self.jacobian_over(v, &unknowns)
     }
 
-    /// `newtonpf`'s Jacobian in CSC form, at the voltages `v`, from `dSbus_dV`:
+    /// `newtonpf`'s Jacobian in CSC form, at the voltages `v`, from the derivatives MATPOWER's
+    /// `dSbus_dV` computes, as R. D. Zimmerman's MATPOWER Technical Note 2 (2010) derives them:
     /// `dS/dVa = j·diag(V)·conj(diag(I) − Ybus·diag(V))` and
     /// `dS/dVm = diag(V)·conj(Ybus·diag(V/|V|)) + conj(diag(I))·diag(V/|V|)`, with `I = Ybus V`,
     /// stacked as `[[Re dS/dVa[pvpq, pvpq], Re dS/dVm[pvpq, pq]], [Im dS/dVa[pq, pvpq],

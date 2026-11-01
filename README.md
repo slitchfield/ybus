@@ -83,9 +83,22 @@ MATPOWER's to within 1e-9. Its DC power flow (`powerflow::dc`) was written from 
 documentation and with reference to its BSD-licensed source code (`ext2int`, `bustypes`,
 `makeBdc`, `dcpf` and `runpf`), to match its handling of every case, including isolated
 buses, out-of-service elements and phase shifters. Its AC power flow (`powerflow::ac`) was
-written the same way, with reference to `makeYbus`, `makeSbus`, `newtonpf`, `dSbus_dV`,
-`makeB`, `fdpf` and `pfsoln` as well. Both are reimplementations in Rust, not translations, and the module
-documentation names the MATPOWER functions each step follows.
+written the same way, with reference to the source of `makeYbus`, `newtonpf`, `makeB`, `fdpf`
+and `pfsoln` as well. Two of its pieces come from MATPOWER's published formulas instead, since
+their source wasn't consulted: the bus injections (what `makeSbus` computes, as the User's
+Manual defines them) and the Newton Jacobian's derivatives (what `dSbus_dV` computes, from
+Technical Note 2, cited below). Both power flows are reimplementations in Rust, not
+translations, and the module documentation names the MATPOWER functions each step follows.
+
+MATPOWER 8.1 runs its newer MP-Core implementation by default, while `powerflow` follows the
+legacy functions named above. The committed DC and Newton reference results come from
+MP-Core; for Newton's method it agrees with the legacy code within 6.4e-12 on case118. Its
+fast-decoupled results differ from the legacy `fdpf`'s by up to 2.3e-7, so the fast-decoupled
+reference results come from `fdpf` (see
+[the reference results' README](powerflow/tests/data/matpower-reference/README.md)). Across all
+MATPOWER cases, MP-Core's Newton post-processing also shares generator reactive output
+differently from the legacy `pfsoln` in 10 cases
+([AC survey](docs/benchmarks/ac-power-flow-2026-11-01.md)); there `powerflow` matches `pfsoln`.
 
 ### Implemented
 
@@ -109,6 +122,7 @@ documentation names the MATPOWER functions each step follows.
 | `powerflow`'s tests and `dc_survey` example (`tests/common/accuracy.rs`) | Normwise backward error, η = ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) | J. L. Rigal and J. Gaches, "On the compatibility of a given solution with the data of a linear system," *J. ACM* 14(3):543–548, 1967. |
 | | | N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed., SIAM, 2002, ch. 7. [doi:10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027) |
 | `powerflow::case` (`Case::parse`) | The MATPOWER case format, as `caseformat.m` defines it | R. D. Zimmerman and C. E. Murillo-Sánchez, *MATPOWER User's Manual*, Version 8.1, 2025. [doi:10.5281/zenodo.15871661](https://doi.org/10.5281/zenodo.15871661) |
+| `powerflow::ac` (`AcModel::jacobian`, Newton's method) | The power flow equations' derivatives in complex matrix form, `dS/dVa` and `dS/dVm` | R. D. Zimmerman, "AC power flows, generalized OPF costs and their derivatives using complex matrix notation," MATPOWER Technical Note 2, February 2010. [doi:10.5281/zenodo.3237866](https://doi.org/10.5281/zenodo.3237866) |
 | `powerflow::ac` (`AcMethod::FastDecoupledXb`, `FastDecoupledBx`) | Fast-decoupled power flow, XB and BX, as MATPOWER's `fdpf` and `makeB` compute it | B. Stott and O. Alsaç, "Fast decoupled load flow," *IEEE Trans. Power App. Syst.* PAS-93(3):859–869, 1974. |
 | `powerflow::dc` and `powerflow::ac`, and the reference results their tests compare against | DC power flow as MATPOWER's `rundcpf` computes it, and AC power flow as its `runpf` does (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
 | | | R. D. Zimmerman and C. E. Murillo-Sánchez, MATPOWER, Version 8.1 [software], 2025. <https://matpower.org>, [doi:10.5281/zenodo.15871662](https://doi.org/10.5281/zenodo.15871662) |

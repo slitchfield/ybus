@@ -12,14 +12,18 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
 - **AI-assisted development:** from October 2026 on, most new code, tests and documentation were
   written with **Claude Code**, Anthropic's agentic coding tool, using the Claude Sonnet 5.5 and
   Claude Opus 5.5 models. That covers the large majority of the current source and tests,
-  including:
-  - the generic element type
-  - the CSR/CSC storage
-  - the products
-  - the linear solvers
-  - Matrix Market I/O
-  - the optional `serde` and `rayon` features
-  - the Phase 0 and Phase 1 work in [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md)
+  including, in `sparse_mat`:
+  - the generic element type, the products, Matrix Market I/O, and the optional `serde` and
+    `rayon` features
+  - the fixed-pattern compressed matrix type and its assembly maps (Phase 2)
+  - the fill-reducing orderings (RCM and AMD), the symbolic analysis, the ordered Cholesky and
+    the Gilbert–Peierls LU with refactoring (Phase 3)
+  - the complex-capable solvers (Phase 4)
+
+  and the whole of `powerflow`: the case model and MATPOWER reader, the DC power flow, and the AC
+  power flow by Newton's method and fast-decoupled (Phases 1.5 and 4.5), with their tests,
+  survey tools and benchmark records. [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md)
+  records each phase.
 - **Commits:** commits produced with AI assistance carry a `Co-Authored-By: Claude …` trailer.
   Some of them also contain code the maintainer wrote and the AI committed. The trailer marks
   AI involvement, not exclusive AI authorship.
@@ -33,12 +37,25 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
 ### How AI-generated code was checked
 
 AI-generated code can be plausible and still wrong, so it was not accepted on trust:
-- **Tests:** numerical routines (products, LU, Cholesky, conjugate gradient, Kronecker products)
-  are tested against independent dense reference implementations and algebraic identities, such
-  as PA = LU, A = LLᵀ, (AB)ᵀ = BᵀAᵀ and solution residuals.
+- **Tests:** numerical routines (products, orderings, LU, Cholesky, conjugate gradient,
+  Kronecker products) are tested against independent dense reference implementations and
+  algebraic identities, such as P A Q = L U, P A Pᵀ = L Lᴴ, (AB)ᵀ = BᵀAᵀ and solution residuals,
+  for real and complex element types.
+- **Old algorithms kept as references:** when an algorithm was replaced, the old one was kept in
+  the tests, and the new one was required to reproduce its results bit for bit where they should
+  agree (for example the ordered Cholesky without an ordering, and the new LU's pivots under true
+  partial pivoting).
+- **Validation against MATPOWER:** the power flows are compared with MATPOWER's own results.
+  Committed reference cases must agree within 1e-9 and, for the AC power flow, take MATPOWER's
+  number of iterations. Surveys of all 78 MATPOWER cases, recorded in
+  [`docs/benchmarks/`](docs/benchmarks/), check every case against MATPOWER, and differences
+  were investigated rather than tolerated. A backward-error test checks that the DC solve is
+  backward stable.
 - **Regressions:** bugs were reproduced with a failing test before they were fixed.
-- **CI:** every change runs `./check.sh` in CI (formatting, clippy with warnings as errors, and
-  tests with each feature combination), plus a minimum-supported-Rust-version job.
+- **CI:** every change runs three jobs: `./check.sh` (formatting, clippy with warnings as errors,
+  and tests with each feature combination, with the MATPOWER cases fetched and required, so the
+  comparisons with MATPOWER always run), the tests on the minimum supported Rust version, and
+  `cargo deny` over the dependencies (advisories, licenses, banned crates and sources).
 - **Review:** the maintainer reviewed each pull request before merging it.
 
 None of this guarantees the absence of errors. Please report any you find.
@@ -50,8 +67,9 @@ Considerable care went into attributing the ideas this code is built on:
   descriptions in papers and textbooks, and no source code from other libraries was knowingly
   copied or ported. The DC and AC power flows are the exception: they reproduce MATPOWER's
   results, and were written with reference to MATPOWER's BSD-licensed source code as well as
-  its documentation. They are reimplementations in Rust, not translations; the README's
-  [References](README.md#references) section describes how they relate to MATPOWER.
+  its documentation and technical notes. They are reimplementations in Rust, not translations;
+  the README's [References](README.md#references) section names the MATPOWER files consulted,
+  and the parts written from published formulas instead.
 - **References:** the [References](README.md#references) section of the README lists the
   publication behind each implemented algorithm, and behind each planned one.
 - **Checked citations:** each citation's details (authors, venue, pages, DOI) were checked against
@@ -93,11 +111,15 @@ licensing follows current best practices for AI-assisted software development:
 - **No third-party code:** no source code from other projects is included, so there are no
   inherited license obligations to track.
 - **Third-party test data:** MATPOWER's case files are not included; a script downloads them
-  for testing. The repository does include DC power flow results that MATPOWER computed from
-  three public test cases, as expected values for tests. Their sources are credited in
+  for testing. The repository does include power flow results that MATPOWER computed from three
+  public test cases (DC, and AC by Newton's method and fast-decoupled), as expected values for
+  tests, and benchmark records that hold only case names and measurements. The results' sources
+  are credited in
   [`powerflow/tests/data/matpower-reference/README.md`](powerflow/tests/data/matpower-reference/README.md).
-- **Compatible dependencies:** every dependency, including transitive ones, is under a compatible
-  permissive license (MIT, Apache-2.0, Unlicense or Unicode-3.0).
+- **Compatible dependencies:** every dependency, including transitive and development ones, is
+  available under the MIT or Apache-2.0 license (one also under Unicode-3.0, which it requires
+  alongside them); some offer the Unlicense or BSD-2-Clause as further alternatives. `cargo deny`
+  enforces this in CI, allowing only MIT, Apache-2.0 and Unicode-3.0.
 - **Transparency:** AI involvement is disclosed in this document, in commit trailers and in the
   pull requests' implementation reports, and sources are attributed as described above.
 
