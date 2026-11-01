@@ -349,8 +349,16 @@ Merged in PR #2.
         pivoting, with its determinant); the determinant's sign from both permutations.
       - **Errors:** `SingularMatrix` names the column of A with no pivot, which the DC solve
         maps to a bus, as before.
-- [ ] `refactor(values)`, which reuses the analysis and pivot sequence when only values change.
+- [x] `refactor(values)`, which reuses the analysis and pivot sequence when only values change.
       If a pivot becomes too small, fall back to a full factorization and report that.
+      `Lu::refactor(&A)` reuses the column ordering, the pivot sequence and the patterns of L
+      and U: each column is a sparse triangular solve over U's known pattern, with no search.
+      Each reused pivot is checked against the factorization's threshold; if one fails (or is
+      zero), it factors afresh under the same column ordering and returns
+      `Refactor::Repivoted`, otherwise `Refactor::Reused`. A different pattern is
+      `PatternMismatch`, and on any error the factorization is unchanged. Tested on new values
+      (same pivots and patterns, reconstructing P A Q, solving and the determinant), on pivots
+      that shrink or vanish, on complex values, and on errors.
 - [ ] The DC power flow's LU fallback uses the new LU.
 - [ ] `solve_in_place` and `solve_many` (several right-hand sides).
 - [ ] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward

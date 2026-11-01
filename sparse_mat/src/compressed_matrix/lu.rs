@@ -5,7 +5,8 @@
 //! [`SymbolicLu::factor`] then computes `P A Q = L U` one column at a time: a depth-first search
 //! finds which entries of the column can be nonzero, a sparse triangular solve computes them,
 //! and a pivot is chosen among the rows not yet pivoted, preferring the diagonal (which keeps the
-//! ordering's sparsity) while it is large enough.
+//! ordering's sparsity) while it is large enough. [`Lu::refactor`] reuses the pivot sequence and
+//! the patterns of `L` and `U` for a matrix with new values and the same pattern.
 
 use num_complex::ComplexFloat;
 use num_traits::NumCast;
@@ -43,9 +44,20 @@ pub struct SymbolicLu {
     a_idx: Vec<usize>,
 }
 
+/// What [`Lu::refactor`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refactor {
+    /// Every pivot of the previous factorization was still large enough, so its pivot
+    /// sequence and patterns were reused.
+    Reused,
+    /// Some reused pivot fell below the threshold, so the matrix was factored afresh, with new
+    /// pivots, under the same column ordering.
+    Repivoted,
+}
+
 /// An LU factorization `P A Q = L U` with threshold partial pivoting, from
 /// [`SymbolicLu::factor`] or [`CscMatrix::lu`]. Keep it to solve many right-hand sides against
-/// the same matrix.
+/// the same matrix, or to refactor a matrix with the same pattern.
 ///
 /// `L` is unit lower triangular and `U` upper triangular, both in CSC form, and each stores
 /// its whole symbolic pattern, so some entries may be zero. Row `i` of `P A Q` is row
@@ -56,6 +68,9 @@ pub struct Lu<T: Scalar = f64> {
     u: CscMatrix<T>,
     row_perm: Vec<usize>,
     col_perm: Vec<usize>,
+    options: LuOptions,
+    a_ptr: Vec<usize>,
+    a_idx: Vec<usize>,
 }
 
 impl<T: Scalar> CscMatrix<T> {
@@ -275,6 +290,9 @@ fn gilbert_peierls<T: Scalar + ComplexFloat>(
         u: CompressedMatrix::from_parts_unchecked((n, n), u_ptr, u_idx, u_val),
         row_perm,
         col_perm: q.to_vec(),
+        options,
+        a_ptr: a.ptr.clone(),
+        a_idx: a.idx.clone(),
     })
 }
 
@@ -379,5 +397,71 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
             x[col] = value;
         }
         Ok(x)
+    }
+
+    /// Factors `matrix`, which must have the pattern of the matrix this factorization came
+    /// from, reusing its column ordering, pivot sequence and the patterns of `L` and `U`, so no
+    /// search is needed: each column is a sparse triangular solve over a known pattern.
+    ///
+    /// Each reused pivot is checked against the threshold this factorization used. If one is
+    /// too small (or zero), the matrix is factored afresh with new pivots under the same column
+    /// ordering, and `Refactor::Repivoted` says so; otherwise the result is `Refactor::Reused`.
+    /// Returns `SparseError::PatternMismatch` if `matrix`'s shape or pattern differs, or
+    /// `SparseError::SingularMatrix` if the fresh factorization finds no pivot; on an error,
+    /// `self` is unchanged.
+    pub fn refactor(&mut self, matrix: &CscMatrix<T>) -> Result<Refactor, SparseError> {
+        let n = self.row_perm.len();
+        if matrix.shape != (n, n) || matrix.ptr != self.a_ptr || matrix.idx != self.a_idx {
+            return Err(SparseError::PatternMismatch);
+        }
+        let tau = threshold::<T>(self.options);
+        let mut step_of = vec![0; n];
+        for (step, &row) in self.row_perm.iter().enumerate() {
+            step_of[row] = step;
+        }
+        let mut l_val = vec![T::zero(); self.l.data.len()];
+        let mut u_val = vec![T::zero(); self.u.data.len()];
+        let mut x = vec![T::zero(); n];
+        for k in 0..n {
+            let col = self.col_perm[k];
+            for p in matrix.ptr[col]..matrix.ptr[col + 1] {
+                x[step_of[matrix.idx[p]]] = matrix.data[p];
+            }
+            // U's column in increasing row order is a topological order, since L is lower
+            //   triangular in the pivoted numbering
+            let diagonal = self.u.ptr[k + 1] - 1;
+            let above = self.u.ptr[k]..diagonal;
+            for (&j, u_jk_slot) in self.u.idx[above.clone()].iter().zip(&mut u_val[above]) {
+                let u_jk = x[j];
+                x[j] = T::zero();
+                *u_jk_slot = u_jk;
+                let column_j = self.l.ptr[j] + 1..self.l.ptr[j + 1];
+                for (&row, &l_rj) in self.l.idx[column_j.clone()].iter().zip(&l_val[column_j]) {
+                    x[row] = x[row] - l_rj * u_jk;
+                }
+            }
+            let pivot = x[k];
+            let below = self.l.ptr[k] + 1..self.l.ptr[k + 1];
+            let largest = self.l.idx[below.clone()]
+                .iter()
+                .map(|&row| x[row].abs())
+                .fold(pivot.abs(), |a, b| if b > a { b } else { a });
+            if pivot == T::zero() || pivot.abs() < tau * largest {
+                // Too small to reuse: factor afresh, leaving self as it was if that fails
+                *self = gilbert_peierls(matrix, &self.col_perm, self.options)?;
+                return Ok(Refactor::Repivoted);
+            }
+            u_val[diagonal] = pivot;
+            x[k] = T::zero();
+            l_val[self.l.ptr[k]] = T::one();
+            for p in below {
+                let row = self.l.idx[p];
+                l_val[p] = x[row] / pivot;
+                x[row] = T::zero();
+            }
+        }
+        self.l.data = l_val;
+        self.u.data = u_val;
+        Ok(Refactor::Reused)
     }
 }

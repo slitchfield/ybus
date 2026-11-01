@@ -3,7 +3,7 @@
 
 mod common;
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering};
+use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, Refactor};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
 
@@ -946,4 +946,118 @@ fn lu_errors() {
         symbolic.factor(&singular, LuOptions::default()).err(),
         Some(SparseError::PatternMismatch)
     );
+}
+
+// Refactoring
+
+/// `a` with every stored value changed by a pseudo-random factor in [0.5, 1.5), keeping the
+/// pattern (stored zeros stay zero).
+fn new_values(a: &CscMatrix<f64>, seed: u64) -> CscMatrix<f64> {
+    let mut rng = Lcg(seed);
+    let mut b = a.clone();
+    for value in b.values_mut() {
+        *value *= 0.5 + (rng.next() % 1000) as f64 / 1000.0;
+    }
+    b
+}
+
+#[test]
+fn refactor_reuses_the_pivots_for_new_values() {
+    for (n, fill, scale, seed) in [(20, 20, 1.5, 1), (90, 4, 3.0, 2)] {
+        let a = random_square(n, fill, scale, seed).to_csc();
+        let mut lu = a.lu().unwrap();
+        let (l_pattern, u_pattern) = (lu.l().indices().to_vec(), lu.u().indices().to_vec());
+        let permutations = (lu.permutation().to_vec(), lu.column_permutation().to_vec());
+        for round in 0..3 {
+            let b = new_values(&a, 10 + round);
+            assert_eq!(lu.refactor(&b), Ok(Refactor::Reused), "n = {n}");
+            // Same pivots and patterns, new values that factor b
+            assert_eq!(lu.l().indices(), l_pattern);
+            assert_eq!(lu.u().indices(), u_pattern);
+            assert_eq!(lu.permutation(), permutations.0);
+            assert_eq!(lu.column_permutation(), permutations.1);
+            assert_lu_reconstructs(&b, &lu);
+            let x: Vec<f64> = (0..n).map(|i| 1.0 + (i % 5) as f64).collect();
+            let rhs = b.mul_vec(&x).unwrap();
+            assert_close(&lu.solve(&rhs).unwrap(), &x, 1e-9);
+            assert_close(&lu.solve(&rhs).unwrap(), &b.solve(&rhs).unwrap(), 1e-9);
+            let det = lu.determinant();
+            let fresh = b.lu().unwrap().determinant();
+            assert!(((det - fresh) / fresh).abs() < 1e-9, "{det} vs {fresh}");
+        }
+    }
+}
+
+#[test]
+fn refactor_repivots_when_a_pivot_becomes_too_small() {
+    let a = CscMatrix::from_dense(&[[4.0, 1.0, 0.0], [1.0, 4.0, 1.0], [0.0, 1.0, 4.0]]).unwrap();
+    let mut lu = a
+        .analyze_lu(Ordering::Natural)
+        .unwrap()
+        .factor(&a, LuOptions::default())
+        .unwrap();
+    assert_eq!(lu.permutation(), [0, 1, 2]);
+    // The first pivot shrinks below 0.1 of its column's largest entry
+    let mut b = a.clone();
+    let p = b.position(0, 0).unwrap().unwrap();
+    b.values_mut()[p] = 0.01;
+    assert_eq!(lu.refactor(&b), Ok(Refactor::Repivoted));
+    assert_eq!(lu.permutation()[0], 1, "row 1 pivots first now");
+    assert_lu_reconstructs(&b, &lu);
+    // Zeroing (0, 0) no longer touches a pivot, since row 1 pivots column 0 now
+    b.values_mut()[p] = 0.0;
+    assert_eq!(lu.refactor(&b), Ok(Refactor::Reused));
+    // From the original pivots, an exactly zero pivot can't be reused
+    let mut fresh = a
+        .analyze_lu(Ordering::Natural)
+        .unwrap()
+        .factor(&a, LuOptions::default())
+        .unwrap();
+    assert_eq!(fresh.refactor(&b), Ok(Refactor::Repivoted));
+    assert_lu_reconstructs(&b, &fresh);
+    assert_close(
+        &lu.solve(&[1.0, 2.0, 3.0]).unwrap(),
+        &b.solve(&[1.0, 2.0, 3.0]).unwrap(),
+        1e-12,
+    );
+    // Back to the original values, the pivots chosen for b fail in column 1 (1 against
+    //   0.1 x 15), so it repivots, back to the diagonal
+    assert_eq!(lu.refactor(&a), Ok(Refactor::Repivoted));
+    assert_eq!(lu.permutation(), [0, 1, 2]);
+    assert_lu_reconstructs(&a, &lu);
+}
+
+#[test]
+fn refactor_handles_complex_values() {
+    let mut rng = Lcg(41);
+    let grid = grid_laplacian(5)
+        .permute_symmetric(&rng.permutation(25))
+        .unwrap()
+        .to_csc();
+    let a = grid.map(|v| Complex::new(v, -2.0 * v));
+    let b = grid.map(|v| Complex::new(0.7 * v, -1.1 * v));
+    let mut lu = a.lu().unwrap();
+    assert_eq!(lu.refactor(&b), Ok(Refactor::Reused));
+    let x: Vec<Complex<f64>> = (0..25).map(|i| Complex::new(i as f64, 1.0)).collect();
+    let solved = lu.solve(&b.mul_vec(&x).unwrap()).unwrap();
+    assert!(solved.iter().zip(&x).all(|(s, x)| (s - x).norm() < 1e-10));
+}
+
+#[test]
+fn refactor_errors_leave_the_factorization_unchanged() {
+    let a = CscMatrix::from_dense(&[[2.0, 1.0], [1.0, 3.0]]).unwrap();
+    let mut lu = a.lu().unwrap();
+    let before = (lu.l().values().to_vec(), lu.u().values().to_vec());
+    // Another pattern
+    let other = CscMatrix::from_dense(&[[2.0, 0.0], [1.0, 3.0]]).unwrap();
+    assert_eq!(lu.refactor(&other), Err(SparseError::PatternMismatch));
+    // The same pattern, but singular: refactoring falls back to a fresh factorization, which
+    //   fails
+    let singular = CscMatrix::from_dense(&[[1.0, 2.0], [2.0, 4.0]]).unwrap();
+    assert!(matches!(
+        lu.refactor(&singular),
+        Err(SparseError::SingularMatrix { .. })
+    ));
+    assert_eq!((lu.l().values().to_vec(), lu.u().values().to_vec()), before);
+    assert_close(&lu.solve(&[3.0, 4.0]).unwrap(), &[1.0, 1.0], 1e-12);
 }
