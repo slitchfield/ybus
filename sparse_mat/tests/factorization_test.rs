@@ -1153,3 +1153,95 @@ fn lu_solves_in_place_and_many_like_solve() {
     assert_eq!(short, vec![2.0; 7]);
     assert!(lu.solve_many(&[vec![0.0; 49]]).is_err());
 }
+
+// Hermitian Cholesky
+
+/// A Hermitian positive definite matrix on a `k x k` grid: each edge gets `-(1 + 0.5i)` one way
+/// and its conjugate the other, with a real diagonal of 5, which dominates the four neighbours'
+/// magnitudes (about 1.12 each). The numbering is then shuffled.
+fn hermitian_grid(k: usize, seed: u64) -> CsrMatrix<Complex<f64>> {
+    let edge = Complex::new(-1.0, -0.5);
+    let mut triplets = vec![];
+    for r in 0..k {
+        for c in 0..k {
+            let i = r * k + c;
+            triplets.push((i, i, Complex::new(5.0, 0.0)));
+            for j in [(c + 1 < k).then_some(i + 1), (r + 1 < k).then_some(i + k)]
+                .into_iter()
+                .flatten()
+            {
+                triplets.extend([(i, j, edge), (j, i, edge.conj())]);
+            }
+        }
+    }
+    let mut rng = Lcg(seed);
+    CsrMatrix::from_triplets(k * k, k * k, triplets)
+        .unwrap()
+        .permute_symmetric(&rng.permutation(k * k))
+        .unwrap()
+}
+
+#[test]
+fn cholesky_factors_hermitian_matrices() {
+    let a = hermitian_grid(7, 71);
+    assert!(a.is_hermitian() && !a.is_symmetric());
+    for ordering in [Ordering::Natural, Ordering::Rcm, Ordering::Amd] {
+        let factor = a.analyze_cholesky(ordering).unwrap().factor(&a).unwrap();
+        let l = factor.l();
+        // A real, positive diagonal
+        assert!(l
+            .diagonal()
+            .values()
+            .iter()
+            .all(|d| d.im == 0.0 && d.re > 0.0));
+        // P A Pᵀ = L Lᴴ
+        let reordered = a.permute_symmetric(factor.permutation()).unwrap();
+        let product = l * &l.adjoint().to_csr();
+        let difference = &product - &reordered;
+        assert!(difference.norm_frobenius() < 1e-12, "{ordering:?}");
+    }
+    let x: Vec<Complex<f64>> = (0..49)
+        .map(|i| Complex::new((i as f64).sin(), (i as f64 * 0.3).cos()))
+        .collect();
+    let b = a.mul_vec(&x).unwrap();
+    for solved in [
+        a.solve_spd(&b).unwrap(),
+        a.cholesky()
+            .unwrap()
+            .solve_many(std::slice::from_ref(&b))
+            .unwrap()
+            .remove(0),
+    ] {
+        assert!(solved.iter().zip(&x).all(|(s, x)| (s - x).norm() < 1e-12));
+    }
+    // It agrees with LU on the same system
+    let by_lu = a.to_csc().solve(&b).unwrap();
+    assert!(a
+        .solve_spd(&b)
+        .unwrap()
+        .iter()
+        .zip(&by_lu)
+        .all(|(s, l)| (s - l).norm() < 1e-12));
+}
+
+#[test]
+fn cholesky_rejects_complex_matrices_that_are_not_hermitian_positive_definite() {
+    // Complex symmetric, not Hermitian
+    let symmetric = CsrMatrix::from_dense(&[
+        [Complex::new(4.0, 0.0), Complex::new(1.0, 1.0)],
+        [Complex::new(1.0, 1.0), Complex::new(4.0, 0.0)],
+    ])
+    .unwrap();
+    assert_eq!(symmetric.cholesky().err(), Some(SparseError::NotSymmetric));
+    // Hermitian but indefinite: eigenvalues 1 ± |2 + 2i| = 1 ± 2.83
+    let indefinite = CsrMatrix::from_dense(&[
+        [Complex::new(1.0, 0.0), Complex::new(2.0, 2.0)],
+        [Complex::new(2.0, -2.0), Complex::new(1.0, 0.0)],
+    ])
+    .unwrap();
+    assert!(indefinite.is_hermitian());
+    assert!(matches!(
+        indefinite.cholesky().err(),
+        Some(SparseError::NotPositiveDefinite { .. })
+    ));
+}

@@ -416,8 +416,16 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
       moved to an impl bound only by `Scalar`. Tested with complex triangular solves in both
       orientations, complex norms against hand-computed values, and `is_hermitian` on Hermitian,
       symmetric-but-not-Hermitian and real matrices.
-- [ ] Hermitian Cholesky (`A = L Lᴴ`): replace the symmetry check with a Hermitian check, and
+- [x] Hermitian Cholesky (`A = L Lᴴ`): replace the symmetry check with a Hermitian check, and
       take real square roots of the diagonal (review note 3).
+      `SymbolicCholesky::factor`, `Cholesky`, `cholesky()` and `solve_spd` now take any
+      `ComplexFloat` element type. The check is `is_hermitian()` (still `NotSymmetric`); each
+      update subtracts conj(l_mj)·l_ij; the remaining pivot is real (`T::Real`), losing
+      re² + im² of each entry; and the stored back-substitution factor is Lᴴ. For real types
+      these are the same operations as before, and the natural-order check against the old
+      Cholesky still passes bit for bit. Tested on a Hermitian (not symmetric) grid matrix under
+      every ordering (P A Pᵀ = L Lᴴ, a real positive diagonal, solves agreeing with LU), and on
+      a complex symmetric matrix (`NotSymmetric`) and a Hermitian indefinite one.
 - [ ] Hermitian conjugate gradient: use conjugated inner products.
 - [ ] Run every solver test for both `f64` and `Complex<f64>`.
 - [ ] Note in the docs which float types keep solver support. Corrected while planning:
