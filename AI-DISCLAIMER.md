@@ -12,14 +12,18 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
 - **AI-assisted development:** from October 2026 on, most new code, tests and documentation were
   written with **Claude Code**, Anthropic's agentic coding tool, using the Claude Sonnet 5.5 and
   Claude Opus 5.5 models. That covers the large majority of the current source and tests,
-  including:
-  - the generic element type
-  - the CSR/CSC storage
-  - the products
-  - the linear solvers
-  - Matrix Market I/O
-  - the optional `serde` and `rayon` features
-  - the Phase 0 and Phase 1 work in [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md)
+  including, in `sparse_mat`:
+  - the generic element type, the products, Matrix Market I/O, and the optional `serde` and
+    `rayon` features
+  - the fixed-pattern compressed matrix type and its assembly maps (Phase 2)
+  - the fill-reducing orderings (RCM and AMD), the symbolic analysis, the ordered Cholesky and
+    the Gilbert–Peierls LU with refactoring (Phase 3)
+  - the complex-capable solvers (Phase 4)
+
+  and the whole of `powerflow`: the case model and MATPOWER reader, the DC power flow, and the AC
+  power flow by Newton's method and fast-decoupled (Phases 1.5 and 4.5), with their tests,
+  survey tools and benchmark records. [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md)
+  records each phase.
 - **Commits:** commits produced with AI assistance carry a `Co-Authored-By: Claude …` trailer.
   Some of them also contain code the maintainer wrote and the AI committed. The trailer marks
   AI involvement, not exclusive AI authorship.
