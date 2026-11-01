@@ -29,7 +29,9 @@ use crate::Scalar;
 mod access;
 mod assembly;
 mod blocks;
+mod cholesky;
 mod ops;
+mod ordering;
 #[cfg(feature = "rayon")]
 mod parallel;
 pub(crate) mod product;
@@ -39,6 +41,8 @@ mod serde_impl;
 mod solvers;
 
 pub use assembly::AssemblyMap;
+pub use cholesky::{Cholesky, SymbolicCholesky};
+pub use ordering::Ordering;
 pub use solvers::Lu;
 
 mod sealed {

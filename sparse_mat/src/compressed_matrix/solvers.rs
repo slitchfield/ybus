@@ -1,5 +1,5 @@
-//! Solvers for linear systems `A x = b`: triangular solves, LU with partial pivoting,
-//! Cholesky for symmetric positive definite matrices, and conjugate gradient.
+//! Solvers for linear systems `A x = b`: triangular solves, LU with partial pivoting and
+//! conjugate gradient. The ordered Cholesky factorization is in `cholesky.rs`.
 //!
 //! All of them need a float element type, since they divide. The factorizations work by rows,
 //! so they're on `CsrMatrix`; the triangular solves and conjugate gradient work in either
@@ -71,7 +71,7 @@ impl<T: Scalar + Float> Lu<T> {
 
 impl<T: Scalar + Float, O: Orientation> CompressedMatrix<T, O> {
     /// Checks that `self` is square and `b_len` matches, returning the size.
-    fn check_system(&self, b_len: usize) -> Result<usize, SparseError> {
+    pub(crate) fn check_system(&self, b_len: usize) -> Result<usize, SparseError> {
         if !self.is_square() {
             return Err(SparseError::NotSquare { shape: self.shape });
         }
@@ -341,83 +341,5 @@ impl<T: Scalar + Float> CsrMatrix<T> {
     pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
         self.check_system(b.len())?;
         self.lu()?.solve(b)
-    }
-
-    /// Computes the Cholesky factor `L` (lower triangular, in CSR form) of a symmetric positive
-    /// definite matrix, so that `A = L Lᵀ`. `L` stores no zeros.
-    ///
-    /// Works row by row, solving a sparse triangular system for each, so cost follows the
-    /// fill-in of `L`; there's no fill-reducing ordering yet. Returns `SparseError::NotSquare`,
-    /// `SparseError::NotSymmetric` (judged mathematically, ignoring stored zeros), or
-    /// `SparseError::NotPositiveDefinite` if a pivot is not strictly positive.
-    pub fn cholesky(&self) -> Result<CsrMatrix<T>, SparseError> {
-        if !self.is_square() {
-            return Err(SparseError::NotSquare { shape: self.shape });
-        }
-        if *self != self.clone().transpose() {
-            return Err(SparseError::NotSymmetric);
-        }
-        let n = self.shape.0;
-        let mut diagonal = vec![T::zero(); n];
-        // Entries of L strictly below the diagonal, grouped by column: (row, value)
-        let mut columns: Vec<Vec<(usize, T)>> = vec![vec![]; n];
-        let (mut ptr, mut idx, mut data) = (vec![0], vec![], vec![]);
-
-        for i in 0..n {
-            // Row i of A (lower part), which is turned into row i of L one column at a time,
-            //   smallest column first, since each entry depends on the smaller ones.
-            let mut work: BTreeMap<usize, T> = BTreeMap::new();
-            let mut a_ii = T::zero();
-            for p in self.ptr[i]..self.ptr[i + 1] {
-                let col = self.idx[p];
-                if col < i {
-                    work.insert(col, self.data[p]);
-                } else {
-                    if col == i {
-                        a_ii = self.data[p];
-                    }
-                    break;
-                }
-            }
-
-            let mut remaining = a_ii;
-            while let Some((j, w_j)) = work.pop_first() {
-                let l_ij = w_j / diagonal[j];
-                if l_ij == T::zero() {
-                    continue;
-                }
-                for &(m, l_mj) in &columns[j] {
-                    let current = work.get(&m).copied().unwrap_or(T::zero());
-                    work.insert(m, current - l_mj * l_ij);
-                }
-                columns[j].push((i, l_ij));
-                // Entries leave the work map in increasing column order, so the row is sorted
-                idx.push(j);
-                data.push(l_ij);
-                remaining = remaining - l_ij * l_ij;
-            }
-
-            if remaining.is_nan() || remaining <= T::zero() {
-                return Err(SparseError::NotPositiveDefinite { pivot: i });
-            }
-            diagonal[i] = remaining.sqrt();
-            idx.push(i);
-            data.push(diagonal[i]);
-            ptr.push(idx.len());
-        }
-        Ok(CsrMatrix::from_parts_unchecked((n, n), ptr, idx, data))
-    }
-
-    /// Solves `A x = b` for a symmetric positive definite matrix by Cholesky factorization:
-    /// forward substitution with `L`, then back substitution with `Lᵀ` by rows. Fails with the
-    /// errors of `cholesky`.
-    pub fn solve_spd(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
-        self.check_system(b.len())?;
-        let l = self.cholesky()?;
-        let y = l.solve_lower_triangular(b)?;
-        // Lᵀ in CSR form, reoriented in O(nnz); back substitution by rows adds each entry's
-        //   terms in column order, as the solve always has
-        let l_transposed: CsrMatrix<T> = l.to_csc().transpose();
-        l_transposed.solve_upper_triangular(&y)
     }
 }

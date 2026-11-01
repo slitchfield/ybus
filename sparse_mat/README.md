@@ -55,9 +55,13 @@ fn main() -> Result<(), SparseError> {
     let residual = a.mul_vec(&x)?;
     assert!(residual.iter().zip(&b).all(|(r, b)| (r - b).abs() < 1e-12));
 
-    let l = a.cholesky()?; // a is symmetric positive definite, so a = L Lᵀ
+    // a is symmetric positive definite: factor it as P A Pᵀ = L Lᵀ, ordered to limit fill-in
+    let chol = a.cholesky()?;
+    let l = chol.l();
     let lt: CsrMatrix = l.clone().transpose().to_csr(); // transpose is O(1), as a CscMatrix
-    assert!((&(&l * &lt) - &a).norm_frobenius() < 1e-12);
+    let reordered = a.permute_symmetric(chol.permutation())?;
+    assert!((&(l * &lt) - &reordered).norm_frobenius() < 1e-12);
+    assert_eq!(chol.solve(&b)?.len(), 3);
 
     // The pattern is fixed: values change in place, and a zero stays stored
     let mut refilled = a.clone();
@@ -120,7 +124,12 @@ fn main() -> Result<(), SparseError> {
   `norm_1` and `norm_inf` (float element types).
 - **Solvers** (float element types): `solve_lower_triangular` and `solve_upper_triangular` in
   either orientation; on `CsrMatrix`, `lu()` (an `Lu` with `solve`, `determinant`, `l`, `u` and
-  `permutation`) and `solve`, `cholesky()` and `solve_spd`; and `conjugate_gradient`.
+  `permutation`) and `solve`; `cholesky()` (a `Cholesky` of P A Pᵀ with `solve`, `l` and
+  `permutation`) and `solve_spd`; and `conjugate_gradient`.
+- **Orderings and symbolic analysis:** `ordering(Ordering::Rcm)` (reverse Cuthill–McKee, on
+  the pattern of A + Aᵀ) in either orientation, with `bandwidth` and `profile` to measure it;
+  `analyze_cholesky(ordering)` works out the elimination tree and the factor's exact pattern
+  once, so `factor` can be repeated for every matrix with that pattern.
 
 **Standard traits:** `Clone`, `Debug`, `PartialEq`, `Display` and `Default` on both types;
 `IntoIterator` for `SparseMatrix`.
@@ -152,7 +161,8 @@ Rust does not apply a type parameter's default in expressions, so a call with no
 Known performance limits:
 - `lu()` searches for pivots in O(n²) of the dimension, which suits systems up to thousands of
   rows, not hundreds of thousands.
-- `cholesky()` does no fill-reducing ordering.
+- `cholesky()` orders by reverse Cuthill–McKee, which keeps fill within the reordered matrix's
+  envelope; it is no minimum-degree ordering yet.
 - `to_dense` and `mul_dense` allocate `rows × cols`.
 
 ## Errors

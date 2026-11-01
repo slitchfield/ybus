@@ -20,7 +20,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::f64::consts::PI;
 
-use sparse_mat::compressed_matrix::CsrMatrix;
+use sparse_mat::compressed_matrix::{CsrMatrix, Ordering};
 use sparse_mat::sparse_error::SparseError;
 
 use crate::case::{BusType, Case};
@@ -298,13 +298,25 @@ impl DcModel {
     ///
     /// The net injection at each connected bus is `(Pg − Pd − Gs) / baseMVA − pbusinj`, with
     /// `Pg` summed over its in-service generators. Reference bus angles are fixed at their
-    /// `va_deg`, and the remaining angles solve `B′ θ = P′`. Branch flows are
+    /// `va_deg`, and the remaining angles solve `B′ θ = P′`, by Cholesky ordered by reverse
+    /// Cuthill–McKee, or by LU if B′ isn't positive definite. Branch flows are
     /// `(Bf θ + pfinj) · baseMVA`.
     ///
     /// Returns `PowerflowError::CaseMismatch` if `case`'s tables have different lengths from
     /// the model's case, and `SingularNetwork` if B′ is singular even though every bus reaches
     /// a reference, which takes reactances that cancel out.
     pub fn solve(&self, case: &Case) -> Result<DcSolution, PowerflowError> {
+        self.solve_with_ordering(case, Ordering::Rcm)
+    }
+
+    /// [`DcModel::solve`] with B′'s Cholesky factorization ordered by `ordering` instead of the
+    /// default, reverse Cuthill–McKee, for comparing orderings. The LU fallback isn't ordered
+    /// yet. Returns the errors of `solve`.
+    pub fn solve_with_ordering(
+        &self,
+        case: &Case,
+        ordering: Ordering,
+    ) -> Result<DcSolution, PowerflowError> {
         let found = (case.bus.len(), case.generator.len(), case.branch.len());
         if found != self.case_shape {
             return Err(PowerflowError::CaseMismatch {
@@ -367,7 +379,11 @@ impl DcModel {
             };
             // Bbus is built exactly symmetric, but LU is the fallback for NotSymmetric too, in
             //   case that ever changes: a slower solve beats a panic
-            let (solved, solver) = match b_unknown.solve_spd(&rhs) {
+            let cholesky = b_unknown
+                .analyze_cholesky(ordering)
+                .and_then(|symbolic| symbolic.factor(&b_unknown))
+                .and_then(|factor| factor.solve(&rhs));
+            let (solved, solver) = match cholesky {
                 Ok(solved) => (solved, DcSolver::Cholesky),
                 Err(SparseError::NotPositiveDefinite { .. } | SparseError::NotSymmetric) => {
                     match b_unknown.solve(&rhs) {

@@ -37,6 +37,30 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
             .fold(T::zero(), |total, value| total + value))
     }
 
+    /// The largest distance `|row − col|` of a stored entry from the diagonal, stored zeros
+    /// included: 0 for a diagonal (or empty) matrix, 1 for a tridiagonal one. Orderings such as
+    /// reverse Cuthill–McKee aim to make it small.
+    pub fn bandwidth(&self) -> usize {
+        self.iter()
+            .map(|(row, col, _)| row.abs_diff(col))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The size of the lower envelope: the sum over rows `i` of `i − f(i)`, where `f(i)` is the
+    /// smallest column of a stored entry in row `i` at or left of the diagonal (`f(i) = i` if
+    /// there is none). Stored zeros count. For a symmetric matrix, a Cholesky factor's fill stays
+    /// inside this envelope, so it bounds the factor's entries below the diagonal.
+    pub fn profile(&self) -> usize {
+        let mut first = (0..self.shape.0).collect::<Vec<usize>>();
+        for (row, col, _) in self.iter() {
+            if col < first[row] {
+                first[row] = col;
+            }
+        }
+        first.iter().enumerate().map(|(row, &col)| row - col).sum()
+    }
+
     /// Whether the matrix equals its transpose, mathematically: stored zeros don't matter, and
     /// floating point entries must match exactly. Non-square matrices are never symmetric.
     /// Costs O(nnz), comparing with a reoriented copy.

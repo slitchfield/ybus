@@ -16,6 +16,8 @@
 #   YBUS_BENCH_TIMEOUT  the time limit per case, in seconds (default 3600)
 #   YBUS_BENCH_MEMORY   the address-space limit per case, in GiB (default 10)
 #   YBUS_BENCH_CASES    the cases to survey, separated by spaces (default: every case)
+#   YBUS_BENCH_ORDERING the Cholesky factorization's ordering: natural or rcm (default rcm, as
+#                       DcModel::solve uses)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,6 +26,7 @@ REFERENCE="${NORMALIZED%-normalized}-reference"
 OUT="${1:-${ROOT}/target/dc-survey.csv}"
 TIMEOUT="${YBUS_BENCH_TIMEOUT:-3600}"
 MEMORY_GIB="${YBUS_BENCH_MEMORY:-10}"
+ORDERING="${YBUS_BENCH_ORDERING:-rcm}"
 
 if [[ ! -x /usr/bin/time ]]; then
     echo "error: the survey needs GNU time at /usr/bin/time (for example: apt install time)" >&2
@@ -65,7 +68,8 @@ for name in "${CASES[@]}"; do
     # exec replaces the shell, so the limits and GNU time's measurement apply to the survey
     if line="$(/usr/bin/time -f %M -o "${LOG}/rss" timeout "${TIMEOUT}" \
         bash -c 'ulimit -v "$1" && exec "${@:2}"' _ "$((MEMORY_GIB * 1024 * 1024))" \
-        "${SURVEY}" "${NORMALIZED}/${name}.m" "${REFERENCE}" 2> "${LOG}/err")"; then
+        "${SURVEY}" --ordering "${ORDERING}" "${NORMALIZED}/${name}.m" "${REFERENCE}" \
+        2> "${LOG}/err")"; then
         status=ok
     else
         code=$?

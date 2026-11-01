@@ -529,14 +529,6 @@ fn spd(n: usize, seed: u64) -> CsrMatrix<f64> {
     CsrMatrix::from_triplets(n, n, gram.iter().chain(shift)).unwrap()
 }
 
-fn diagonal_of(matrix: &CsrMatrix<f64>) -> Vec<f64> {
-    matrix
-        .iter()
-        .filter(|&(row, col, _)| row == col)
-        .map(|(_, _, value)| value)
-        .collect()
-}
-
 #[test]
 fn triangular_solves_in_both_orientations() {
     let lower =
@@ -710,60 +702,6 @@ fn lu_singular_and_shape_errors() {
     let a = CsrMatrix::<f64>::identity(3);
     assert!(a.lu().unwrap().solve(&[1.0]).is_err());
     assert!(a.solve(&[1.0]).is_err());
-}
-
-#[test]
-fn cholesky_reconstructs() {
-    for (n, seed) in [(1, 1), (5, 2), (12, 3), (20, 4)] {
-        let a = spd(n, seed);
-        let l = a.cholesky().unwrap();
-        // Lower triangular with a positive diagonal
-        assert!(l.iter().all(|(row, col, _)| col <= row));
-        assert!(diagonal_of(&l).iter().all(|&d| d > 0.0));
-        let reconstructed = (&l * &l.clone().transpose().to_csr()).to_dense();
-        for (got, want) in reconstructed.iter().zip(a.to_dense()) {
-            assert_vec_close(got, &want, 1e-8);
-        }
-    }
-}
-
-#[test]
-fn cholesky_keeps_diagonal_matrix_sparse() {
-    let l = CsrMatrix::from_diagonal(vec![4.0, 9.0, 16.0])
-        .cholesky()
-        .unwrap();
-    assert_eq!(l.num_stored(), 3);
-    assert_eq!(diagonal_of(&l), vec![2.0, 3.0, 4.0]);
-}
-
-#[test]
-fn cholesky_errors() {
-    let not_symmetric = CsrMatrix::from_dense(&[[2.0, 1.0], [0.0, 2.0]]).unwrap();
-    assert_eq!(
-        not_symmetric.cholesky().err(),
-        Some(SparseError::NotSymmetric)
-    );
-    // Symmetry is mathematical: a stored zero opposite a missing entry doesn't break it
-    let stored_zero =
-        CsrMatrix::from_triplets(2, 2, vec![(0, 0, 4.0), (0, 1, 0.0), (1, 1, 9.0)]).unwrap();
-    assert!(stored_zero.cholesky().is_ok());
-    let rect = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
-    assert_eq!(
-        rect.cholesky().err(),
-        Some(SparseError::NotSquare { shape: (2, 3) })
-    );
-    // Symmetric but indefinite: eigenvalues 3 and -1
-    let indefinite = CsrMatrix::from_dense(&[[1.0, 2.0], [2.0, 1.0]]).unwrap();
-    assert_eq!(
-        indefinite.cholesky().err(),
-        Some(SparseError::NotPositiveDefinite { pivot: 1 })
-    );
-    // Zero matrix has a non-positive first pivot
-    let zero = CsrMatrix::<f64>::from_triplets(2, 2, Vec::new()).unwrap();
-    assert_eq!(
-        zero.cholesky().err(),
-        Some(SparseError::NotPositiveDefinite { pivot: 0 })
-    );
 }
 
 #[test]
