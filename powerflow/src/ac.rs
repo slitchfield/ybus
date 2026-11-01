@@ -729,12 +729,19 @@ impl AcModel {
         (f, norm)
     }
 
-    /// `newtonpf`'s Jacobian in CSC form, from `dSbus_dV`:
+    /// `newtonpf`'s Jacobian in CSC form, at the voltages `v`, from `dSbus_dV`:
     /// `dS/dVa = j·diag(V)·conj(diag(I) − Ybus·diag(V))` and
     /// `dS/dVm = diag(V)·conj(Ybus·diag(V/|V|)) + conj(diag(I))·diag(V/|V|)`, with `I = Ybus V`,
     /// stacked as `[[Re dS/dVa[pvpq, pvpq], Re dS/dVm[pvpq, pq]], [Im dS/dVa[pq, pvpq],
     /// Im dS/dVm[pq, pq]]]`. Ybus stores its whole diagonal, so every iteration's Jacobian has
     /// the same pattern.
+    ///
+    /// `v` is the current Newton iterate: the complex voltage phasor `Vm·e^{jVa}` of every
+    /// connected bus, in per unit and in the model's internal bus order (entry `i` is case bus
+    /// row `bus_rows()[i]`), so it has one entry per row of Ybus. Every bus is included, the
+    /// reference buses too, since their voltages enter `I = Ybus V`; `unknowns` picks the rows
+    /// and columns that form the Jacobian. No magnitude may be zero, since `V/|V|` divides by
+    /// it; a power flow iterate never reaches zero in practice.
     fn jacobian(&self, v: &[Complex<f64>], unknowns: &Unknowns) -> CscMatrix<f64> {
         let shapes_match_message = "v and the factors have one entry per bus, matching Ybus";
         let current = self.ybus.mul_vec(v).expect(shapes_match_message);
