@@ -488,8 +488,13 @@ types through one code path, and every real result is bit for bit what it was.
       to the shunts, symmetry, and dropped elements. Corrected while testing: the plan expected
       Ybus to be Hermitian without phase shifts, but it's symmetric (Yft = Ytf for a real tap),
       and never Hermitian.
-- [ ] MATPOWER's AC reference results (`runpf`, Newton–Raphson) for case14, case30 and case118,
+- [x] MATPOWER's AC reference results (`runpf`, Newton–Raphson) for case14, case30 and case118,
       committed beside the DC ones.
+      `scripts/generate_reference.m` also runs `runpf` with its defaults and writes
+      `<case>_acpf_{bus,branch,gen,summary}.csv` (voltages, all four branch flows, generator P
+      and Q, and the iteration count: 2, 3 and 3). Regenerated under Octave 8.4.0, the DC files
+      came out byte-for-byte unchanged; `VERSIONS` now names 8.4.0. `tests/common/reference.rs`
+      reads them (`read_ac`), and the reference README documents the files.
 - [ ] Newton–Raphson in polar form: mismatch, then the dS/dV Jacobian built with
       `scale_rows`/`scale_cols`, `conj` and `select` over the PV/PQ index sets, then a solve
       using `refactor` from the second iteration on. Convergence control: mismatch tolerance,
