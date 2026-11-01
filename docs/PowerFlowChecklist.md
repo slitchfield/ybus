@@ -553,6 +553,12 @@ types through one code path, and every real result is bit for bit what it was.
         public, so the benchmark measures the solver's own build.
 - [ ] Review the README's references, the attribution of MATPOWER and of committed data, and
       `AI-DISCLAIMER.md` against the repository as it stands.
+      - **Provenance corrected:** the session transcripts show which MATPOWER files were read.
+        `makeSbus` and `dSbus_dV` were not, though the README (from PR #24) said the AC code was
+        written with reference to them; the injections follow the User's Manual's definition and
+        the Jacobian Technical Note 2's formulas. The README, `ac.rs`'s docs and the references
+        now say so (Technical Note 2's DOI as MATPOWER's own source files cite it). No
+        SuiteSparse source was read: only its licence file, for the licence notes.
 - [ ] Follow-up: build the Newton Jacobian through an assembly map from Ybus's entries, refilling
       its values in place each iteration instead of building intermediate matrices, now that the
       build is measured at about half of a Newton solve on case2383wp.
