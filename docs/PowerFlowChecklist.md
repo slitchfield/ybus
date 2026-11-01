@@ -551,7 +551,7 @@ types through one code path, and every real result is bit for bit what it was.
       - **The Jacobian build is about half of Newton's time** (6 builds of 1.12 ms in 12.9 ms),
         so an assembly-map Jacobian becomes the follow-up item below. `AcModel::jacobian` is
         public, so the benchmark measures the solver's own build.
-- [ ] Review the README's references, the attribution of MATPOWER and of committed data, and
+- [x] Review the README's references, the attribution of MATPOWER and of committed data, and
       `AI-DISCLAIMER.md` against the repository as it stands.
       - **Provenance corrected:** the session transcripts show which MATPOWER files were read.
         `makeSbus` and `dSbus_dV` were not, though the README (from PR #24) said the AC code was
@@ -559,6 +559,15 @@ types through one code path, and every real result is bit for bit what it was.
         the Jacobian Technical Note 2's formulas. The README, `ac.rs`'s docs and the references
         now say so (Technical Note 2's DOI as MATPOWER's own source files cite it). No
         SuiteSparse source was read: only its licence file, for the licence notes.
+      - **References:** every code name in the implemented table exists; nothing done is still
+        listed as planned. Stott and Alsaç and KLU, newly implemented in this phase, were
+        rechecked online (Stott and Alsaç has no DOI in the table, and none was confirmed).
+      - **Committed data:** the reference results' README now also cites MATPOWER 8.1 by its
+        version DOI, as MATPOWER's `CITATION` file recommends.
+      - **`AI-DISCLAIMER.md`:** brought up to date on the work done with AI (through Phase 4.5),
+        how it was checked (references kept in tests, MATPOWER validation and surveys), the CI
+        jobs, the test data, and the dependencies' licences, which it listed slightly wrong
+        (the Unlicense only ever appears as an alternative to MIT).
 - [ ] Follow-up: build the Newton Jacobian through an assembly map from Ybus's entries, refilling
       its values in place each iteration instead of building intermediate matrices, now that the
       build is measured at about half of a Newton solve on case2383wp.
