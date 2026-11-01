@@ -52,8 +52,10 @@ AI-generated code can be plausible and still wrong, so it was not accepted on tr
   were investigated rather than tolerated. A backward-error test checks that the DC solve is
   backward stable.
 - **Regressions:** bugs were reproduced with a failing test before they were fixed.
-- **CI:** every change runs `./check.sh` in CI (formatting, clippy with warnings as errors, and
-  tests with each feature combination), plus a minimum-supported-Rust-version job.
+- **CI:** every change runs three jobs: `./check.sh` (formatting, clippy with warnings as errors,
+  and tests with each feature combination, with the MATPOWER cases fetched and required, so the
+  comparisons with MATPOWER always run), the tests on the minimum supported Rust version, and
+  `cargo deny` over the dependencies (advisories, licenses, banned crates and sources).
 - **Review:** the maintainer reviewed each pull request before merging it.
 
 None of this guarantees the absence of errors. Please report any you find.
