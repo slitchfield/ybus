@@ -453,18 +453,45 @@ types through one code path, and every real result is bit for bit what it was.
 
 ## Phase 4.5: AC power flow (power flow crate)
 
+- [x] **Decide:** how to split the phase, whether to enforce reactive power limits, how strictly
+      to validate against MATPOWER, and how to build the Jacobian.
+      Decided (2026-11-01):
+      - **Four PRs:** the AC model and Newton–Raphson with validation; fast-decoupled XB and BX;
+        an AC survey of every case and benchmarks; then a review of the references, attribution
+        and `AI-DISCLAIMER.md`.
+      - **Reactive power limits are off,** as in `runpf`'s default (`pf.enforce_q_lims = 0`);
+        enforcing them is a deferred item below.
+      - **Validation is strict:** the same iteration count as MATPOWER, and agreement within 1e-9
+        in every result, as for the DC power flow. A case that can't meet it is investigated,
+        then its measured gap and tolerance are recorded.
+      - **The Jacobian is built by matrix operations** each iteration (`scale_rows`/`scale_cols`,
+        `conj`, `select`, stacking), as MATPOWER's `dSbus_dV` does. Its pattern stays fixed, so
+        the LU refactors. An assembly-map Jacobian is a follow-up only if the benchmark shows the
+        build matters.
+      Like the DC power flow, the AC code reproduces MATPOWER 8.1's `runpf` with its default
+      options, following `ext2int`, `bustypes`, `makeYbus`, `makeSbus`, `newtonpf`, `dSbus_dV`,
+      `makeB`, `fdpf` and `pfsoln`.
+- [ ] Extract the topology `DcModel` derives (connected buses, in-service elements, bus types,
+      the island check) into a module both power flows share, with no change to the DC results.
 - [ ] Ybus assembly with `from_triplets` (complex branch π-models, taps, shifts, shunts), then
       converted to `CsrMatrix` with an assembly map for re-stamping.
+- [ ] MATPOWER's AC reference results (`runpf`, Newton–Raphson) for case14, case30 and case118,
+      committed beside the DC ones.
 - [ ] Newton–Raphson in polar form: mismatch, then the dS/dV Jacobian built with
       `scale_rows`/`scale_cols`, `conj` and `select` over the PV/PQ index sets, then a solve
-      using `refactor` from the second iteration on.
-- [ ] Convergence control: mismatch tolerance, iteration limit, and reported iteration count and
-      final mismatch.
-- [ ] Fast-decoupled power flow (XB and BX variants), which factors B′ and B″ once.
-- [ ] Validation against MATPOWER `runpf` for case14, case30, case118 and a large case such as
-      case2383wp: voltage magnitudes, angles and branch flows within a stated tolerance.
-- [ ] Benchmarks against the Phase 1.5 baseline (`docs/benchmarks/`; rerun its tools on the same
-      machine to compare).
+      using `refactor` from the second iteration on. Convergence control: mismatch tolerance,
+      iteration limit, and reported iteration count and final mismatch. `pfsoln`'s
+      post-processing (generator reactive power, the slack, branch flows). Validated against
+      the reference results within 1e-9, with MATPOWER's iteration counts.
+- [ ] Fast-decoupled power flow (XB and BX variants), which factors B′ and B″ once, validated
+      the same way.
+- [ ] An AC survey of every MATPOWER case against MATPOWER's `runpf`, recorded in
+      `docs/benchmarks/`, and criterion benchmarks on case2383wp, including the Jacobian build's
+      share of the Newton–Raphson time.
+- [ ] Review the README's references, the attribution of MATPOWER and of committed data, and
+      `AI-DISCLAIMER.md` against the repository as it stands.
+- [ ] Deferred: enforcing generator reactive power limits (`runpf`'s `pf.enforce_q_lims`),
+      switching a PV bus to PQ at a limit and re-solving.
 
 ## Phase 5: DC studies
 
