@@ -120,12 +120,15 @@ fn main() -> Result<(), SparseError> {
   `scale_rows`/`scale_cols` for diag(v)·A and A·diag(v). `kron`, `hstack` and `vstack`.
 - **Complex matrices:** `conj`, `adjoint` (in the other orientation, like `transpose`),
   `real`/`imag`, and `from_parts`, generic over `ComplexFloat`.
-- **Properties:** `is_square`, `is_symmetric`, `density`, `sum`, `trace`, and `norm_frobenius`,
-  `norm_1` and `norm_inf` (float element types).
-- **Solvers** (float element types): `solve_lower_triangular` and `solve_upper_triangular` in
-  either orientation, and `conjugate_gradient`; on `CsrMatrix`, `cholesky()` (a `Cholesky` of
-  P A Pᵀ, ordered by AMD, with `solve`, `solve_in_place`, `solve_many`, `l` and
-  `permutation`) and `solve_spd`.
+- **Properties:** `is_square`, `is_symmetric`, `density`, `sum`, `trace`; and, for real or
+  complex float element types, `is_hermitian` and the norms `norm_frobenius`, `norm_1` and
+  `norm_inf`, which return the real type.
+- **Solvers** (real or complex float element types): `solve_lower_triangular` and
+  `solve_upper_triangular` in either orientation, and `conjugate_gradient` (with conjugated
+  inner products for complex matrices); on `CsrMatrix`, `cholesky()` (a `Cholesky` of
+  P A Pᵀ = L Lᴴ, ordered by AMD, with `solve`, `solve_in_place`, `solve_many`, `l` and
+  `permutation`) and `solve_spd`, for symmetric or, for complex matrices, Hermitian positive
+  definite matrices.
 - **LU** (real or complex element types): on `CscMatrix`, `lu()` and `solve`, Gilbert and
   Peierls's left-looking LU of P A Q, AMD-ordered, with threshold partial pivoting (0.1 by
   default; `LuOptions`). The `Lu` has `solve`, `solve_in_place`, `solve_many`, `determinant`,
@@ -145,10 +148,16 @@ fn main() -> Result<(), SparseError> {
 
 Both types accept any `Scalar`, meaning any `Copy + PartialEq + num_traits::Num` type. That
 covers `f32`, `f64`, every integer type and `num_complex::Complex` (re-exported as
-`sparse_mat::Complex`). Arithmetic, products and conversions work for all of them. LU works
-for any `num_complex::ComplexFloat` type: `f32`, `f64` and their complex numbers. The norms and
-the other solvers need `num_traits::Float`, so they cover `f32` and `f64` but not complex
-numbers yet; Phase 4 of the roadmap migrates them.
+`sparse_mat::Complex`). Arithmetic, products and conversions work for all of them.
+
+The solvers, the norms and `is_hermitian` work for any `num_complex::ComplexFloat` type: real
+or complex, one code path. For a complex matrix, Cholesky factors A = L Lᴴ and conjugate
+gradient conjugates its inner products; for a real one these are the familiar real algorithms,
+with bit-for-bit the same results. `ComplexFloat` is implemented for every type that implements
+both `num_traits::Float` and `num_traits::FloatConst` (as `f32` and `f64` do), and for
+`Complex` of such a type. So a user-defined float type keeps the solvers if it also implements
+`FloatConst`; one implementing `Float` alone still has arithmetic, products and conversions,
+but not the solvers or norms.
 
 Rust does not apply a type parameter's default in expressions, so a call with nothing to infer
 `T` from needs it spelled out: `SparseMatrix::<f64>::new()`.

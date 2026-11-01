@@ -1,5 +1,6 @@
 //! Properties and reductions of a matrix: shape predicates, sums and norms.
 
+use num_complex::ComplexFloat;
 use num_traits::Float;
 
 use super::{CompressedMatrix, Orientation};
@@ -67,65 +68,82 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
     pub fn is_symmetric(&self) -> bool {
         self.is_square() && *self == self.clone().transpose()
     }
+}
 
-    /// The sums of absolute values along each minor index, accumulated in storage order.
-    fn minor_sums_abs(&self) -> Vec<T>
-    where
-        T: Float,
-    {
-        let mut sums = vec![T::zero(); self.minor_dim()];
+/// Norms and the Hermitian test, for real and complex element types: magnitudes are `T::Real`,
+/// and for a real type every operation is the one the real-only versions performed.
+impl<T: Scalar + ComplexFloat, O: Orientation> CompressedMatrix<T, O> {
+    /// Whether the matrix equals its conjugate transpose `Aᴴ`, mathematically: stored zeros don't
+    /// matter, and entries must match exactly. For a real element type this is
+    /// `is_symmetric`. Non-square matrices are never Hermitian. Costs O(nnz).
+    pub fn is_hermitian(&self) -> bool {
+        self.is_square() && *self == self.adjoint()
+    }
+
+    /// The Frobenius norm: the square root of the sum of squared magnitudes, each `re² + im²`
+    /// (for a real entry, its square).
+    pub fn norm_frobenius(&self) -> T::Real {
+        let zero = <T::Real as num_traits::Zero>::zero();
+        let sum = self
+            .data
+            .iter()
+            .fold(zero, |total, &value| total + magnitude_squared(value));
+        Float::sqrt(sum)
+    }
+
+    /// The 1-norm: the largest column sum of magnitudes. Each column sum adds its entries in
+    /// row order in either orientation.
+    pub fn norm_1(&self) -> T::Real {
+        let sums = if O::ROW_MAJOR {
+            self.minor_sums_abs()
+        } else {
+            self.major_sums_abs()
+        };
+        largest(sums)
+    }
+
+    /// The infinity norm: the largest row sum of magnitudes. Each row sum adds its entries in
+    /// column order in either orientation.
+    pub fn norm_inf(&self) -> T::Real {
+        let sums = if O::ROW_MAJOR {
+            self.major_sums_abs()
+        } else {
+            self.minor_sums_abs()
+        };
+        largest(sums)
+    }
+
+    /// The sums of magnitudes along each minor index, accumulated in storage order.
+    fn minor_sums_abs(&self) -> Vec<T::Real> {
+        let mut sums = vec![<T::Real as num_traits::Zero>::zero(); self.minor_dim()];
         for (&minor, value) in self.idx.iter().zip(&self.data) {
             sums[minor] = sums[minor] + value.abs();
         }
         sums
     }
 
-    /// The sums of absolute values along each major index.
-    fn major_sums_abs(&self) -> Vec<T>
-    where
-        T: Float,
-    {
+    /// The sums of magnitudes along each major index.
+    fn major_sums_abs(&self) -> Vec<T::Real> {
         self.ptr
             .windows(2)
             .map(|bounds| {
                 self.data[bounds[0]..bounds[1]]
                     .iter()
-                    .fold(T::zero(), |total, value| total + value.abs())
+                    .fold(<T::Real as num_traits::Zero>::zero(), |total, value| {
+                        total + value.abs()
+                    })
             })
             .collect()
     }
 }
 
-impl<T: Scalar + Float, O: Orientation> CompressedMatrix<T, O> {
-    /// The Frobenius norm: the square root of the sum of squared magnitudes.
-    pub fn norm_frobenius(&self) -> T {
-        self.data
-            .iter()
-            .fold(T::zero(), |total, &value| total + value * value)
-            .sqrt()
-    }
+/// `re² + im²`: for a real value, exactly its square, since `im` is zero.
+pub(crate) fn magnitude_squared<T: ComplexFloat>(value: T) -> T::Real {
+    value.re() * value.re() + value.im() * value.im()
+}
 
-    /// The 1-norm: the largest column sum of absolute values. Each column sum adds its entries
-    /// in row order in either orientation.
-    pub fn norm_1(&self) -> T {
-        let sums = if O::ROW_MAJOR {
-            self.minor_sums_abs()
-        } else {
-            self.major_sums_abs()
-        };
-        sums.into_iter()
-            .fold(T::zero(), |largest, sum| largest.max(sum))
-    }
-
-    /// The infinity norm: the largest row sum of absolute values. Each row sum adds its entries
-    /// in column order in either orientation.
-    pub fn norm_inf(&self) -> T {
-        let sums = if O::ROW_MAJOR {
-            self.major_sums_abs()
-        } else {
-            self.minor_sums_abs()
-        };
-        sums.into_iter()
-            .fold(T::zero(), |largest, sum| largest.max(sum))
-    }
+/// The largest of non-negative sums, or zero if there are none.
+fn largest<R: Float>(sums: Vec<R>) -> R {
+    sums.into_iter()
+        .fold(R::zero(), |largest, sum| largest.max(sum))
 }

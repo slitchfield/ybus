@@ -1816,3 +1816,121 @@ fn refill_errors_leave_the_matrix_unchanged() {
     assert!(map.is_empty() && empty.num_stored() == 0);
     empty.refill(&map, &[]).unwrap();
 }
+
+// Complex element types in the norms, the Hermitian test and the triangular solves
+
+fn c(re: f64, im: f64) -> Complex<f64> {
+    Complex::new(re, im)
+}
+
+#[test]
+fn complex_norms_use_magnitudes() {
+    // [[3 + 4i, 0], [1 - 1i, 2i]]
+    let a = CsrMatrix::from_triplets(
+        2,
+        2,
+        vec![
+            (0, 0, c(3.0, 4.0)),
+            (1, 0, c(1.0, -1.0)),
+            (1, 1, c(0.0, 2.0)),
+        ],
+    )
+    .unwrap();
+    // |3+4i| = 5, |1-i| = √2, |2i| = 2; column sums 5 + √2 and 2
+    let frobenius: f64 = a.norm_frobenius();
+    assert!((frobenius - (25.0f64 + 2.0 + 4.0).sqrt()).abs() < 1e-15);
+    assert!((a.norm_1() - (5.0 + 2.0f64.sqrt())).abs() < 1e-15);
+    // Row sums: 5, and √2 + 2 ≈ 3.41
+    assert_eq!(a.norm_inf(), 5.0);
+    assert_eq!(a.to_csc().norm_1(), a.norm_1());
+    assert_eq!(a.to_csc().norm_inf(), a.norm_inf());
+    assert_eq!(
+        CsrMatrix::from_diagonal(vec![c(3.0, 4.0)]).norm_frobenius(),
+        5.0
+    );
+}
+
+#[test]
+fn hermitian_means_equal_to_the_conjugate_transpose() {
+    let hermitian =
+        CsrMatrix::from_dense(&[[c(2.0, 0.0), c(1.0, 1.0)], [c(1.0, -1.0), c(3.0, 0.0)]]).unwrap();
+    assert!(hermitian.is_hermitian());
+    assert!(!hermitian.is_symmetric());
+    // Symmetric but not Hermitian
+    let symmetric =
+        CsrMatrix::from_dense(&[[c(2.0, 0.0), c(1.0, 1.0)], [c(1.0, 1.0), c(3.0, 0.0)]]).unwrap();
+    assert!(symmetric.is_symmetric());
+    assert!(!symmetric.is_hermitian());
+    // A complex diagonal entry can't be Hermitian
+    assert!(!CsrMatrix::from_diagonal(vec![c(1.0, 1.0)]).is_hermitian());
+    // For real matrices the two agree
+    for a in [spd(8, 3), dominant(8, 4)] {
+        assert_eq!(a.is_hermitian(), a.is_symmetric());
+    }
+    assert!(!CsrMatrix::<Complex<f64>>::from_triplets(2, 3, Vec::new())
+        .unwrap()
+        .is_hermitian());
+}
+
+#[test]
+fn complex_triangular_solves_in_both_orientations() {
+    // Lower and upper triangular complex matrices, against hand-built right-hand sides
+    let lower = CsrMatrix::from_triplets(
+        3,
+        3,
+        vec![
+            (0, 0, c(2.0, 1.0)),
+            (1, 0, c(0.0, 1.0)),
+            (1, 1, c(1.0, -1.0)),
+            (2, 1, c(3.0, 0.0)),
+            (2, 2, c(0.0, 2.0)),
+        ],
+    )
+    .unwrap();
+    let x = vec![c(1.0, 2.0), c(-1.0, 0.5), c(0.25, -3.0)];
+    let b = lower.mul_vec(&x).unwrap();
+    for solved in [
+        lower.solve_lower_triangular(&b).unwrap(),
+        lower.to_csc().solve_lower_triangular(&b).unwrap(),
+    ] {
+        assert!(solved.iter().zip(&x).all(|(s, x)| (s - x).norm() < 1e-14));
+    }
+    let upper = lower.clone().transpose().to_csr();
+    let b = upper.mul_vec(&x).unwrap();
+    for solved in [
+        upper.solve_upper_triangular(&b).unwrap(),
+        upper.to_csc().solve_upper_triangular(&b).unwrap(),
+    ] {
+        assert!(solved.iter().zip(&x).all(|(s, x)| (s - x).norm() < 1e-14));
+    }
+    // A zero diagonal is still singular
+    let singular = CsrMatrix::from_diagonal(vec![c(1.0, 0.0), c(0.0, 0.0)]);
+    assert_eq!(
+        singular.solve_lower_triangular(&[c(1.0, 0.0); 2]),
+        Err(SparseError::SingularMatrix { pivot: 1 })
+    );
+}
+
+#[test]
+fn conjugate_gradient_real_results_are_unchanged_by_complex_support() {
+    // The solution's bits as recorded before conjugate gradient became generic over
+    //   ComplexFloat (2026-11-01): for a real element type it must do the same arithmetic
+    let a = spd(12, 7);
+    let b: Vec<f64> = (0..12).map(|i| (i as f64 * 0.9).sin()).collect();
+    let x = a.conjugate_gradient(&b, 1e-13, 200).unwrap();
+    let recorded: [u64; 12] = [
+        0xbf937a220b38cbb4,
+        0x3fa6632e3b4907c2,
+        0x3fa1176dcf767ee9,
+        0x3f8cc7e3077051e2,
+        0xbf96ba9623f3915f,
+        0xbf97c3bd986db13c,
+        0xbf9ea2074bd9bb61,
+        0x3f56f4e2590efdfd,
+        0x3fad4dd5e3d674a8,
+        0x3fa8011ea7abc637,
+        0x3f9d54e1e84d5ec6,
+        0xbf840481611b8cc7,
+    ];
+    assert_eq!(x.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), recorded);
+}

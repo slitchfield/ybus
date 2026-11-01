@@ -4,6 +4,7 @@
 mod common;
 
 use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, RefactorOutcome};
+use sparse_mat::num_complex::ComplexFloat;
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
 
@@ -1152,4 +1153,321 @@ fn lu_solves_in_place_and_many_like_solve() {
     );
     assert_eq!(short, vec![2.0; 7]);
     assert!(lu.solve_many(&[vec![0.0; 49]]).is_err());
+}
+
+// Hermitian Cholesky
+
+/// A Hermitian positive definite matrix on a `k x k` grid: each edge gets `-(1 + 0.5i)` one way
+/// and its conjugate the other, with a real diagonal of 5, which dominates the four neighbours'
+/// magnitudes (about 1.12 each). The numbering is then shuffled.
+fn hermitian_grid(k: usize, seed: u64) -> CsrMatrix<Complex<f64>> {
+    let edge = Complex::new(-1.0, -0.5);
+    let mut triplets = vec![];
+    for r in 0..k {
+        for c in 0..k {
+            let i = r * k + c;
+            triplets.push((i, i, Complex::new(5.0, 0.0)));
+            for j in [(c + 1 < k).then_some(i + 1), (r + 1 < k).then_some(i + k)]
+                .into_iter()
+                .flatten()
+            {
+                triplets.extend([(i, j, edge), (j, i, edge.conj())]);
+            }
+        }
+    }
+    let mut rng = Lcg(seed);
+    CsrMatrix::from_triplets(k * k, k * k, triplets)
+        .unwrap()
+        .permute_symmetric(&rng.permutation(k * k))
+        .unwrap()
+}
+
+#[test]
+fn cholesky_factors_hermitian_matrices() {
+    let a = hermitian_grid(7, 71);
+    assert!(a.is_hermitian() && !a.is_symmetric());
+    for ordering in [Ordering::Natural, Ordering::Rcm, Ordering::Amd] {
+        let factor = a.analyze_cholesky(ordering).unwrap().factor(&a).unwrap();
+        let l = factor.l();
+        // A real, positive diagonal
+        assert!(l
+            .diagonal()
+            .values()
+            .iter()
+            .all(|d| d.im == 0.0 && d.re > 0.0));
+        // P A Pᵀ = L Lᴴ
+        let reordered = a.permute_symmetric(factor.permutation()).unwrap();
+        let product = l * &l.adjoint().to_csr();
+        let difference = &product - &reordered;
+        assert!(difference.norm_frobenius() < 1e-12, "{ordering:?}");
+    }
+    let x: Vec<Complex<f64>> = (0..49)
+        .map(|i| Complex::new((i as f64).sin(), (i as f64 * 0.3).cos()))
+        .collect();
+    let b = a.mul_vec(&x).unwrap();
+    for solved in [
+        a.solve_spd(&b).unwrap(),
+        a.cholesky()
+            .unwrap()
+            .solve_many(std::slice::from_ref(&b))
+            .unwrap()
+            .remove(0),
+    ] {
+        assert!(solved.iter().zip(&x).all(|(s, x)| (s - x).norm() < 1e-12));
+    }
+    // It agrees with LU on the same system
+    let by_lu = a.to_csc().solve(&b).unwrap();
+    assert!(a
+        .solve_spd(&b)
+        .unwrap()
+        .iter()
+        .zip(&by_lu)
+        .all(|(s, l)| (s - l).norm() < 1e-12));
+}
+
+#[test]
+fn cholesky_rejects_complex_matrices_that_are_not_hermitian_positive_definite() {
+    // Complex symmetric, not Hermitian
+    let symmetric = CsrMatrix::from_dense(&[
+        [Complex::new(4.0, 0.0), Complex::new(1.0, 1.0)],
+        [Complex::new(1.0, 1.0), Complex::new(4.0, 0.0)],
+    ])
+    .unwrap();
+    assert_eq!(symmetric.cholesky().err(), Some(SparseError::NotSymmetric));
+    // Hermitian but indefinite: eigenvalues 1 ± |2 + 2i| = 1 ± 2.83
+    let indefinite = CsrMatrix::from_dense(&[
+        [Complex::new(1.0, 0.0), Complex::new(2.0, 2.0)],
+        [Complex::new(2.0, -2.0), Complex::new(1.0, 0.0)],
+    ])
+    .unwrap();
+    assert!(indefinite.is_hermitian());
+    assert!(matches!(
+        indefinite.cholesky().err(),
+        Some(SparseError::NotPositiveDefinite { .. })
+    ));
+}
+
+#[test]
+fn conjugate_gradient_solves_hermitian_systems() {
+    let a = hermitian_grid(8, 81);
+    let x: Vec<Complex<f64>> = (0..64)
+        .map(|i| Complex::new(1.0 + (i % 3) as f64, (i as f64 * 0.2).sin()))
+        .collect();
+    let b = a.mul_vec(&x).unwrap();
+    let by_cg = a.conjugate_gradient(&b, 1e-13, 500).unwrap();
+    let by_cholesky = a.solve_spd(&b).unwrap();
+    for ((cg, chol), x) in by_cg.iter().zip(&by_cholesky).zip(&x) {
+        assert!((cg - chol).norm() < 1e-10, "{cg} vs {chol}");
+        assert!((cg - x).norm() < 1e-10);
+    }
+    // Both orientations agree bit for bit, as for real matrices
+    assert_eq!(
+        a.to_csc().conjugate_gradient(&b, 1e-13, 500).unwrap(),
+        by_cg
+    );
+    // CG assumes a Hermitian matrix without checking. On [[0, i], [i, 0]], which is symmetric
+    //   but not Hermitian, the first curvature ⟨b, A b⟩ is zero, so it stops at once
+    let not_hermitian = CsrMatrix::from_dense(&[
+        [Complex::new(0.0, 0.0), Complex::new(0.0, 1.0)],
+        [Complex::new(0.0, 1.0), Complex::new(0.0, 0.0)],
+    ])
+    .unwrap();
+    assert!(matches!(
+        not_hermitian.conjugate_gradient(
+            &[Complex::new(1.0, 0.0), Complex::new(0.0, 0.0)],
+            1e-12,
+            10
+        ),
+        Err(SparseError::NoConvergence { iterations: 0 })
+    ));
+}
+
+// Every solver, for real and complex element types
+
+/// An element type the solver suite runs for, built from the real fixtures.
+trait Element: sparse_mat::Scalar + ComplexFloat<Real = f64> + std::fmt::Debug {
+    /// An off-diagonal value: `v` itself for a real type, `v (1 + 0.5i)` for a complex one.
+    fn off(v: f64) -> Self;
+    /// A real value, used on diagonals.
+    fn real(v: f64) -> Self;
+}
+
+impl Element for f64 {
+    fn off(v: f64) -> f64 {
+        v
+    }
+    fn real(v: f64) -> f64 {
+        v
+    }
+}
+
+impl Element for Complex<f64> {
+    fn off(v: f64) -> Complex<f64> {
+        Complex::new(v, 0.5 * v)
+    }
+    fn real(v: f64) -> Complex<f64> {
+        Complex::new(v, 0.0)
+    }
+}
+
+/// `a` with its off-diagonal values lifted (`Element::off`) and its diagonal scaled by
+/// `diagonal_scale`; `hermitian` lifts the strict lower triangle and mirrors it conjugated, so
+/// a symmetric `a` becomes Hermitian.
+fn lift<T: Element>(a: &CsrMatrix<f64>, diagonal_scale: f64, hermitian: bool) -> CsrMatrix<T> {
+    let (n, cols) = a.shape();
+    let mut triplets = vec![];
+    for (i, j, v) in a.iter() {
+        if i == j {
+            triplets.push((i, j, T::real(v * diagonal_scale)));
+        } else if !hermitian {
+            triplets.push((i, j, T::off(v)));
+        } else if i > j {
+            triplets.extend([(i, j, T::off(v)), (j, i, T::off(v).conj())]);
+        }
+    }
+    CsrMatrix::from_triplets(n, cols, triplets).unwrap()
+}
+
+fn sample_rhs<T: Element>(n: usize, k: usize) -> Vec<T> {
+    (0..n)
+        .map(|i| T::off(((i * 3 + k * 5) as f64 * 0.37).sin()) + T::real(0.1))
+        .collect()
+}
+
+fn assert_solves<T: Element>(a: &CsrMatrix<T>, x: &[T], b: &[T], tolerance: f64, what: &str) {
+    let residual = a.mul_vec(x).unwrap();
+    let scale = b.iter().map(|v| v.abs()).fold(1.0, f64::max);
+    for (r, b) in residual.iter().zip(b) {
+        assert!(
+            (*r - *b).abs() <= tolerance * scale,
+            "{what}: {r:?} vs {b:?}"
+        );
+    }
+}
+
+fn solver_suite<T: Element>() {
+    let type_name = std::any::type_name::<T>();
+    // Hermitian positive definite: a symmetric fixture's lower triangle, mirrored conjugated,
+    //   with the diagonal scaled to dominate the complex magnitudes (|1 + 0.5i| ≈ 1.12)
+    let spd = random_spd(40, 12, 91);
+    let hpd: CsrMatrix<T> = lift(&spd, 1.2, true);
+    assert!(hpd.is_hermitian(), "{type_name}");
+    let general: CsrMatrix<T> = lift(&random_square(45, 10, 0.05, 92), 1.0, false);
+
+    // Triangular solves, both orientations, on HPD's lower and upper triangles
+    let lower = CsrMatrix::from_triplets(40, 40, hpd.iter().filter(|&(i, j, _)| j <= i)).unwrap();
+    let upper = lower.adjoint().to_csr();
+    let b = sample_rhs::<T>(40, 0);
+    for (name, triangle, solved) in [
+        (
+            "lower CSR",
+            &lower,
+            lower.solve_lower_triangular(&b).unwrap(),
+        ),
+        (
+            "lower CSC",
+            &lower,
+            lower.to_csc().solve_lower_triangular(&b).unwrap(),
+        ),
+        (
+            "upper CSR",
+            &upper,
+            upper.solve_upper_triangular(&b).unwrap(),
+        ),
+        (
+            "upper CSC",
+            &upper,
+            upper.to_csc().solve_upper_triangular(&b).unwrap(),
+        ),
+    ] {
+        assert_solves(triangle, &solved, &b, 1e-12, &format!("{type_name} {name}"));
+    }
+
+    // Cholesky under every ordering, with every way of solving
+    let rhs = vec![sample_rhs::<T>(40, 1), sample_rhs::<T>(40, 2)];
+    for ordering in [Ordering::Natural, Ordering::Rcm, Ordering::Amd] {
+        let factor = hpd
+            .analyze_cholesky(ordering)
+            .unwrap()
+            .factor(&hpd)
+            .unwrap();
+        let reordered = hpd.permute_symmetric(factor.permutation()).unwrap();
+        let product = factor.l() * &factor.l().adjoint().to_csr();
+        assert!(
+            (&product - &reordered).norm_frobenius() < 1e-12,
+            "{type_name} Cholesky {ordering:?}"
+        );
+        for (b, x) in rhs.iter().zip(factor.solve_many(&rhs).unwrap()) {
+            assert_solves(
+                &hpd,
+                &x,
+                b,
+                1e-12,
+                &format!("{type_name} Cholesky {ordering:?}"),
+            );
+            let mut in_place = b.clone();
+            factor.solve_in_place(&mut in_place).unwrap();
+            assert_eq!(in_place, x);
+        }
+    }
+
+    // LU under every ordering, then a refactor with new values
+    let b = sample_rhs::<T>(45, 3);
+    let csc = general.to_csc();
+    for ordering in [Ordering::Natural, Ordering::Rcm, Ordering::Amd] {
+        let mut lu = csc
+            .analyze_lu(ordering)
+            .unwrap()
+            .factor(&csc, LuOptions::default())
+            .unwrap();
+        assert_solves(
+            &general,
+            &lu.solve(&b).unwrap(),
+            &b,
+            1e-10,
+            &format!("{type_name} LU {ordering:?}"),
+        );
+        let scaled = csc.map(|v| v * T::real(1.5));
+        assert_eq!(lu.refactor(&scaled), Ok(RefactorOutcome::Reused));
+        let x = lu.solve(&b).unwrap();
+        assert_solves(
+            &scaled.to_csr(),
+            &x,
+            &b,
+            1e-10,
+            &format!("{type_name} refactor"),
+        );
+    }
+
+    // Conjugate gradient agrees with Cholesky
+    let b = sample_rhs::<T>(40, 4);
+    let by_cg = hpd.conjugate_gradient(&b, 1e-13, 400).unwrap();
+    let by_cholesky = hpd.solve_spd(&b).unwrap();
+    for (cg, chol) in by_cg.iter().zip(&by_cholesky) {
+        assert!(
+            (*cg - *chol).abs() < 1e-9,
+            "{type_name} CG: {cg:?} vs {chol:?}"
+        );
+    }
+
+    // Norms against sums of magnitudes taken from the dense matrix
+    let dense = general.to_dense();
+    let column_sums = (0..45).map(|j| dense.iter().map(|row| row[j].abs()).sum::<f64>());
+    let row_sums = dense
+        .iter()
+        .map(|row| row.iter().map(|v| v.abs()).sum::<f64>());
+    let squares: f64 = dense.iter().flatten().map(|v| v.abs() * v.abs()).sum();
+    assert!((general.norm_1() - column_sums.fold(0.0, f64::max)).abs() < 1e-12);
+    assert!((general.norm_inf() - row_sums.fold(0.0, f64::max)).abs() < 1e-12);
+    assert!((general.norm_frobenius() - squares.sqrt()).abs() < 1e-10);
+}
+
+#[test]
+fn every_solver_works_for_f64() {
+    solver_suite::<f64>();
+}
+
+#[test]
+fn every_solver_works_for_complex_f64() {
+    solver_suite::<Complex<f64>>();
 }

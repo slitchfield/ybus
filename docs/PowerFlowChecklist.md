@@ -400,15 +400,56 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
 
 ## Phase 4: Complex-capable solvers (migrating what Phase 3 didn't rewrite)
 
-- [ ] Change the bounds of the triangular solves, `solve` and the norms from `Float` to
-      `Scalar + ComplexFloat`. Pivot choice compares `abs()` (a real value), and norms return
-      `Real`.
-- [ ] Hermitian Cholesky (`A = L Lᴴ`): replace the symmetry check with a Hermitian check, and
+Done in PR #23 (2026-11-01). Every solver and norm now works for real and complex element
+types through one code path, and every real result is bit for bit what it was.
+
+- [x] **Decide:** what Cholesky reports for a matrix that isn't Hermitian.
+      Decided (2026-11-01): keep `SparseError::NotSymmetric`, documented as "not symmetric, or
+      for complex element types, not Hermitian (A ≠ Aᴴ)", so nothing breaks for real callers
+      such as the DC solve's LU fallback. Every real result stays bit for bit what it was: for
+      `f64`, `conj` is the identity and re² + im² is x·x + 0, so each change keeps the same
+      operations in the same order.
+- [x] Change the bounds of the triangular solves, conjugate gradient and the norms from `Float`
+      to `Scalar + ComplexFloat`, with norms returning `Real`. (`solve`, the general one, is the
+      LU's, which Phase 3 already made generic.)
+      Done for the triangular solves and the norms; conjugate gradient changes with its
+      Hermitian item below. The norms return `T::Real`: Frobenius sums re² + im² (exactly x·x for
+      a real x), and the 1- and infinity norms sum `abs()`. New `is_hermitian()` (A equals Aᴴ
+      mathematically; `is_symmetric` for real types). `check_system` needs no numeric bound, so it
+      moved to an impl bound only by `Scalar`. Tested with complex triangular solves in both
+      orientations, complex norms against hand-computed values, and `is_hermitian` on Hermitian,
+      symmetric-but-not-Hermitian and real matrices.
+- [x] Hermitian Cholesky (`A = L Lᴴ`): replace the symmetry check with a Hermitian check, and
       take real square roots of the diagonal (review note 3).
-- [ ] Hermitian conjugate gradient: use conjugated inner products.
-- [ ] Run every solver test for both `f64` and `Complex<f64>`.
-- [ ] Note in the docs that user-defined `Float` types lose solver support, since `ComplexFloat`
-      is sealed.
+      `SymbolicCholesky::factor`, `Cholesky`, `cholesky()` and `solve_spd` now take any
+      `ComplexFloat` element type. The check is `is_hermitian()` (still `NotSymmetric`); each
+      update subtracts conj(l_mj)·l_ij; the remaining pivot is real (`T::Real`), losing
+      re² + im² of each entry; and the stored back-substitution factor is Lᴴ. For real types
+      these are the same operations as before, and the natural-order check against the old
+      Cholesky still passes bit for bit. Tested on a Hermitian (not symmetric) grid matrix under
+      every ordering (P A Pᵀ = L Lᴴ, a real positive diagonal, solves agreeing with LU), and on
+      a complex symmetric matrix (`NotSymmetric`) and a Hermitian indefinite one.
+- [x] Hermitian conjugate gradient: use conjugated inner products.
+      `conjugate_gradient` takes any `ComplexFloat` element type, with ⟨u, v⟩ = Σ conj(uᵢ) vᵢ.
+      The residual's squared norm, the curvature and the step lengths are real (`T::Real`), and
+      `tolerance` is `T::Real` (still `f64` for `f64` callers). A real solution's bits, recorded
+      before the change, are unchanged (a permanent test). Tested on a Hermitian grid matrix,
+      matching the Cholesky solution, with CSR and CSC agreeing bit for bit.
+- [x] Run every solver test for both `f64` and `Complex<f64>`.
+      Done as one generic suite in `factorization_test.rs`, run for each type: triangular solves
+      (both orientations), Cholesky under every ordering with `solve_many` and `solve_in_place`,
+      LU under every ordering with a refactor, conjugate gradient against Cholesky, and the
+      norms against sums taken from the dense matrix. A small `Element` trait lifts the real
+      fixtures (off-diagonals `v ↦ v·(1 + 0.5i)`, mirrored conjugated where Hermitian is
+      needed). Changed from the plan: the existing real-only tests stay as they are rather than
+      being rewritten generically, since many check exact values or bit-for-bit agreement with
+      the old algorithms, which only make sense for `f64`.
+- [x] Note in the docs which float types keep solver support. Corrected while planning:
+      `ComplexFloat` is sealed, but its seal is implemented for every `Float + FloatConst` type
+      (`num-complex` 0.4.6, `complex_float.rs`), so a user-defined float type keeps solver support
+      if it also implements `FloatConst`; only a type implementing `Float` alone loses it.
+      Done in the Element types section of `sparse_mat/README.md`, which also lists the
+      complex-capable solvers and norms.
 
 ## Phase 4.5: AC power flow (power flow crate)
 
