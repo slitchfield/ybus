@@ -20,7 +20,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::f64::consts::PI;
 
-use sparse_mat::compressed_matrix::{CsrMatrix, Ordering};
+use sparse_mat::compressed_matrix::{CsrMatrix, LuOptions, Ordering};
 use sparse_mat::sparse_error::SparseError;
 
 use crate::case::{BusType, Case};
@@ -280,7 +280,8 @@ pub enum DcSolver {
     /// Cholesky, which applies when B′ is symmetric positive definite: always, unless some
     /// branch has a negative reactance (a series capacitor).
     Cholesky,
-    /// LU with partial pivoting, the fallback when Cholesky finds B′ isn't positive definite.
+    /// LU with threshold partial pivoting, the fallback when Cholesky finds B′ isn't positive
+    /// definite.
     /// (It's also the fallback if B′ isn't exactly symmetric, which the model's construction
     /// rules out.)
     Lu,
@@ -299,7 +300,8 @@ impl DcModel {
     /// The net injection at each connected bus is `(Pg − Pd − Gs) / baseMVA − pbusinj`, with
     /// `Pg` summed over its in-service generators. Reference bus angles are fixed at their
     /// `va_deg`, and the remaining angles solve `B′ θ = P′`, by Cholesky ordered by approximate
-    /// minimum degree, or by LU if B′ isn't positive definite. Branch flows are
+    /// minimum degree, or, if B′ isn't positive definite, by LU with the same ordering and
+    /// threshold partial pivoting. Branch flows are
     /// `(Bf θ + pfinj) · baseMVA`.
     ///
     /// Returns `PowerflowError::CaseMismatch` if `case`'s tables have different lengths from
@@ -309,9 +311,9 @@ impl DcModel {
         self.solve_with_ordering(case, Ordering::Amd)
     }
 
-    /// [`DcModel::solve`] with B′'s Cholesky factorization ordered by `ordering` instead of the
-    /// default, approximate minimum degree, for comparing orderings. The LU fallback isn't ordered
-    /// yet. Returns the errors of `solve`.
+    /// [`DcModel::solve`] with B′ factored (by Cholesky, or by the LU fallback) under `ordering`
+    /// instead of the default, approximate minimum degree, for comparing orderings. Returns the
+    /// errors of `solve`.
     pub fn solve_with_ordering(
         &self,
         case: &Case,
@@ -386,7 +388,13 @@ impl DcModel {
             let (solved, solver) = match cholesky {
                 Ok(solved) => (solved, DcSolver::Cholesky),
                 Err(SparseError::NotPositiveDefinite { .. } | SparseError::NotSymmetric) => {
-                    match b_unknown.solve(&rhs) {
+                    // LU names a singular column of B′, which is a position in `unknown`
+                    let b_columns = b_unknown.to_csc();
+                    let lu = b_columns
+                        .analyze_lu(ordering)
+                        .and_then(|symbolic| symbolic.factor(&b_columns, LuOptions::default()))
+                        .and_then(|factor| factor.solve(&rhs));
+                    match lu {
                         Ok(solved) => (solved, DcSolver::Lu),
                         Err(SparseError::SingularMatrix { pivot }) => return Err(singular(pivot)),
                         Err(err) => unreachable!("LU of a square system: {err}"),

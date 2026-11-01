@@ -16,8 +16,8 @@
 #   YBUS_BENCH_TIMEOUT  the time limit per case, in seconds (default 3600)
 #   YBUS_BENCH_MEMORY   the address-space limit per case, in GiB (default 10)
 #   YBUS_BENCH_CASES    the cases to survey, separated by spaces (default: every case)
-#   YBUS_BENCH_ORDERING the Cholesky factorization's ordering: natural, rcm or amd (default
-#                       amd, as DcModel::solve uses)
+#   YBUS_BENCH_ORDERING the factorization's ordering, Cholesky or LU: natural, rcm or amd
+#                       (default amd, as DcModel::solve uses)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

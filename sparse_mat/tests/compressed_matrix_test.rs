@@ -611,106 +611,12 @@ fn triangular_solve_errors() {
 }
 
 #[test]
-fn lu_reconstructs_permuted_matrix() {
-    for (n, seed) in [(1, 1), (4, 2), (9, 3), (15, 4)] {
-        let a = dominant(n, seed);
-        let lu = a.lu().unwrap();
-        // P A = L U, with row i of P A being row perm[i] of A
-        let pa: Vec<Vec<f64>> = lu
-            .permutation()
-            .iter()
-            .map(|&r| a.to_dense()[r].clone())
-            .collect();
-        let product = (lu.l() * lu.u()).to_dense();
-        for (got, want) in product.iter().zip(&pa) {
-            assert_vec_close(got, want, 1e-9);
-        }
-    }
-}
-
-#[test]
-fn lu_solves_systems() {
-    for (n, seed) in [(3, 7), (10, 8), (25, 9)] {
-        let a = dominant(n, seed);
-        let x: Vec<f64> = (0..n).map(|i| i as f64 - 3.0).collect();
-        let b = a.mul_vec(&x).unwrap();
-        assert_vec_close(&a.solve(&b).unwrap(), &x, 1e-9);
-        assert_vec_close(&a.lu().unwrap().solve(&b).unwrap(), &x, 1e-9);
-    }
-}
-
-#[test]
-fn lu_needs_pivoting() {
-    // A zero on the diagonal forces a row swap
-    let a = CsrMatrix::from_dense(&[[0.0, 2.0], [3.0, 1.0]]).unwrap();
-    let lu = a.lu().unwrap();
-    assert_eq!(lu.permutation(), [1, 0]);
-    assert_vec_close(&lu.solve(&[4.0, 5.0]).unwrap(), &[1.0, 2.0], 1e-12);
-
-    // A matrix whose rows are all shifted so that nothing is on the diagonal
-    let n = 6;
-    let shifted =
-        CsrMatrix::from_triplets(n, n, (0..n).map(|i| (i, (i + 1) % n, (i + 2) as f64))).unwrap();
-    let x: Vec<f64> = (0..n).map(|i| 1.0 + i as f64).collect();
-    let b = shifted.mul_vec(&x).unwrap();
-    assert_vec_close(&shifted.solve(&b).unwrap(), &x, 1e-12);
-}
-
-#[test]
-fn lu_handles_stored_zeros() {
-    // A stored zero below the pivot needs no elimination, and the factors store no zeros
-    let a = CsrMatrix::from_triplets(2, 2, vec![(0, 0, 2.0), (1, 0, 0.0), (1, 1, 3.0)]).unwrap();
-    let lu = a.lu().unwrap();
-    assert_eq!(lu.l().num_stored(), 2);
-    assert_eq!(lu.u().num_stored(), 2);
-    assert_vec_close(&lu.solve(&[2.0, 3.0]).unwrap(), &[1.0, 1.0], 1e-12);
-}
-
-#[test]
-fn lu_determinant() {
-    let a = CsrMatrix::from_dense(&[[4.0f64, 3.0], [6.0, 3.0]]).unwrap();
-    assert!((a.lu().unwrap().determinant() - (-6.0)).abs() < 1e-12);
-    // Row swap flips the sign: det [[0,2],[3,1]] = -6
-    let b = CsrMatrix::from_dense(&[[0.0f64, 2.0], [3.0, 1.0]]).unwrap();
-    assert!((b.lu().unwrap().determinant() - (-6.0)).abs() < 1e-12);
-    assert_eq!(
-        CsrMatrix::<f64>::identity(5).lu().unwrap().determinant(),
-        1.0
-    );
-    assert_eq!(CsrMatrix::<f64>::default().lu().unwrap().determinant(), 1.0);
-}
-
-#[test]
-fn lu_singular_and_shape_errors() {
-    let singular = CsrMatrix::from_dense(&[[1.0, 2.0], [2.0, 4.0]]).unwrap();
-    assert_eq!(
-        singular.lu().err(),
-        Some(SparseError::SingularMatrix { pivot: 1 })
-    );
-    let empty_column = CsrMatrix::from_dense(&[[1.0, 0.0], [1.0, 0.0]]).unwrap();
-    assert_eq!(
-        empty_column.lu().err(),
-        Some(SparseError::SingularMatrix { pivot: 1 })
-    );
-
-    let rect = CsrMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
-    assert_eq!(
-        rect.lu().err(),
-        Some(SparseError::NotSquare { shape: (2, 3) })
-    );
-
-    let a = CsrMatrix::<f64>::identity(3);
-    assert!(a.lu().unwrap().solve(&[1.0]).is_err());
-    assert!(a.solve(&[1.0]).is_err());
-}
-
-#[test]
 fn solve_spd_matches_lu() {
     let a = spd(14, 5);
     let x: Vec<f64> = (0..14).map(|i| (i as f64).sin()).collect();
     let b = a.mul_vec(&x).unwrap();
     assert_vec_close(&a.solve_spd(&b).unwrap(), &x, 1e-9);
-    assert_vec_close(&a.solve(&b).unwrap(), &x, 1e-9);
+    assert_vec_close(&a.to_csc().solve(&b).unwrap(), &x, 1e-9);
 }
 
 #[test]
@@ -1226,13 +1132,16 @@ fn permute_symmetric_preserves_structure() {
 }
 
 #[test]
-fn permute_rows_agrees_with_lu_permutation() {
-    let a = dominant(6, 84);
+fn permute_agrees_with_lu_permutations() {
+    let a = dominant(6, 84).to_csc();
     let lu = a.lu().unwrap();
-    let columns: Vec<usize> = (0..6).collect();
-    let pa = a.permute(lu.permutation(), &columns).unwrap().to_dense();
+    // P A Q = L U
+    let paq = a
+        .permute(lu.permutation(), lu.column_permutation())
+        .unwrap()
+        .to_dense();
     let product = (lu.l() * lu.u()).to_dense();
-    for (got, want) in product.iter().zip(&pa) {
+    for (got, want) in product.iter().zip(&paq) {
         assert_vec_close(got, want, 1e-9);
     }
 }

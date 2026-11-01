@@ -3,10 +3,11 @@
 
 mod common;
 
-use sparse_mat::compressed_matrix::{CsrMatrix, Ordering};
+use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, Refactor};
 use sparse_mat::sparse_error::SparseError;
+use sparse_mat::Complex;
 
-use common::{reference_cholesky, reference_solve_spd};
+use common::{reference_cholesky, reference_lu, reference_solve_spd};
 
 /// Deterministic pseudo-random numbers (a linear congruential generator).
 struct Lcg(u64);
@@ -658,4 +659,405 @@ fn amd_factors_solve_correctly() {
         .unwrap();
     let x: Vec<f64> = (0..225).map(|i| (i as f64 * 0.3).sin()).collect();
     assert_close(&factor.solve(&a.mul_vec(&x).unwrap()).unwrap(), &x, 1e-12);
+}
+
+// LU
+
+/// A pseudo-random square matrix with about `fill_percent` of its off-diagonal positions
+/// stored, and a diagonal that is `diagonal_scale` times its row's largest entry, so a small
+/// scale forces pivoting off the diagonal.
+fn random_square(n: usize, fill_percent: u64, diagonal_scale: f64, seed: u64) -> CsrMatrix<f64> {
+    let mut rng = Lcg(seed);
+    let mut triplets = vec![];
+    for i in 0..n {
+        let mut largest: f64 = 1.0;
+        for j in 0..n {
+            if i != j && rng.next() % 100 < fill_percent {
+                let value = ((rng.next() % 2001) as f64 - 1000.0) / 313.0;
+                largest = largest.max(value.abs());
+                triplets.push((i, j, value));
+            }
+        }
+        let sign = if rng.next().is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        triplets.push((
+            i,
+            i,
+            sign * diagonal_scale * largest * (1.0 + i as f64 / n as f64),
+        ));
+    }
+    CsrMatrix::from_triplets(n, n, triplets).unwrap()
+}
+
+/// The dense product `L U` of an LU factorization, against the dense `P A Q`.
+fn assert_lu_reconstructs(a: &CscMatrix<f64>, lu: &sparse_mat::compressed_matrix::Lu<f64>) {
+    let l = lu.l();
+    let u = lu.u();
+    assert!(l.iter().all(|(row, col, _)| row >= col));
+    assert!(u.iter().all(|(row, col, _)| row <= col));
+    assert!(l.diagonal().values().iter().all(|&d| d == 1.0));
+    let paq = a
+        .permute(lu.permutation(), lu.column_permutation())
+        .unwrap();
+    let product = (l * u).to_dense();
+    for (got, want) in product.iter().zip(paq.to_dense()) {
+        assert_close(got, &want, 1e-10);
+    }
+}
+
+#[test]
+fn lu_reconstructs_the_permuted_matrix() {
+    for (n, fill, scale, seed) in [
+        (1, 0, 1.0, 1),
+        (12, 30, 0.1, 2),
+        (40, 10, 2.0, 3),
+        (60, 6, 0.01, 4),
+    ] {
+        let a = random_square(n, fill, scale, seed).to_csc();
+        for ordering in [Ordering::Natural, Ordering::Rcm, Ordering::Amd] {
+            for threshold in [0.001, 0.1, 1.0] {
+                let lu = a
+                    .analyze_lu(ordering)
+                    .unwrap()
+                    .factor(
+                        &a,
+                        LuOptions {
+                            pivot_threshold: threshold,
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(lu.column_permutation(), a.ordering(ordering).unwrap());
+                assert!(is_permutation(lu.permutation(), n));
+                assert_lu_reconstructs(&a, &lu);
+            }
+        }
+    }
+}
+
+#[test]
+fn lu_solves_like_the_reference_lu() {
+    for (n, fill, scale, seed) in [(30, 15, 0.05, 5), (80, 4, 1.5, 6), (120, 3, 0.02, 7)] {
+        let csr = random_square(n, fill, scale, seed);
+        let a = csr.to_csc();
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.37).cos()).collect();
+        let b = a.mul_vec(&x).unwrap();
+        let reference = reference_lu(&csr).unwrap();
+        let permuted: Vec<f64> = reference.perm.iter().map(|&row| b[row]).collect();
+        let y = reference.l.solve_lower_triangular(&permuted).unwrap();
+        let expected = reference.u.solve_upper_triangular(&y).unwrap();
+        let solved = a.solve(&b).unwrap();
+        assert_close(&solved, &expected, 1e-9);
+        assert_close(&solved, &x, 1e-9);
+        // Under true partial pivoting with no ordering, both choose the same pivots
+        let partial = a
+            .analyze_lu(Ordering::Natural)
+            .unwrap()
+            .factor(
+                &a,
+                LuOptions {
+                    pivot_threshold: 1.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(partial.permutation(), reference.perm, "n = {n}");
+    }
+}
+
+#[test]
+fn lu_threshold_decides_between_diagonal_and_largest() {
+    // Column 0's candidates are 0.5 on the diagonal and 1.0 below it
+    let a = CscMatrix::from_dense(&[[0.5, 1.0], [1.0, 1.0]]).unwrap();
+    let symbolic = a.analyze_lu(Ordering::Natural).unwrap();
+    let with = |pivot_threshold| symbolic.factor(&a, LuOptions { pivot_threshold }).unwrap();
+    assert_eq!(
+        with(0.1).permutation(),
+        [0, 1],
+        "0.5 >= 0.1 x 1.0 keeps the diagonal"
+    );
+    assert_eq!(with(0.5).permutation(), [0, 1]);
+    assert_eq!(
+        with(0.6).permutation(),
+        [1, 0],
+        "0.5 < 0.6 x 1.0 takes the largest"
+    );
+    assert_eq!(with(1.0).permutation(), [1, 0]);
+    assert_eq!(LuOptions::default().pivot_threshold, 0.1);
+}
+
+#[test]
+#[should_panic(expected = "the pivot threshold must be in (0, 1]")]
+fn lu_rejects_a_threshold_outside_the_unit_interval() {
+    let a = CscMatrix::<f64>::identity(2);
+    let _ = a.analyze_lu(Ordering::Natural).unwrap().factor(
+        &a,
+        LuOptions {
+            pivot_threshold: 0.0,
+        },
+    );
+}
+
+#[test]
+fn lu_factors_complex_matrices() {
+    // A Ybus-like pattern: a shuffled grid's Laplacian with complex admittances, plus a
+    //   diagonal too small to pivot on in some rows
+    let mut rng = Lcg(31);
+    let k = 7;
+    let grid = grid_laplacian(k)
+        .permute_symmetric(&rng.permutation(k * k))
+        .unwrap();
+    let a: CscMatrix<Complex<f64>> = grid
+        .to_csc()
+        .map(|v| Complex::new(v * 0.3, -v * (1.0 + (v.abs() * 7.0) % 3.0)));
+    let x: Vec<Complex<f64>> = (0..k * k)
+        .map(|i| Complex::new((i as f64).sin(), (i as f64 * 0.5).cos()))
+        .collect();
+    let b = a.mul_vec(&x).unwrap();
+    let lu = a.lu().unwrap();
+    let solved = lu.solve(&b).unwrap();
+    for (got, want) in solved.iter().zip(&x) {
+        assert!((got - want).norm() < 1e-10, "{got} vs {want}");
+    }
+    // An unsymmetric complex matrix that needs pivoting
+    let c = CscMatrix::from_dense(&[
+        [
+            Complex::new(0.0, 0.0),
+            Complex::new(1.0, 1.0),
+            Complex::new(2.0, 0.0),
+        ],
+        [
+            Complex::new(0.0, 3.0),
+            Complex::new(0.0, 0.0),
+            Complex::new(1.0, -1.0),
+        ],
+        [
+            Complex::new(1.0, 0.0),
+            Complex::new(2.0, 2.0),
+            Complex::new(0.0, 0.0),
+        ],
+    ])
+    .unwrap();
+    let lu = c.lu().unwrap();
+    let rhs = [
+        Complex::new(1.0, 0.0),
+        Complex::new(0.0, 1.0),
+        Complex::new(2.0, -1.0),
+    ];
+    let solution = lu.solve(&rhs).unwrap();
+    let residual = c.mul_vec(&solution).unwrap();
+    for (r, b) in residual.iter().zip(&rhs) {
+        assert!((r - b).norm() < 1e-12);
+    }
+    // det = 0(0 - 2(1 - i)) - (1 + i)(0 - (1 - i)) + 2(3i(2 + 2i) - 0) = 2 - 12 + 12i
+    let det = lu.determinant();
+    assert!((det - Complex::new(-10.0, 12.0)).norm() < 1e-12, "{det}");
+}
+
+#[test]
+fn lu_determinant_follows_both_permutations() {
+    let a = CscMatrix::from_dense(&[[4.0f64, 3.0], [6.0, 3.0]]).unwrap();
+    assert!((a.lu().unwrap().determinant() - (-6.0)).abs() < 1e-12);
+    // A row swap is needed: det [[0, 2], [3, 1]] = -6
+    let b = CscMatrix::from_dense(&[[0.0f64, 2.0], [3.0, 1.0]]).unwrap();
+    assert!((b.lu().unwrap().determinant() - (-6.0)).abs() < 1e-12);
+    assert_eq!(
+        CscMatrix::<f64>::identity(5).lu().unwrap().determinant(),
+        1.0
+    );
+    assert_eq!(CscMatrix::<f64>::default().lu().unwrap().determinant(), 1.0);
+    // Against the reference on matrices whose orderings and pivots permute both ways
+    for (n, seed) in [(9, 8), (25, 9)] {
+        let csr = random_square(n, 25, 0.05, seed);
+        let reference = reference_lu(&csr).unwrap();
+        let sign = if reference.swaps.is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        let expected = reference
+            .u
+            .diagonal()
+            .values()
+            .iter()
+            .fold(sign, |d, &u| d * u);
+        let det = csr.to_csc().lu().unwrap().determinant();
+        assert!(
+            ((det - expected) / expected).abs() < 1e-10,
+            "{det} vs {expected}"
+        );
+    }
+}
+
+#[test]
+fn lu_keeps_its_symbolic_pattern_and_stored_zeros() {
+    // A stored zero in A: its column still has a pivot, and the position is in the pattern
+    let a = CscMatrix::from_triplets(2, 2, vec![(0, 0, 2.0), (1, 0, 0.0), (1, 1, 3.0)]).unwrap();
+    let lu = a
+        .analyze_lu(Ordering::Natural)
+        .unwrap()
+        .factor(&a, LuOptions::default())
+        .unwrap();
+    assert_eq!(
+        lu.l().num_stored(),
+        3,
+        "the multiplier of the stored zero is kept"
+    );
+    assert_eq!(lu.u().num_stored(), 2);
+    assert_close(&lu.solve(&[2.0, 3.0]).unwrap(), &[1.0, 1.0], 1e-12);
+}
+
+#[test]
+fn lu_errors() {
+    // Singular: the error names the column of A that has no pivot
+    let singular = CscMatrix::from_dense(&[[1.0, 2.0], [2.0, 4.0]]).unwrap();
+    let natural = singular.analyze_lu(Ordering::Natural).unwrap();
+    assert_eq!(
+        natural.factor(&singular, LuOptions::default()).err(),
+        Some(SparseError::SingularMatrix { pivot: 1 })
+    );
+    let empty_column = CscMatrix::from_dense(&[[1.0, 0.0], [1.0, 0.0]]).unwrap();
+    assert_eq!(
+        empty_column.lu().err(),
+        Some(SparseError::SingularMatrix { pivot: 1 })
+    );
+    let rect = CscMatrix::<f64>::from_triplets(2, 3, Vec::new()).unwrap();
+    assert_eq!(
+        rect.lu().err(),
+        Some(SparseError::NotSquare { shape: (2, 3) })
+    );
+    assert_eq!(
+        rect.solve(&[1.0, 2.0]).err(),
+        Some(SparseError::NotSquare { shape: (2, 3) })
+    );
+    let identity = CscMatrix::<f64>::identity(3);
+    assert_eq!(
+        identity.lu().unwrap().solve(&[1.0]).err(),
+        Some(SparseError::ShapeMismatch {
+            left: (3, 3),
+            right: (1, 1)
+        })
+    );
+    assert!(identity.solve(&[1.0]).is_err());
+    // Another pattern is refused
+    let symbolic = identity.analyze_lu(Ordering::Amd).unwrap();
+    assert_eq!(
+        symbolic.factor(&singular, LuOptions::default()).err(),
+        Some(SparseError::PatternMismatch)
+    );
+}
+
+// Refactoring
+
+/// `a` with every stored value changed by a pseudo-random factor in [0.5, 1.5), keeping the
+/// pattern (stored zeros stay zero).
+fn new_values(a: &CscMatrix<f64>, seed: u64) -> CscMatrix<f64> {
+    let mut rng = Lcg(seed);
+    let mut b = a.clone();
+    for value in b.values_mut() {
+        *value *= 0.5 + (rng.next() % 1000) as f64 / 1000.0;
+    }
+    b
+}
+
+#[test]
+fn refactor_reuses_the_pivots_for_new_values() {
+    for (n, fill, scale, seed) in [(20, 20, 1.5, 1), (90, 4, 3.0, 2)] {
+        let a = random_square(n, fill, scale, seed).to_csc();
+        let mut lu = a.lu().unwrap();
+        let (l_pattern, u_pattern) = (lu.l().indices().to_vec(), lu.u().indices().to_vec());
+        let permutations = (lu.permutation().to_vec(), lu.column_permutation().to_vec());
+        for round in 0..3 {
+            let b = new_values(&a, 10 + round);
+            assert_eq!(lu.refactor(&b), Ok(Refactor::Reused), "n = {n}");
+            // Same pivots and patterns, new values that factor b
+            assert_eq!(lu.l().indices(), l_pattern);
+            assert_eq!(lu.u().indices(), u_pattern);
+            assert_eq!(lu.permutation(), permutations.0);
+            assert_eq!(lu.column_permutation(), permutations.1);
+            assert_lu_reconstructs(&b, &lu);
+            let x: Vec<f64> = (0..n).map(|i| 1.0 + (i % 5) as f64).collect();
+            let rhs = b.mul_vec(&x).unwrap();
+            assert_close(&lu.solve(&rhs).unwrap(), &x, 1e-9);
+            assert_close(&lu.solve(&rhs).unwrap(), &b.solve(&rhs).unwrap(), 1e-9);
+            let det = lu.determinant();
+            let fresh = b.lu().unwrap().determinant();
+            assert!(((det - fresh) / fresh).abs() < 1e-9, "{det} vs {fresh}");
+        }
+    }
+}
+
+#[test]
+fn refactor_repivots_when_a_pivot_becomes_too_small() {
+    let a = CscMatrix::from_dense(&[[4.0, 1.0, 0.0], [1.0, 4.0, 1.0], [0.0, 1.0, 4.0]]).unwrap();
+    let mut lu = a
+        .analyze_lu(Ordering::Natural)
+        .unwrap()
+        .factor(&a, LuOptions::default())
+        .unwrap();
+    assert_eq!(lu.permutation(), [0, 1, 2]);
+    // The first pivot shrinks below 0.1 of its column's largest entry
+    let mut b = a.clone();
+    let p = b.position(0, 0).unwrap().unwrap();
+    b.values_mut()[p] = 0.01;
+    assert_eq!(lu.refactor(&b), Ok(Refactor::Repivoted));
+    assert_eq!(lu.permutation()[0], 1, "row 1 pivots first now");
+    assert_lu_reconstructs(&b, &lu);
+    // Zeroing (0, 0) no longer touches a pivot, since row 1 pivots column 0 now
+    b.values_mut()[p] = 0.0;
+    assert_eq!(lu.refactor(&b), Ok(Refactor::Reused));
+    // From the original pivots, an exactly zero pivot can't be reused
+    let mut fresh = a
+        .analyze_lu(Ordering::Natural)
+        .unwrap()
+        .factor(&a, LuOptions::default())
+        .unwrap();
+    assert_eq!(fresh.refactor(&b), Ok(Refactor::Repivoted));
+    assert_lu_reconstructs(&b, &fresh);
+    assert_close(
+        &lu.solve(&[1.0, 2.0, 3.0]).unwrap(),
+        &b.solve(&[1.0, 2.0, 3.0]).unwrap(),
+        1e-12,
+    );
+    // Back to the original values, the pivots chosen for b fail in column 1 (1 against
+    //   0.1 x 15), so it repivots, back to the diagonal
+    assert_eq!(lu.refactor(&a), Ok(Refactor::Repivoted));
+    assert_eq!(lu.permutation(), [0, 1, 2]);
+    assert_lu_reconstructs(&a, &lu);
+}
+
+#[test]
+fn refactor_handles_complex_values() {
+    let mut rng = Lcg(41);
+    let grid = grid_laplacian(5)
+        .permute_symmetric(&rng.permutation(25))
+        .unwrap()
+        .to_csc();
+    let a = grid.map(|v| Complex::new(v, -2.0 * v));
+    let b = grid.map(|v| Complex::new(0.7 * v, -1.1 * v));
+    let mut lu = a.lu().unwrap();
+    assert_eq!(lu.refactor(&b), Ok(Refactor::Reused));
+    let x: Vec<Complex<f64>> = (0..25).map(|i| Complex::new(i as f64, 1.0)).collect();
+    let solved = lu.solve(&b.mul_vec(&x).unwrap()).unwrap();
+    assert!(solved.iter().zip(&x).all(|(s, x)| (s - x).norm() < 1e-10));
+}
+
+#[test]
+fn refactor_errors_leave_the_factorization_unchanged() {
+    let a = CscMatrix::from_dense(&[[2.0, 1.0], [1.0, 3.0]]).unwrap();
+    let mut lu = a.lu().unwrap();
+    let before = (lu.l().values().to_vec(), lu.u().values().to_vec());
+    // Another pattern
+    let other = CscMatrix::from_dense(&[[2.0, 0.0], [1.0, 3.0]]).unwrap();
+    assert_eq!(lu.refactor(&other), Err(SparseError::PatternMismatch));
+    // The same pattern, but singular: refactoring falls back to a fresh factorization, which
+    //   fails
+    let singular = CscMatrix::from_dense(&[[1.0, 2.0], [2.0, 4.0]]).unwrap();
+    assert!(matches!(
+        lu.refactor(&singular),
+        Err(SparseError::SingularMatrix { .. })
+    ));
+    assert_eq!((lu.l().values().to_vec(), lu.u().values().to_vec()), before);
+    assert_close(&lu.solve(&[3.0, 4.0]).unwrap(), &[1.0, 1.0], 1e-12);
 }

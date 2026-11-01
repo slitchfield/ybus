@@ -326,16 +326,50 @@ Merged in PR #2.
         RCM's, but its factor is about twice as fast and its solve two to four times, so it pays
         off wherever an analysis is reused.
       - **Backward error:** see the hypothesis item below.
-- [ ] Keep the current `BTreeMap` LU as a test-only reference implementation, and compare the
+- [x] Keep the current `BTreeMap` LU as a test-only reference implementation, and compare the
       two on pseudo-random and power flow matrices.
-- [ ] Gilbert–Peierls left-looking LU with threshold partial pivoting, generic over
+      `reference_lu` in `sparse_mat/tests/common`, rewritten against the public API, so no test
+      code ships in the library. It matches the library's LU bit for bit (factors, permutation
+      and determinant) before the new LU replaces it; the comparisons with the new LU come with
+      it.
+- [x] Gilbert–Peierls left-looking LU with threshold partial pivoting, generic over
       `ComplexFloat` from the start (review note 2). Keep the current `Lu` API (`solve`,
       `determinant`, `l`, `u`, `permutation`) as the front end.
-- [ ] `refactor(values)`, which reuses the analysis and pivot sequence when only values change.
+      `CscMatrix::analyze_lu(ordering)` and `SymbolicLu::factor(&A, LuOptions)` in
+      `compressed_matrix/lu.rs`; `lu()` and `solve` (AMD, threshold 0.1) moved from `CsrMatrix`
+      to `CscMatrix`, since the algorithm works by columns. `Lu` keeps `solve`, `determinant`,
+      `l`, `u` (now CSC) and `permutation`, and adds `column_permutation`: P A Q = L U.
+      - **Pivoting:** the diagonal of the ordered matrix is kept while its magnitude is at least
+        the threshold times the column's largest; otherwise the largest is taken. Checked: 0.1
+        is UMFPACK's default partial pivot tolerance (its separate 0.001 applies only to its
+        symmetric strategy's diagonal pivots).
+      - **Tested:** P A Q = L U under every ordering and thresholds 0.001, 0.1 and 1.0; solves
+        matching the reference LU; at threshold 1.0 with no ordering, the same pivots as the
+        reference; complex matrices (a Ybus-like grid, and an unsymmetric one needing
+        pivoting, with its determinant); the determinant's sign from both permutations.
+      - **Errors:** `SingularMatrix` names the column of A with no pivot, which the DC solve
+        maps to a bus, as before.
+- [x] `refactor(values)`, which reuses the analysis and pivot sequence when only values change.
       If a pivot becomes too small, fall back to a full factorization and report that.
-- [ ] The DC power flow's LU fallback uses the new LU.
+      `Lu::refactor(&A)` reuses the column ordering, the pivot sequence and the patterns of L
+      and U: each column is a sparse triangular solve over U's known pattern, with no search.
+      Each reused pivot is checked against the factorization's threshold; if one fails (or is
+      zero), it factors afresh under the same column ordering and returns
+      `Refactor::Repivoted`, otherwise `Refactor::Reused`. A different pattern is
+      `PatternMismatch`, and on any error the factorization is unchanged. Tested on new values
+      (same pivots and patterns, reconstructing P A Q, solving and the determinant), on pivots
+      that shrink or vanish, on complex values, and on errors.
+- [x] The DC power flow's LU fallback uses the new LU.
+      With the same ordering as Cholesky (AMD by default). Recorded in
+      `docs/benchmarks/dc-power-flow-lu-2026-11-01.md`, on the 19 LU cases:
+      - **Speed:** their solves take 0.33 s together instead of 478.5 s (case13659pegase 15 ms
+        instead of 83 s). Unordered, the new LU fills about as much as the old one but runs
+        26 times faster at the median; AMD gives another factor of 40, cutting the worst fill
+        from 109× to 2.5×. All 78 cases now solve in 0.35 s together, against 496 s.
+      - **Agreement with MATPOWER:** every case within 2.5e-12 of each quantity's largest value,
+        against 1.1e-10 before.
 - [ ] `solve_in_place` and `solve_many` (several right-hand sides).
-- [ ] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward
+- [x] Test the hypothesis from the Phase 1.5 survey that fill-in drives the DC solve's backward
       error: unordered, ours was up to 30 times MATPOWER's on high-fill cases, and correlated
       with fill where MATPOWER's, from an ordered solve, didn't. Rerun `scripts/benchmark-dc.sh`
       with the orderings, and compare `backward_error` with `factor_entries` and
@@ -345,8 +379,12 @@ Merged in PR #2.
       **Cholesky verdict (2026-11-01): supported.** Ordered by AMD, the 59 Cholesky cases' median
       ratio of our backward error to MATPOWER's is 1.00, the largest backward error is 0.78 ε
       (10.7 ε unordered), and its rank correlation with fill is −0.03 (0.45 unordered).
-      case8387pegase, which RCM left at 2.35 ε, falls to 0.71 ε, below MATPOWER's 0.94 ε. The
-      LU cases remain, for the ordered LU.
+      case8387pegase, which RCM left at 2.35 ε, falls to 0.71 ε, below MATPOWER's 0.94 ε.
+      **LU verdict (2026-11-01): supported.** The same new LU, unordered, gives the old excess
+      back (median ratio 2.57, largest 28); ordered by AMD, the median ratio is 1.23, the
+      largest 2.7, and the largest backward error 0.49 ε (6.5 ε before). So the excess followed
+      the fill, not the algorithm, and threshold pivoting at 0.1 cost no stability here. Every
+      case's backward error is now below 0.8 ε.
 - [ ] Deferred: COLAMD, for LU of a matrix whose pattern is far from symmetric. Nothing in power
       flow needs it yet.
 

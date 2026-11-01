@@ -3,8 +3,8 @@
 //! so that it can limit time and memory and record peak memory.
 //!
 //! Usage: `dc_survey [--ordering natural|rcm|amd] <case.m> [<reference-dir>]`, or
-//! `dc_survey --header`. The ordering is the Cholesky factorization's (default `amd`, as
-//! `DcModel::solve` uses); the LU fallback isn't ordered yet.
+//! `dc_survey --header`. The ordering is the factorization's, Cholesky or LU (default `amd`, as
+//! `DcModel::solve` uses).
 //!
 //! Prints one CSV line, with the columns in `HEADER`. Each step (parse, model, solve) is timed
 //! by its median over repeated runs, for up to `BUDGET` or `MAX_RUNS` runs, so small cases get
@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use powerflow::case::Case;
 use powerflow::dc::{DcModel, DcSolver};
-use sparse_mat::compressed_matrix::Ordering;
+use sparse_mat::compressed_matrix::{LuOptions, Ordering};
 
 /// `ordering` is the Cholesky factorization's. `negative_branches` counts the in-service branches with a negative series susceptance,
 /// which can make B′ indefinite. `bprime_dimension` and `bprime_entries` give B′'s size and
@@ -142,8 +142,9 @@ fn survey(path: &Path, references: Option<&Path>, ordering: Ordering) -> Result<
 
 /// B′'s dimension and stored entries, and the stored entries of the factor `solver` made of it.
 /// B′ is built as [`DcModel::solve`] builds it: Bbus over the PV and PQ buses, in that order.
-/// A Cholesky factor, ordered by `ordering`, stores its whole symbolic pattern, which its
-/// analysis predicts exactly.
+/// Both factorizations are ordered by `ordering`. A Cholesky factor stores its whole symbolic
+/// pattern, which its analysis predicts exactly; an LU factor's depends on its pivots, so the
+/// LU is factored again to count it.
 fn entries(
     model: &DcModel,
     solver: DcSolver,
@@ -165,7 +166,11 @@ fn entries(
             .map_err(|err| err.to_string())?
             .predicted_entries(),
         DcSolver::Lu => {
-            let lu = bprime.lu().map_err(|err| err.to_string())?;
+            let columns = bprime.to_csc();
+            let lu = columns
+                .analyze_lu(ordering)
+                .and_then(|symbolic| symbolic.factor(&columns, LuOptions::default()))
+                .map_err(|err| err.to_string())?;
             lu.l().num_stored() + lu.u().num_stored() - unknown.len()
         }
         DcSolver::NoSolve => 0,
