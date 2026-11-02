@@ -120,19 +120,26 @@ for k = 1:numel(cases)
         rows = (1:size(result.gen, 1))';
         write_csv(fullfile(out_dir, [name '_' prefix '_gen.csv']), 'row,bus,pg_mw,qg_mvar', ...
             '%d,%d,%.17g,%.17g', [rows, result.gen(:, [GEN_BUS, PG, QG])]);
-        write_csv(fullfile(out_dir, [name '_' prefix '_summary.csv']), 'iterations,success', ...
-            '%d,%d', [result.iterations, success]);
         if qlim
-            % The generators held at a limit: those in service at a bus runpf made PQ (it was REF
-            %   or PV in the case) whose output is exactly at one of its limits
+            % The generators held at a limit, which runpf doesn't report: those in service at a bus
+            %   runpf made PQ (it was REF or PV in the case) whose output is exactly at one of its
+            %   limits. A generator whose limits are equal is at them whenever its bus is PQ, so
+            %   it counts only if no generator with unequal limits at its bus does: otherwise that
+            %   one made the bus PQ (in case2736sp, case2746wp and case2746wop)
             mpc = loadcase(name);
             [~, bus_row] = ismember(result.gen(:, GEN_BUS), result.bus(:, BUS_I));
             was = mpc.bus(bus_row, BUS_TYPE);
             now = result.bus(bus_row, BUS_TYPE);
-            held = find(result.gen(:, GEN_STATUS) > 0 & (was == REF | was == PV) & now == PQ ...
-                & (result.gen(:, QG) == result.gen(:, QMAX) | result.gen(:, QG) == result.gen(:, QMIN)));
+            at_limit = result.gen(:, GEN_STATUS) > 0 & (was == REF | was == PV) & now == PQ ...
+                & (result.gen(:, QG) == result.gen(:, QMAX) | result.gen(:, QG) == result.gen(:, QMIN));
+            fixed = result.gen(:, QMAX) == result.gen(:, QMIN);
+            varied_buses = result.gen(at_limit & ~fixed, GEN_BUS);
+            held = find(at_limit & ~(fixed & ismember(result.gen(:, GEN_BUS), varied_buses)));
             write_csv(fullfile(out_dir, [name '_' prefix '_limited.csv']), 'row', '%d', held);
         end
+        % The summary last, so that its presence marks a complete run
+        write_csv(fullfile(out_dir, [name '_' prefix '_summary.csv']), 'iterations,success', ...
+            '%d,%d', [result.iterations, success]);
         printf('%s: %s (enforce_q_lims %d) converged in %d iterations\n', name, alg, qlim, ...
             result.iterations);
     end

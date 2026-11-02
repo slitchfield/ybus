@@ -639,7 +639,26 @@ item.
         (case14 5 and 5, case30 3 and 3, case118 6 and 16), hold the same generators, and agree
         within 8.1e-12. case14 holds its reference generator, so the reference moves to a PV bus;
         case30's limits don't bind; case118 holds six generators.
-- [ ] A survey with reactive limits enforced, recorded in `docs/benchmarks/`, and the docs.
+- [x] A survey with reactive limits enforced, recorded in `docs/benchmarks/`, and the docs.
+      - **Survey:** `ac_survey --qlim 1|2` and `YBUS_BENCH_QLIM` in `benchmark-ac.sh`, with
+        columns comparing the held generators. Over all 78 cases, in both modes, we converge on
+        exactly MATPOWER's 74, with its iteration counts (up to 14,225 one at a time on
+        case_SyntheticUSA), the same held generators, and within 1.7e-10 relative; the same four
+        cases fail (`docs/benchmarks/ac-reactive-limits-2026-11-01.md`). The survey without
+        limits is unchanged from its record.
+      - **The reference's held generators,** inferred since `runpf` doesn't report them, wrongly
+        included generators with equal limits beside a held one on three cases. The rule now
+        leaves them out; nothing else changed, and the committed files are identical.
+        `generate_reference.m` also writes each run's summary last, so that it marks a complete
+        run.
+      - **Not done:** comparing MP-Core with legacy one at a time over all cases. A machine
+        restart interrupted it, and it needs many hours on the largest cases.
+      - **Docs:** the README's status and provenance (`runpf`'s limit loop, and the legacy
+        references), and the benchmarks README.
+- [ ] **Follow-up:** reuse the ordering, LU analysis and Jacobian assembly across the rounds of
+      a limit loop. One at a time spends 2,450 s on case_SyntheticUSA over 6,337 rounds of about
+      2.2 iterations, each round repeating that setup, though each moves only one bus from PV to
+      PQ.
 
 ## Phase 5: DC studies
 

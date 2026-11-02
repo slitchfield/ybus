@@ -34,7 +34,7 @@ For each case:
 | `<case>_acpf_summary.csv` | `iterations` (Newton iterations), `success` (1 if `runpf` converged) |
 | `<case>_fdxb_*.csv`, `<case>_fdbx_*.csv` | The same four tables for fast-decoupled XB and BX; `iterations` counts P half-iterations |
 | `<case>_qlim1_*.csv`, `<case>_qlim2_*.csv` | The same four tables for Newton's method with reactive limits enforced, all at once (1) or one at a time (2); `iterations` totals every solve |
-| `<case>_qlim1_limited.csv`, `<case>_qlim2_limited.csv` | `row`: the generators held at a reactive limit (1-based rows, increasing), found as those in service at a bus `runpf` made PQ, at exactly one of their limits, since `runpf` doesn't report them |
+| `<case>_qlim1_limited.csv`, `<case>_qlim2_limited.csv` | `row`: the generators held at a reactive limit (1-based rows, increasing), found as those in service at a bus `runpf` made PQ, at exactly one of their limits, since `runpf` doesn't report them. A generator with equal limits is left out when one with unequal limits at its bus is held: it sits at its limits whenever its bus is PQ |
 
 Values have 17 significant digits, so they parse back to the exact doubles MATPOWER computed.
 In a DC power flow the flow at the to end is `-pf_mw`; in an AC one, `pf_mw + pt_mw` is the
