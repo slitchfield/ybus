@@ -728,8 +728,14 @@ The studies that solve many times against one factorization of B′. Planned wit
 
 ### PR 2: a kept factorization, PTDF and LODF
 
-- [ ] `DcModel::study`: factor B′ once and keep it, with `solve` going through it and the DC
+- [x] `DcModel::study`: factor B′ once and keep it, with `solve` going through it and the DC
       survey unchanged.
+      `DcModel::study` (and `study_with_ordering`) returns a `DcStudy` holding B′'s Cholesky or
+      LU factorization, with `solver()` and `solve(case)`. `DcModel::solve` checks the case,
+      then studies and solves, so its errors come in the same order. The model now keeps its
+      buses' labels, so a singular B′ is named without a case. A rerun of the DC survey
+      matches the AMD and LU records (59 and 19 cases) in every column but time and memory,
+      backward errors included.
 - [ ] PTDF: rows, columns, transfers and the full matrix, with a single or distributed slack,
       against MATPOWER's `makePTDF`.
 - [ ] LODF, with NaN columns for bridges, against MATPOWER's `makeLODF`.

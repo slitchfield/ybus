@@ -19,7 +19,7 @@
 
 use std::f64::consts::PI;
 
-use sparse_mat::compressed_matrix::{CsrMatrix, LuOptions, Ordering};
+use sparse_mat::compressed_matrix::{Cholesky, CsrMatrix, Lu, LuOptions, Ordering};
 use sparse_mat::sparse_error::SparseError;
 
 use crate::case::Case;
@@ -39,6 +39,8 @@ pub struct DcModel {
     pbusinj_pu: Vec<f64>,
     pfinj_pu: Vec<f64>,
     topology: Topology,
+    /// The bus label of each internal bus, for errors that name one
+    bus_labels: Vec<usize>,
 }
 
 impl DcModel {
@@ -97,6 +99,11 @@ impl DcModel {
         let bf = CsrMatrix::from_triplets(nl, nb, bf_triplets)
             .expect("internal branch and bus indices are in range");
 
+        let bus_labels = topology
+            .bus_rows
+            .iter()
+            .map(|&row| case.bus[row].bus_label)
+            .collect();
         Ok(DcModel {
             base_mva: case.base_mva,
             bbus,
@@ -104,6 +111,7 @@ impl DcModel {
             pbusinj_pu,
             pfinj_pu,
             topology,
+            bus_labels,
         })
     }
 
@@ -230,46 +238,162 @@ impl DcModel {
         case: &Case,
         ordering: Ordering,
     ) -> Result<DcSolution, PowerflowError> {
+        // The case is checked before B′ is factored, as it always was
         self.topology.check_case(case)?;
-        let base_mva = self.base_mva;
+        self.study_with_ordering(ordering)?.solve(case)
+    }
+
+    /// Factors B′ once, for any number of solves and studies against it: Bbus over the PV and
+    /// PQ buses (MATPOWER's order), by Cholesky ordered by approximate minimum degree, or, if
+    /// B′ isn't positive definite, by LU with the same ordering and threshold partial pivoting.
+    ///
+    /// Returns `PowerflowError::SingularNetwork` if B′ is singular even though every bus
+    /// reaches a reference, which takes reactances that cancel out.
+    pub fn study(&self) -> Result<DcStudy<'_>, PowerflowError> {
+        self.study_with_ordering(Ordering::Amd)
+    }
+
+    /// [`DcModel::study`] with B′ factored under `ordering` instead of approximate minimum
+    /// degree. Returns the errors of `study`.
+    pub fn study_with_ordering(&self, ordering: Ordering) -> Result<DcStudy<'_>, PowerflowError> {
+        // dcpf's unknowns: θ[pv, pq], in MATPOWER's order
+        let unknown = self.topology.pv_pq();
+        if unknown.is_empty() {
+            return Ok(DcStudy {
+                model: self,
+                unknown,
+                factor: None,
+            });
+        }
+        let b_unknown = self
+            .bbus
+            .select(&unknown, &unknown)
+            .expect("indices in range");
+        let singular = |position: usize| PowerflowError::SingularNetwork {
+            bus_label: self.bus_labels[unknown[position]],
+        };
+        // Bbus is built exactly symmetric, but LU is the fallback for NotSymmetric too, in
+        //   case that ever changes: a slower solve beats a panic
+        let cholesky = b_unknown
+            .analyze_cholesky(ordering)
+            .and_then(|symbolic| symbolic.factor(&b_unknown));
+        let factor = match cholesky {
+            Ok(factor) => Factor::Cholesky(factor),
+            Err(SparseError::NotPositiveDefinite { .. } | SparseError::NotSymmetric) => {
+                // If B′ is singular, LU's error names a column of the matrix it factored that
+                //   has no usable pivot, numbered as in B′ itself (not in the AMD order it
+                //   factored in). B′ was selected from Bbus with `unknown` as its columns, so
+                //   column j of B′ is bus `unknown[j]`, which `singular` turns into that bus's
+                //   label for the error
+                let b_columns = b_unknown.to_csc();
+                let lu = b_columns
+                    .analyze_lu(ordering)
+                    .and_then(|symbolic| symbolic.factor(&b_columns, LuOptions::default()));
+                match lu {
+                    Ok(factor) => Factor::Lu(factor),
+                    Err(SparseError::SingularMatrix { pivot }) => return Err(singular(pivot)),
+                    Err(err) => unreachable!("LU of a square system: {err}"),
+                }
+            }
+            Err(err) => unreachable!("Cholesky of a square system: {err}"),
+        };
+        Ok(DcStudy {
+            model: self,
+            unknown,
+            factor: Some(factor),
+        })
+    }
+}
+
+/// A factorization of B′ (Bbus without the reference rows and columns), from
+/// [`DcModel::study`], kept for any number of solves and studies of the same network.
+#[derive(Debug, Clone)]
+pub struct DcStudy<'a> {
+    model: &'a DcModel,
+    /// The PV then PQ buses (internal indices): B′'s rows and columns, in MATPOWER's order
+    unknown: Vec<usize>,
+    /// `None` when every connected bus is a reference bus, so there is nothing to solve
+    factor: Option<Factor>,
+}
+
+/// B′'s factorization: Cholesky when it's positive definite, LU otherwise
+#[derive(Debug, Clone)]
+enum Factor {
+    Cholesky(Cholesky<f64>),
+    Lu(Lu<f64>),
+}
+
+impl Factor {
+    fn solve(&self, rhs: &[f64]) -> Vec<f64> {
+        match self {
+            Factor::Cholesky(factor) => factor.solve(rhs),
+            Factor::Lu(factor) => factor.solve(rhs),
+        }
+        .expect("one entry per unknown")
+    }
+}
+
+impl DcStudy<'_> {
+    /// The model this study factored.
+    pub fn model(&self) -> &DcModel {
+        self.model
+    }
+
+    /// Which factorization B′ has.
+    pub fn solver(&self) -> DcSolver {
+        match self.factor {
+            Some(Factor::Cholesky(_)) => DcSolver::Cholesky,
+            Some(Factor::Lu(_)) => DcSolver::Lu,
+            None => DcSolver::NoSolve,
+        }
+    }
+
+    /// Solves the DC power flow for `case`'s injections, exactly as [`DcModel::solve`] does
+    /// (which factors B′ and calls this), with the factorization kept.
+    ///
+    /// Returns `PowerflowError::CaseMismatch` if `case`'s tables have different lengths from
+    /// the model's case, and `SingularNetwork` if B′ is so nearly singular that some angle is
+    /// non-finite or above 1e5 radians, which MATPOWER's `dcpf` treats as failure.
+    pub fn solve(&self, case: &Case) -> Result<DcSolution, PowerflowError> {
+        let model = self.model;
+        model.topology.check_case(case)?;
+        let base_mva = model.base_mva;
         let to_radians = PI / 180.0;
 
         // makeSbus's real part, less the phase-shifter injections and shunt conductance
-        let mut pbus: Vec<f64> = self
+        let mut pbus: Vec<f64> = model
             .topology
             .bus_rows
             .iter()
-            .zip(&self.pbusinj_pu)
+            .zip(&model.pbusinj_pu)
             .map(|(&row, pbusinj)| {
                 let bus = &case.bus[row];
                 -(bus.pd_mw + bus.gs_mw) / base_mva - pbusinj
             })
             .collect();
-        for (&row, &bus) in self.topology.gen_rows.iter().zip(&self.topology.gen_buses) {
+        for (&row, &bus) in model
+            .topology
+            .gen_rows
+            .iter()
+            .zip(&model.topology.gen_buses)
+        {
             pbus[bus] += case.generator[row].pg_mw / base_mva;
         }
-        let mut theta: Vec<f64> = self
+        let mut theta: Vec<f64> = model
             .topology
             .bus_rows
             .iter()
             .map(|&row| case.bus[row].va_deg * to_radians)
             .collect();
 
-        // dcpf: θ[pv, pq] = B[pv, pq; pv, pq] \ (P[pv, pq] − B[pv, pq; ref] · θ[ref]), with
-        //   the unknowns in MATPOWER's order
-        let unknown = self.topology.pv_pq();
-        let solver = if unknown.is_empty() {
-            DcSolver::NoSolve
-        } else {
-            let b_unknown = self
+        // dcpf: θ[pv, pq] = B[pv, pq; pv, pq] \ (P[pv, pq] − B[pv, pq; ref] · θ[ref])
+        let unknown = &self.unknown;
+        if let Some(factor) = &self.factor {
+            let b_ref = model
                 .bbus
-                .select(&unknown, &unknown)
+                .select(unknown, &model.topology.ref_buses)
                 .expect("indices in range");
-            let b_ref = self
-                .bbus
-                .select(&unknown, &self.topology.ref_buses)
-                .expect("indices in range");
-            let theta_ref: Vec<f64> = self
+            let theta_ref: Vec<f64> = model
                 .topology
                 .ref_buses
                 .iter()
@@ -283,60 +407,32 @@ impl DcModel {
                 .zip(&coupling)
                 .map(|(&bus, coupling)| pbus[bus] - coupling)
                 .collect();
-            let singular = |position: usize| PowerflowError::SingularNetwork {
-                bus_label: case.bus[self.topology.bus_rows[unknown[position]]].bus_label,
-            };
-            // Bbus is built exactly symmetric, but LU is the fallback for NotSymmetric too, in
-            //   case that ever changes: a slower solve beats a panic
-            let cholesky = b_unknown
-                .analyze_cholesky(ordering)
-                .and_then(|symbolic| symbolic.factor(&b_unknown))
-                .and_then(|factor| factor.solve(&rhs));
-            let (solved, solver) = match cholesky {
-                Ok(solved) => (solved, DcSolver::Cholesky),
-                Err(SparseError::NotPositiveDefinite { .. } | SparseError::NotSymmetric) => {
-                    // If B′ is singular, LU's error names a column of the matrix it factored
-                    //   that has no usable pivot, numbered as in B′ itself (not in the AMD
-                    //   order it factored in). B′ was selected from Bbus with `unknown` as its
-                    //   columns, so column j of B′ is bus `unknown[j]`, which `singular` turns
-                    //   into that bus's label for the error
-                    let b_columns = b_unknown.to_csc();
-                    let lu = b_columns
-                        .analyze_lu(ordering)
-                        .and_then(|symbolic| symbolic.factor(&b_columns, LuOptions::default()))
-                        .and_then(|factor| factor.solve(&rhs));
-                    match lu {
-                        Ok(solved) => (solved, DcSolver::Lu),
-                        Err(SparseError::SingularMatrix { pivot }) => return Err(singular(pivot)),
-                        Err(err) => unreachable!("LU of a square system: {err}"),
-                    }
-                }
-                Err(err) => unreachable!("Cholesky of a square system: {err}"),
-            };
+            let solved = factor.solve(&rhs);
             // A nearly singular B′ can factor with a tiny pivot and give huge or non-finite
             //   angles instead of an error; MATPOWER's dcpf treats |θ| > 1e5 as failure.
             if let Some(position) = solved.iter().position(|t| !t.is_finite() || t.abs() > 1e5) {
-                return Err(singular(position));
+                return Err(PowerflowError::SingularNetwork {
+                    bus_label: case.bus[model.topology.bus_rows[unknown[position]]].bus_label,
+                });
             }
             for (&bus, value) in unknown.iter().zip(solved) {
                 theta[bus] = value;
             }
-            solver
-        };
+        }
 
         let mut va_deg: Vec<f64> = case.bus.iter().map(|bus| bus.va_deg).collect();
-        for (&row, angle) in self.topology.bus_rows.iter().zip(&theta) {
+        for (&row, angle) in model.topology.bus_rows.iter().zip(&theta) {
             va_deg[row] = angle / to_radians;
         }
 
         let mut pf_mw = vec![0.0; case.branch.len()];
-        let bf_theta = self.bf.mul_vec(&theta).expect("one angle per bus");
-        for ((&row, flow), pfinj) in self
+        let bf_theta = model.bf.mul_vec(&theta).expect("one angle per bus");
+        for ((&row, flow), pfinj) in model
             .topology
             .branch_rows
             .iter()
             .zip(bf_theta)
-            .zip(&self.pfinj_pu)
+            .zip(&model.pfinj_pu)
         {
             pf_mw[row] = (flow + pfinj) * base_mva;
         }
@@ -344,25 +440,25 @@ impl DcModel {
         // The slack: the first in-service generator at each reference bus takes up the
         //   difference between the bus's solved injection and its scheduled one
         let mut pg_mw = vec![0.0; case.generator.len()];
-        for &row in &self.topology.gen_rows {
+        for &row in &model.topology.gen_rows {
             pg_mw[row] = case.generator[row].pg_mw;
         }
-        let injection = self.bbus.mul_vec(&theta).expect("one angle per bus");
-        for &bus in &self.topology.ref_buses {
-            let first = self
+        let injection = model.bbus.mul_vec(&theta).expect("one angle per bus");
+        for &bus in &model.topology.ref_buses {
+            let first = model
                 .topology
                 .gen_buses
                 .iter()
                 .position(|&gen_bus| gen_bus == bus)
                 .expect("a reference bus has an in-service generator");
-            pg_mw[self.topology.gen_rows[first]] += (injection[bus] - pbus[bus]) * base_mva;
+            pg_mw[model.topology.gen_rows[first]] += (injection[bus] - pbus[bus]) * base_mva;
         }
 
         Ok(DcSolution {
             va_deg,
             pf_mw,
             pg_mw,
-            solver,
+            solver: self.solver(),
         })
     }
 }
