@@ -17,7 +17,8 @@ up to 71 MW on case_SyntheticUSA, and in convergence on case6470rte).
 These files are **generated**. Don't edit them by hand; regenerate them with
 `scripts/generate-reference.sh`, which fetches MATPOWER (`scripts/fetch-matpower.sh`) and runs
 `scripts/generate_reference.m` under Octave. The output is deterministic, so a regeneration
-with the same versions leaves no diff.
+with the same versions leaves no diff. `YBUS_REFERENCE_RUNS` chooses which results to make
+(for example `islands`), so new ones don't need the slow reactive-limit runs again.
 
 ## Files
 
@@ -34,6 +35,8 @@ For each case:
 | `<case>_acpf_summary.csv` | `iterations` (Newton iterations), `success` (1 if `runpf` converged) |
 | `<case>_fdxb_*.csv`, `<case>_fdbx_*.csv` | The same four tables for fast-decoupled XB and BX; `iterations` counts P half-iterations |
 | `<case>_qlim1_*.csv`, `<case>_qlim2_*.csv` | The same four tables for Newton's method with reactive limits enforced, all at once (1) or one at a time (2); `iterations` totals every solve |
+| `<case>_islands.csv` | `bus`, `island`: each bus's island from `find_islands` (1-based, in MATPOWER's order, largest first), or 0 for a bus with no in-service branch |
+| `<case>_bridges.csv` | `row`: the branches `find_bridges` reports as bridges (1-based rows, increasing). Only where `find_bridges` succeeds: case14 and case30, but not case118, whose parallel branches make it fail |
 | `<case>_qlim1_limited.csv`, `<case>_qlim2_limited.csv` | `row`: the generators held at a reactive limit (1-based rows, increasing), found as those in service at a bus `runpf` made PQ, at exactly one of their limits, since `runpf` doesn't report them. A generator with equal limits is left out when one with unequal limits at its bus is held: it sits at its limits whenever its bus is PQ |
 
 Values have 17 significant digits, so they parse back to the exact doubles MATPOWER computed.

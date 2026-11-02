@@ -703,9 +703,28 @@ The studies that solve many times against one factorization of B′. Planned wit
         SPD and unsymmetric matrices, real and complex; the reach equals a brute-force
         structural pattern; a path graph's last row reaches only itself. On case118's B′, a
         branch transfer's forward solve reaches 11.3 of the 117 rows on average.
-- [ ] Island detection: list every island and bridge, as MATPOWER's `find_islands` and
+- [x] Island detection: list every island and bridge, as MATPOWER's `find_islands` and
       `find_bridges` do, with reference results. `IslandWithoutReference` already replaces
       `SingularMatrix` for an island the solve can't handle, naming one of its buses.
+      - **`powerflow::islands`:** `find_islands` (groups of case bus rows, largest first, ties
+        in order of their first bus, and the buses with no in-service branch) and
+        `find_bridges` (an iterative Tarjan's algorithm, Tarjan 1974, so a 20,000-bus path
+        doesn't overflow the stack). Both use MATPOWER's graph: every bus, of any type, and the
+        in-service branches. The bridge search also takes any edge list, for the DC model's own
+        graph in the LODF.
+      - **A deviation from MATPOWER:** parallel branches are separate edges, so neither of a
+        parallel pair is a bridge. MATPOWER's `find_bridges` keys an edge by its buses, summing
+        parallel branches' rows: on a fixture with a parallel pair it fails (`br(9): out of
+        bound 6`). Over the 78 cases it runs on only 23: 23 fail on summed rows, 21 because it
+        sizes its bus matrix by the number of branches, and 11 at Octave's recursion limit.
+      - **References:** `generate_reference.m` writes `<case>_islands.csv`, and
+        `<case>_bridges.csv` where `find_bridges` runs, committed for case14 and case30 (and
+        case118's islands). `YBUS_REFERENCE_RUNS` chooses the runs, so these didn't need the
+        slow reactive-limit runs again.
+      - **Validation:** islands equal MATPOWER's on all 78 cases, including its order. Bridges
+        equal MATPOWER's on all 23 cases it handles (including case57 and case300, whose
+        parallel branches happen not to matter), and equal a union–find brute force everywhere:
+        every branch on cases up to 3,000 buses, every m-th of about 300 above.
 
 ### PR 2: a kept factorization, PTDF and LODF
 
