@@ -662,16 +662,59 @@ item.
 
 ## Phase 5: DC studies
 
-- [ ] Sparse right-hand-side solves, using the Gilbert–Peierls reach to touch only the needed
-      part of the factor.
-- [ ] PTDF and LODF computation using `solve_many` or sparse right-hand sides.
-- [ ] Rank-k updates (Woodbury) for N-1 contingencies without refactoring. Test against a full
-      refactorization.
-- [ ] Island detection: connected components on the pattern, with an error naming the islands
-      instead of `SingularMatrix`.
-- [ ] Iterative refinement and a condition estimate.
+The studies that solve many times against one factorization of B′. Planned with the maintainer
+(2026-11-02) as four PRs.
+
+- [x] **Decide:** how LODF treats bridges, what PTDF offers, how the slack is chosen, and how
+      widely the N-1 survey checks against refactoring.
+      Decided (2026-11-02):
+      - **LODF bridges:** a bridge (a branch whose outage splits the network) gets a NaN column,
+        as MATPOWER's `makeLODF` with `mask_bridge`. Bridges are found from the graph (Tarjan's
+        algorithm, with parallel branches handled), not from a denominator near zero, which
+        rounding decides. The comparison with MATPOWER covers the other columns.
+      - **PTDF:** selected rows (branches), selected columns (buses or transfers), and the full
+        dense matrix for small cases. MATPOWER's `makePTDF` returns only the dense matrix, which
+        would take about 64 GB on case_SyntheticUSA.
+      - **Slack:** a single slack bus (by default the first reference bus, as `makePTDF`) or
+        weights per bus, as `makePTDF`'s distributed slack.
+      - **N-1 survey:** Woodbury for every in-service branch of every case, each compared with a
+        refactored solve on cases up to about 3,000 buses, and a fixed sample (every m-th branch)
+        on larger ones.
+      - **Four PRs:** sparse right-hand sides with islands and bridges; a kept factorization
+        with PTDF and LODF; Woodbury outages and their survey; refinement, a condition estimate
+        and parallel batches.
+
+### PR 1: sparse right-hand sides, islands and bridges
+
+- [ ] Sparse right-hand-side solves, using the reach to touch only the needed part of the
+      factor: `SparseVector::new`, and `solve_lower_sparse` and `solve_sparse` for `Cholesky`
+      (the elimination tree's paths) and `Lu` (the Gilbert–Peierls reach, shared with the
+      factorization).
+- [ ] Island detection: list every island and bridge, as MATPOWER's `find_islands` and
+      `find_bridges` do, with reference results. `IslandWithoutReference` already replaces
+      `SingularMatrix` for an island the solve can't handle, naming one of its buses.
+
+### PR 2: a kept factorization, PTDF and LODF
+
+- [ ] `DcModel::study`: factor B′ once and keep it, with `solve` going through it and the DC
+      survey unchanged.
+- [ ] PTDF: rows, columns, transfers and the full matrix, with a single or distributed slack,
+      against MATPOWER's `makePTDF`.
+- [ ] LODF, with NaN columns for bridges, against MATPOWER's `makeLODF`.
+
+### PR 3: outages without refactoring
+
+- [ ] Rank-k updates (Woodbury) for N-1 and N-k outages without refactoring. Test against a full
+      refactorization, and against LODF for single outages.
+- [ ] A survey of every case's single outages, recorded in `docs/benchmarks/`.
+
+### PR 4: accuracy and parallel batches
+
+- [ ] Iterative refinement and a condition estimate (with `Lu::solve_transpose`).
 - [ ] Parallel batch solves over a shared factorization (`rayon`). Check that `Lu` is
       `Send + Sync` and that results are deterministic.
+- [ ] The DC survey with B′'s condition and refined backward error, and the N-1 survey in
+      parallel.
 
 ## Housekeeping (carried over from the PR #1 review)
 
