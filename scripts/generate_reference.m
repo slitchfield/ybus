@@ -21,6 +21,10 @@
 %                           flows at the from end and at the to end (MW, MVAr)
 %   <case>_acpf_gen.csv     generator row, bus, and real and reactive power output (MW, MVAr)
 %   <case>_acpf_summary.csv Newton iterations and whether runpf converged
+%   <case>_qlim1_*.csv, <case>_qlim2_*.csv
+%                           the same for Newton's method with reactive limits enforced
+%                           (pf.enforce_q_lims 1 and 2, through the legacy runpf), plus
+%                           <case>_qlimN_limited.csv, the generator rows held at a limit
 %   <case>_fdxb_*.csv, <case>_fdbx_*.csv
 %                           the same for runpf's fast-decoupled XB and BX methods (pf.alg
 %                           FDXB and FDBX, through the legacy fdpf rather than MP-Core), whose
@@ -34,7 +38,10 @@
 function write_csv(path, header, row_format, data)
     fid = fopen(path, 'w');
     fprintf(fid, '%s\n', header);
-    fprintf(fid, [row_format '\n'], data');
+    % With no rows, fprintf would still print the format once, leaving a blank line
+    if ~isempty(data)
+        fprintf(fid, [row_format '\n'], data');
+    end
     fclose(fid);
 end
 
@@ -84,11 +91,16 @@ for k = 1:numel(cases)
     %   uses under Octave too: its fast-decoupled results differ from the legacy fdpf's by up
     %   to 2.3e-7 (case14, FDXB) at the same iteration counts, and powerflow follows fdpf. For
     %   Newton's method the two agree within 6.4e-12, so it keeps runpf's defaults.
-    for run = {{'acpf', 'NR', 0}, {'fdxb', 'FDXB', 1}, {'fdbx', 'FDBX', 1}}
-        [prefix, alg, legacy] = deal(run{1}{1}, run{1}{2}, run{1}{3});
+    %   Runs with reactive limits enforced (pf.enforce_q_lims 1 and 2) also use the legacy core:
+    %   over all of MATPOWER's cases, MP-Core's results differ from it (by up to 71 MW on
+    %   case_SyntheticUSA, and in convergence on case6470rte), though on case14, case30 and
+    %   case118 the two agree within 5.1e-12.
+    for run = {{'acpf', 'NR', 0, 0}, {'fdxb', 'FDXB', 1, 0}, {'fdbx', 'FDBX', 1, 0}, ...
+               {'qlim1', 'NR', 1, 1}, {'qlim2', 'NR', 1, 2}}
+        [prefix, alg, legacy, qlim] = deal(run{1}{1}, run{1}{2}, run{1}{3}, run{1}{4});
         try
             [result, success] = runpf(name, mpoption(mpopt, 'pf.alg', alg, ...
-                'exp.use_legacy_core', legacy));
+                'exp.use_legacy_core', legacy, 'pf.enforce_q_lims', qlim));
         catch err
             fprintf(2, '%s (%s): %s\n', name, alg, err.message);
             success = false;
@@ -108,9 +120,28 @@ for k = 1:numel(cases)
         rows = (1:size(result.gen, 1))';
         write_csv(fullfile(out_dir, [name '_' prefix '_gen.csv']), 'row,bus,pg_mw,qg_mvar', ...
             '%d,%d,%.17g,%.17g', [rows, result.gen(:, [GEN_BUS, PG, QG])]);
+        if qlim
+            % The generators held at a limit, which runpf doesn't report: those in service at a bus
+            %   runpf made PQ (it was REF or PV in the case) whose output is exactly at one of its
+            %   limits. A generator whose limits are equal is at them whenever its bus is PQ, so
+            %   it counts only if no generator with unequal limits at its bus does: otherwise that
+            %   one made the bus PQ (in case2736sp, case2746wp and case2746wop)
+            mpc = loadcase(name);
+            [~, bus_row] = ismember(result.gen(:, GEN_BUS), result.bus(:, BUS_I));
+            was = mpc.bus(bus_row, BUS_TYPE);
+            now = result.bus(bus_row, BUS_TYPE);
+            at_limit = result.gen(:, GEN_STATUS) > 0 & (was == REF | was == PV) & now == PQ ...
+                & (result.gen(:, QG) == result.gen(:, QMAX) | result.gen(:, QG) == result.gen(:, QMIN));
+            fixed = result.gen(:, QMAX) == result.gen(:, QMIN);
+            varied_buses = result.gen(at_limit & ~fixed, GEN_BUS);
+            held = find(at_limit & ~(fixed & ismember(result.gen(:, GEN_BUS), varied_buses)));
+            write_csv(fullfile(out_dir, [name '_' prefix '_limited.csv']), 'row', '%d', held);
+        end
+        % The summary last, so that its presence marks a complete run
         write_csv(fullfile(out_dir, [name '_' prefix '_summary.csv']), 'iterations,success', ...
             '%d,%d', [result.iterations, success]);
-        printf('%s: %s converged in %d iterations\n', name, alg, result.iterations);
+        printf('%s: %s (enforce_q_lims %d) converged in %d iterations\n', name, alg, qlim, ...
+            result.iterations);
     end
 end
 

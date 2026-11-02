@@ -110,6 +110,26 @@ pub enum PowerflowError {
         /// The given case's table lengths.
         found: (usize, usize, usize),
     },
+    /// Enforcing reactive power limits found every remaining generator at a REF or PV bus past
+    /// its limit, all the same way, so no bus is left to hold a voltage (MATPOWER's "INFEASIBLE
+    /// PROBLEM").
+    ReactiveLimitsInfeasible {
+        /// How many generators were violating.
+        generators: usize,
+    },
+    /// Reactive power limits can't be enforced because an in-service generator's lower limit is
+    /// above its upper one: holding it at either would violate the other, and MATPOWER's loop
+    /// would never end.
+    InvertedReactiveLimits {
+        /// The 1-based row in the generator table.
+        row: usize,
+    },
+    /// Enforcing reactive power limits would make a reference bus PQ in a system with several
+    /// reference buses, which MATPOWER doesn't support either.
+    ReferenceAtReactiveLimit {
+        /// The reference bus whose generator reached its limit.
+        bus_label: usize,
+    },
     /// The AC power flow didn't meet its tolerance within its iteration limit.
     NoConvergence {
         /// How many Newton iterations were taken.
@@ -183,6 +203,20 @@ impl fmt::Display for PowerflowError {
                 f,
                 "the model was built for a case with (buses, generators, branches) = \
                  {expected:?}, not {found:?}"
+            ),
+            PowerflowError::ReactiveLimitsInfeasible { generators } => write!(
+                f,
+                "all {generators} remaining generators at REF and PV buses exceed their reactive \
+                 power limits"
+            ),
+            PowerflowError::InvertedReactiveLimits { row } => write!(
+                f,
+                "generator row {row} has its lower reactive power limit above its upper one"
+            ),
+            PowerflowError::ReferenceAtReactiveLimit { bus_label } => write!(
+                f,
+                "reference bus {bus_label} reached a reactive power limit in a system with several \
+                 reference buses"
             ),
             PowerflowError::NoConvergence {
                 iterations,

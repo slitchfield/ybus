@@ -286,3 +286,12 @@ pub fn ac_deviation(
         qt_mvar: largest_difference(&solution.qt_mvar, flow(3)),
     })
 }
+
+/// The generator rows (1-based, increasing) a run with reactive limits enforced held at a limit,
+/// from `<case>_<run>_limited.csv` in `dir` (`run` is `qlim1` or `qlim2`).
+pub fn read_limited(dir: &Path, case: &str, run: &str) -> Result<Vec<usize>, String> {
+    // The header is just "row", so `table` keeps it as data rather than as a row count. Written
+    //   with %d, so the rows convert exactly
+    let rows = table(dir, case, run, "limited", "row")?;
+    Ok(rows.iter().map(|fields| fields[0] as usize).collect())
+}

@@ -2,8 +2,11 @@
 //! `scripts/benchmark-ac.sh` runs. The script runs this once per case and method, each in its own
 //! process, so that it can limit time and memory and record peak memory.
 //!
-//! Usage: `ac_survey [--method nr|fdxb|fdbx] <case.m> [<reference-dir>]`, or
+//! Usage: `ac_survey [--method nr|fdxb|fdbx] [--qlim 1|2] <case.m> [<reference-dir>]`, or
 //! `ac_survey --header`. The method defaults to `nr` (Newton's method, as `ac_power_flow` uses).
+//! `--qlim` enforces generator reactive power limits, all at once (1) or one at a time (2), as
+//! `runpf`'s `pf.enforce_q_lims` does; MATPOWER's results with limits are for Newton's method
+//! only, so it needs `nr`.
 //!
 //! Prints one CSV line, with the columns in `HEADER`. Parsing, building the model and solving are
 //! each timed by their median over repeated runs, for up to `BUDGET` or `MAX_RUNS` runs. A solve
@@ -22,7 +25,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use powerflow::ac::{AcMethod, AcModel, AcOptions};
+use powerflow::ac::{AcMethod, AcModel, AcOptions, ReactiveLimits};
 use powerflow::case::Case;
 use powerflow::powerflow_error::PowerflowError;
 
@@ -31,11 +34,14 @@ use powerflow::powerflow_error::PowerflowError;
 /// those of the converged solution, or of the last iteration when it didn't converge.
 /// `matpower_iterations` is `runpf`'s count. The deviations are the largest absolute differences
 /// from MATPOWER's results: voltage magnitudes (p.u.), angles (degrees), branch flows (the
-/// largest of P and Q at either end, MW or MVAr) and generator outputs (P or Q).
+/// largest of P and Q at either end, MW or MVAr) and generator outputs (P or Q). With limits
+/// enforced, `held` counts the generators held at a limit, `matpower_held` counts MATPOWER's, and
+/// `held_same` says whether they are the same generators; all three are empty without limits.
 const HEADER: &str = "case,buses,branches,generators,connected_buses,in_service_branches,\
                       method,parse_ms,model_ms,solve_ms,solve_runs,outcome,iterations,\
                       mismatch_pu,full_factorizations,matpower_iterations,\
-                      vm_deviation_pu,va_deviation_deg,flow_deviation,gen_deviation";
+                      vm_deviation_pu,va_deviation_deg,flow_deviation,gen_deviation,\
+                      held,matpower_held,held_same";
 
 /// How long to keep repeating a step for its median time
 const BUDGET: Duration = Duration::from_secs(1);
@@ -49,21 +55,27 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let mut method = AcMethod::Newton;
-    if args.first().is_some_and(|flag| flag == "--method") {
-        method = match args.get(1).map(String::as_str) {
-            Some("nr") => AcMethod::Newton,
-            Some("fdxb") => AcMethod::FastDecoupledXb,
-            Some("fdbx") => AcMethod::FastDecoupledBx,
+    let mut limits = ReactiveLimits::Ignore;
+    while let Some(flag) = args.first().filter(|flag| flag.starts_with("--")) {
+        match (flag.as_str(), args.get(1).map(String::as_str)) {
+            ("--method", Some("nr")) => method = AcMethod::Newton,
+            ("--method", Some("fdxb")) => method = AcMethod::FastDecoupledXb,
+            ("--method", Some("fdbx")) => method = AcMethod::FastDecoupledBx,
+            ("--qlim", Some("1")) => limits = ReactiveLimits::AllAtOnce,
+            ("--qlim", Some("2")) => limits = ReactiveLimits::OneAtATime,
             _ => return usage(),
-        };
+        }
         args.drain(..2);
+    }
+    if limits != ReactiveLimits::Ignore && method != AcMethod::Newton {
+        return usage();
     }
     let (case, references) = match args.as_slice() {
         [case] => (case, None),
         [case, references] => (case, Some(Path::new(references))),
         _ => return usage(),
     };
-    match survey(Path::new(case), references, method) {
+    match survey(Path::new(case), references, method, limits) {
         Ok(line) => {
             println!("{line}");
             ExitCode::SUCCESS
@@ -76,23 +88,34 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: ac_survey [--method nr|fdxb|fdbx] <case.m> [<reference-dir>] | --header");
+    eprintln!(
+        "usage: ac_survey [--method nr|fdxb|fdbx] [--qlim 1|2] <case.m> [<reference-dir>] | \
+         --header"
+    );
     ExitCode::from(2)
 }
 
-/// The reference files' name for `method`'s results, and the survey's name for it.
-fn names(method: AcMethod) -> (&'static str, &'static str) {
-    match method {
-        AcMethod::Newton => ("acpf", "nr"),
-        AcMethod::FastDecoupledXb => ("fdxb", "fdxb"),
-        AcMethod::FastDecoupledBx => ("fdbx", "fdbx"),
+/// The reference files' name for the results of `method` with `limits`, and the survey's name
+/// for it.
+fn names(method: AcMethod, limits: ReactiveLimits) -> (&'static str, &'static str) {
+    match (method, limits) {
+        (AcMethod::Newton, ReactiveLimits::Ignore) => ("acpf", "nr"),
+        (AcMethod::Newton, ReactiveLimits::AllAtOnce) => ("qlim1", "nr-qlim1"),
+        (AcMethod::Newton, ReactiveLimits::OneAtATime) => ("qlim2", "nr-qlim2"),
+        (AcMethod::FastDecoupledXb, _) => ("fdxb", "fdxb"),
+        (AcMethod::FastDecoupledBx, _) => ("fdbx", "fdbx"),
         _ => ("", "other"),
     }
 }
 
 /// The CSV line for the case at `path`. Errors only if the case can't be read or modelled;
 /// a solve that fails is reported in the line.
-fn survey(path: &Path, references: Option<&Path>, method: AcMethod) -> Result<String, String> {
+fn survey(
+    path: &Path,
+    references: Option<&Path>,
+    method: AcMethod,
+    limits: ReactiveLimits,
+) -> Result<String, String> {
     let name = path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -101,7 +124,8 @@ fn survey(path: &Path, references: Option<&Path>, method: AcMethod) -> Result<St
     let case = case.map_err(|err| err.to_string())?;
     let (model_time, _, model) = time(|| AcModel::new(&case));
     let model = model.map_err(|err| err.to_string())?;
-    let options = AcOptions::for_method(method);
+    let mut options = AcOptions::for_method(method);
+    options.reactive_limits = limits;
     let (solve, solve_runs, solution) = time(|| model.solve(&case, options));
 
     let (outcome, iterations, mismatch, factorizations) = match &solution {
@@ -128,15 +152,40 @@ fn survey(path: &Path, references: Option<&Path>, method: AcMethod) -> Result<St
         ),
     };
 
-    let (run, method_name) = names(method);
+    let (run, method_name) = names(method, limits);
+    let limited = limits != ReactiveLimits::Ignore;
+    // Ours as 1-based case rows, increasing, as the reference lists them
+    let held: Option<Vec<usize>> = match &solution {
+        Ok(solution) if limited => {
+            let mut rows: Vec<usize> = solution.limited_generators.iter().map(|r| r + 1).collect();
+            rows.sort_unstable();
+            Some(rows)
+        }
+        _ => None,
+    };
+    let held_count = held
+        .as_ref()
+        .map_or(String::new(), |rows| rows.len().to_string());
     let comparison = match references {
         Some(dir) if dir.join(format!("{name}_{run}_summary.csv")).is_file() => {
             let reference = reference::read_ac_run(dir, name, run)?;
+            let theirs = if limited && dir.join(format!("{name}_{run}_limited.csv")).is_file() {
+                Some(reference::read_limited(dir, name, run)?)
+            } else {
+                None
+            };
+            let held_columns = match (&held, &theirs) {
+                (Some(ours), Some(theirs)) => {
+                    format!("{held_count},{},{}", theirs.len(), ours == theirs)
+                }
+                (_, Some(theirs)) => format!("{held_count},{},", theirs.len()),
+                _ => format!("{held_count},,"),
+            };
             match &solution {
                 Ok(solution) => {
                     let d = reference::ac_deviation(&case, solution, &reference)?;
                     format!(
-                        "{},{:e},{:e},{:e},{:e}",
+                        "{},{:e},{:e},{:e},{:e},{held_columns}",
                         reference.iterations,
                         d.vm_pu,
                         d.va_deg,
@@ -144,10 +193,10 @@ fn survey(path: &Path, references: Option<&Path>, method: AcMethod) -> Result<St
                         d.pg_mw.max(d.qg_mvar)
                     )
                 }
-                Err(_) => format!("{},,,,", reference.iterations),
+                Err(_) => format!("{},,,,,{held_columns}", reference.iterations),
             }
         }
-        _ => ",,,,".to_string(),
+        _ => format!(",,,,,{held_count},,"),
     };
     Ok(format!(
         "{name},{},{},{},{},{},{method_name},{:.3},{:.3},{:.3},{solve_runs},{outcome},\

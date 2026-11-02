@@ -603,12 +603,62 @@ item.
       - **Inferred refill cost:** the solve saved 4.7 ms over 6 iterations, so a refill costs
         about 0.18 ms where the old build took 0.96 ms. The `jacobian` benchmark measures a
         layout and one fill (0.86 ms), since `AcModel::jacobian` makes a fresh layout each call.
-- [ ] Let the AC solve take changing bus roles (REF, PV, PQ), with a `bustypes` shared with the
+- [x] Let the AC solve take changing bus roles (REF, PV, PQ), with a `bustypes` shared with the
       topology, and no change in results.
-- [ ] Enforce generator reactive power limits as `runpf`'s `pf.enforce_q_lims` does (both
+      `topology.rs` has a `bustypes` function returning `Roles` (the ref, pv and pq lists) from a
+      case's bus types, which `Topology::new` uses. `AcModel::solve` is split into `start`,
+      `solve_round` (one solve under given roles and a case's injections) and `results` (which
+      takes the roles for its slack). The DC survey (78 cases) and the AC survey (234
+      case-and-method rows) match their records in every column but time and memory.
+- [x] Enforce generator reactive power limits as `runpf`'s `pf.enforce_q_lims` does (both
       modes), with fixture tests.
-- [ ] MATPOWER's reactive-limit reference results, and the tests against them.
-- [ ] A survey with reactive limits enforced, recorded in `docs/benchmarks/`, and the docs.
+      `AcOptions::reactive_limits` (`ReactiveLimits::Ignore` by default, `AllAtOnce`,
+      `OneAtATime`), following legacy `runpf`'s loop: solve, `pfsoln`, find in-service generators
+      past `Qmax + 5e-6` or `Qmin − 5e-6`, hold them (or the largest) at the limit and make their
+      buses PQ, rerun `bustypes`, and solve again from the last voltages, with `pfsoln`'s outputs
+      carried into the next round's injections. Violations are listed in MATPOWER's internal
+      generator order (by bus, then row). `AcSolution::limited_generators` lists the held
+      generators, and `iterations` totals every round. New errors: `ReactiveLimitsInfeasible`,
+      `ReferenceAtReactiveLimit` (MATPOWER's multiple-slack error) and `InvertedReactiveLimits`.
+      Changed from MATPOWER: a generator with `Qmin > Qmax` is refused, since holding it at
+      either limit violates the other and `runpf`'s loop alternates forever (found when a test
+      fixture did exactly that). With proper limits the loop always ends: a bus made PQ stays
+      PQ, and a generator held at a limit can't violate it again. Fixture tests: upper and
+      lower limits, two generators sharing a bus, a reference handing over to a PV bus (with
+      the original angle restored), several references, infeasibility, inverted limits, and
+      one at a time against all at once, each checked for power balance.
+- [x] MATPOWER's reactive-limit reference results, and the tests against them.
+      - **Which code:** MP-Core and legacy agree within 5.1e-12 on case14, case30 and case118,
+        but over all cases they differ (up to 71 MW on case_SyntheticUSA; case6470rte converges
+        only in legacy; case_ACTIVSg10k takes 17 iterations in MP-Core against 16). So, by the
+        agreed rule, the `qlim1`/`qlim2` references come from the legacy `runpf`.
+      - **Files:** `generate_reference.m` writes them, plus `_limited.csv`, the generators held at
+        a limit (in service at a bus made PQ, at exactly one limit), since `runpf` doesn't report
+        them. Its `write_csv` no longer leaves a blank line in a table with no rows.
+      - **Validation:** all six runs (three cases, two modes) take MATPOWER's iteration counts
+        (case14 5 and 5, case30 3 and 3, case118 6 and 16), hold the same generators, and agree
+        within 8.1e-12. case14 holds its reference generator, so the reference moves to a PV bus;
+        case30's limits don't bind; case118 holds six generators.
+- [x] A survey with reactive limits enforced, recorded in `docs/benchmarks/`, and the docs.
+      - **Survey:** `ac_survey --qlim 1|2` and `YBUS_BENCH_QLIM` in `benchmark-ac.sh`, with
+        columns comparing the held generators. Over all 78 cases, in both modes, we converge on
+        exactly MATPOWER's 74, with its iteration counts (up to 14,225 one at a time on
+        case_SyntheticUSA), the same held generators, and within 1.7e-10 relative; the same four
+        cases fail (`docs/benchmarks/ac-reactive-limits-2026-11-01.md`). The survey without
+        limits is unchanged from its record.
+      - **The reference's held generators,** inferred since `runpf` doesn't report them, wrongly
+        included generators with equal limits beside a held one on three cases. The rule now
+        leaves them out; nothing else changed, and the committed files are identical.
+        `generate_reference.m` also writes each run's summary last, so that it marks a complete
+        run.
+      - **Not done:** comparing MP-Core with legacy one at a time over all cases. A machine
+        restart interrupted it, and it needs many hours on the largest cases.
+      - **Docs:** the README's status and provenance (`runpf`'s limit loop, and the legacy
+        references), and the benchmarks README.
+- [ ] **Follow-up:** reuse the ordering, LU analysis and Jacobian assembly across the rounds of
+      a limit loop. One at a time spends 2,450 s on case_SyntheticUSA over 6,337 rounds of about
+      2.2 iterations, each round repeating that setup, though each moves only one bus from PV to
+      PQ.
 
 ## Phase 5: DC studies
 

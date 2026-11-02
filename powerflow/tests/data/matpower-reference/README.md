@@ -2,14 +2,17 @@
 
 Expected results for the `powerflow` power flow tests, computed by MATPOWER: the DC power flow
 by `rundcpf`, and the AC power flow by `runpf` with its default options (Newton's method,
-tolerance 1e-8 on the largest mismatch, reactive power limits not enforced) and with its
-fast-decoupled XB and BX methods. The versions used are in [`VERSIONS`](VERSIONS).
+tolerance 1e-8 on the largest mismatch, reactive power limits not enforced), with its
+fast-decoupled XB and BX methods, and by Newton's method with reactive power limits enforced
+(`pf.enforce_q_lims` 1 and 2). The versions used are in [`VERSIONS`](VERSIONS).
 
 MATPOWER 8.1's `runpf` uses its newer MP-Core implementation by default, under Octave too. The
 Newton results come from it, and agree with the legacy `newtonpf` within 6.4e-12 (case118). The
 fast-decoupled results come from the legacy `fdpf` (`exp.use_legacy_core`), which `powerflow`
 follows: MP-Core's fast-decoupled results differ from it by up to 2.3e-7 (case14, FDXB) at the
-same iteration counts.
+same iteration counts. The reactive-limit results also come from the legacy code: on these
+three cases the two agree within 5.1e-12, but over all of MATPOWER's cases MP-Core's differ (by
+up to 71 MW on case_SyntheticUSA, and in convergence on case6470rte).
 
 These files are **generated**. Don't edit them by hand; regenerate them with
 `scripts/generate-reference.sh`, which fetches MATPOWER (`scripts/fetch-matpower.sh`) and runs
@@ -30,6 +33,8 @@ For each case:
 | `<case>_acpf_gen.csv` | `row`, `bus`, `pg_mw`, `qg_mvar` (real and reactive power output) |
 | `<case>_acpf_summary.csv` | `iterations` (Newton iterations), `success` (1 if `runpf` converged) |
 | `<case>_fdxb_*.csv`, `<case>_fdbx_*.csv` | The same four tables for fast-decoupled XB and BX; `iterations` counts P half-iterations |
+| `<case>_qlim1_*.csv`, `<case>_qlim2_*.csv` | The same four tables for Newton's method with reactive limits enforced, all at once (1) or one at a time (2); `iterations` totals every solve |
+| `<case>_qlim1_limited.csv`, `<case>_qlim2_limited.csv` | `row`: the generators held at a reactive limit (1-based rows, increasing), found as those in service at a bus `runpf` made PQ, at exactly one of their limits, since `runpf` doesn't report them. A generator with equal limits is left out when one with unequal limits at its bus is held: it sits at its limits whenever its bus is PQ |
 
 Values have 17 significant digits, so they parse back to the exact doubles MATPOWER computed.
 In a DC power flow the flow at the to end is `-pf_mw`; in an AC one, `pf_mw + pt_mw` is the
