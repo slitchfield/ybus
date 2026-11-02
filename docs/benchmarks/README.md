@@ -10,6 +10,7 @@ change. Each record names the code, the machine and the method it used.
 | [`dc-power-flow-amd-2026-11-01.md`](dc-power-flow-amd-2026-11-01.md) | The Cholesky cases ordered by approximate minimum degree against RCM (Phase 3): fill, the cost of each stage, and the hypothesis's verdict for Cholesky. |
 | [`dc-power-flow-lu-2026-11-01.md`](dc-power-flow-lu-2026-11-01.md) | The LU cases with the Gilbert–Peierls LU (Phase 3), unordered and AMD-ordered, against the old LU, and the hypothesis's verdict for LU. |
 | [`ac-power-flow-2026-11-01.md`](ac-power-flow-2026-11-01.md) | The AC power flow on every case by Newton's method and fast-decoupled XB and BX (Phase 4.5), against MATPOWER's `runpf`, with criterion benchmarks on case2383wp. |
+| [`ac-reactive-limits-2026-11-01.md`](ac-reactive-limits-2026-11-01.md) | Newton's method on every case with generator reactive limits enforced, all at once and one at a time, against MATPOWER's legacy `runpf`, including the held generators. |
 
 ## Measuring
 
@@ -22,7 +23,8 @@ change. Each record names the code, the machine and the method it used.
 - **The AC power flow:** `cargo bench -p powerflow --bench ac_power_flow` times the AC model,
   the three solution methods and one Newton Jacobian on case2383wp, and
   `scripts/benchmark-ac.sh [<output.csv>]` surveys every case with the `ac_survey` example, the
-  method chosen by `YBUS_BENCH_METHOD` (`nr`, `fdxb` or `fdbx`).
+  method chosen by `YBUS_BENCH_METHOD` (`nr`, `fdxb` or `fdbx`) and reactive limits by
+  `YBUS_BENCH_QLIM` (0, 1 or 2, as `pf.enforce_q_lims`).
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example
   on each MATPOWER case in its own process, under a time and memory limit, and compares the
   results with MATPOWER's own. `YBUS_BENCH_ORDERING` chooses the Cholesky ordering. Its header comment lists what it needs and its settings.

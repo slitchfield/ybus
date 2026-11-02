@@ -5,7 +5,7 @@ Sparse linear algebra and power flow for Rust. A Cargo workspace with two crates
 | Crate | Status | Contents |
 |---|---|---|
 | [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM), sparse Cholesky and LU (complex too, with refactoring), conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
-| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations. |
+| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
 formulation is built around.
@@ -84,7 +84,7 @@ documentation and with reference to its BSD-licensed source code (`ext2int`, `bu
 `makeBdc`, `dcpf` and `runpf`), to match its handling of every case, including isolated
 buses, out-of-service elements and phase shifters. Its AC power flow (`powerflow::ac`) was
 written the same way, with reference to the source of `makeYbus`, `newtonpf`, `makeB`, `fdpf`
-and `pfsoln` as well. Two of its pieces come from MATPOWER's published formulas instead, since
+and `pfsoln` as well, and to `runpf`'s loop for enforcing reactive limits. Two of its pieces come from MATPOWER's published formulas instead, since
 their source wasn't consulted: the bus injections (what `makeSbus` computes, as the User's
 Manual defines them) and the Newton Jacobian's derivatives (what `dSbus_dV` computes, from
 Technical Note 2, cited below). Both power flows are reimplementations in Rust, not
@@ -94,7 +94,9 @@ MATPOWER 8.1 runs its newer MP-Core implementation by default, while `powerflow`
 legacy functions named above. The committed DC and Newton reference results come from
 MP-Core; for Newton's method it agrees with the legacy code within 6.4e-12 on case118. Its
 fast-decoupled results differ from the legacy `fdpf`'s by up to 2.3e-7, so the fast-decoupled
-reference results come from `fdpf` (see
+reference results come from `fdpf`. With reactive limits enforced, MP-Core differs from the
+legacy `runpf` over all cases (by up to 71 MW), so those reference results come from the legacy
+code too (see
 [the reference results' README](powerflow/tests/data/matpower-reference/README.md)). Across all
 MATPOWER cases, MP-Core's Newton post-processing also shares generator reactive output
 differently from the legacy `pfsoln` in 10 cases

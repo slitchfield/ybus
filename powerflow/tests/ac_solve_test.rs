@@ -312,3 +312,221 @@ fn fast_decoupled_options_and_errors() {
         );
     }
 }
+
+// Reactive power limits
+
+use powerflow::ac::ReactiveLimits;
+
+fn with_limits(mode: ReactiveLimits) -> AcOptions {
+    let mut options = AcOptions::default();
+    options.reactive_limits = mode;
+    options
+}
+
+/// `network()` with a second PV bus (bus 4, which had only load), so two generators can reach
+/// their limits.
+fn two_pv_network() -> Case {
+    let mut case = network();
+    case.bus[3].bus_type = BusType::PV;
+    let mut second = case.generator[1].clone();
+    second.bus_label = 4;
+    second.pg_mw = 25.0;
+    second.vg_pu = 1.03;
+    case.generator.push(second);
+    case
+}
+
+/// `network()` with the reference generator's limits wide (±300 MVAr), so only the PV
+/// generator at bus 2 reaches its limits, and that generator's setpoint `vg`.
+fn limits_network(vg: f64) -> Case {
+    let mut case = network();
+    case.generator[0].qmax_mvar = 300.0;
+    case.generator[0].qmin_mvar = -300.0;
+    case.generator[1].vg_pu = vg;
+    case
+}
+
+#[test]
+fn reactive_limits_are_ignored_by_default() {
+    let mut case = limits_network(1.06);
+    let unlimited = ac_power_flow(&case).unwrap();
+    case.generator[1].qmax_mvar = unlimited.qg_mvar[1] - 5.0;
+    let solution = ac_power_flow(&case).unwrap();
+    assert_eq!(
+        solution.qg_mvar[1], unlimited.qg_mvar[1],
+        "not enforced by default"
+    );
+    assert!(solution.limited_generators.is_empty());
+    assert_eq!(AcOptions::default().reactive_limits, ReactiveLimits::Ignore);
+}
+
+#[test]
+fn a_generator_past_its_upper_limit_is_held_there() {
+    let mut case = limits_network(1.06);
+    let unlimited = ac_power_flow(&case).unwrap();
+    // The fixture's PV generator must produce enough that 5 MVAr less is still above Qmin
+    assert!(
+        unlimited.qg_mvar[1] - 5.0 > case.generator[1].qmin_mvar,
+        "{}",
+        unlimited.qg_mvar[1]
+    );
+    case.generator[1].qmax_mvar = unlimited.qg_mvar[1] - 5.0;
+    let model = AcModel::new(&case).unwrap();
+    for mode in [ReactiveLimits::AllAtOnce, ReactiveLimits::OneAtATime] {
+        let solution = model.solve(&case, with_limits(mode)).unwrap();
+        assert_physical(&case, &solution);
+        assert_eq!(solution.limited_generators, [1]);
+        assert_eq!(solution.qg_mvar[1], case.generator[1].qmax_mvar);
+        // The bus no longer holds its setpoint: less reactive power, lower voltage
+        assert!(solution.vm_pu[1] < 1.06 - 1e-6, "{}", solution.vm_pu[1]);
+        assert!(solution.iterations > unlimited.iterations, "two solves");
+    }
+}
+
+#[test]
+fn a_generator_past_its_lower_limit_is_held_there() {
+    let mut case = limits_network(0.97);
+    let unlimited = ac_power_flow(&case).unwrap();
+    assert!(
+        unlimited.qg_mvar[1] + 3.0 < case.generator[1].qmax_mvar,
+        "{}",
+        unlimited.qg_mvar[1]
+    );
+    case.generator[1].qmin_mvar = unlimited.qg_mvar[1] + 3.0;
+    let solution = AcModel::new(&case)
+        .unwrap()
+        .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+        .unwrap();
+    assert_physical(&case, &solution);
+    assert_eq!(solution.limited_generators, [1]);
+    assert_eq!(solution.qg_mvar[1], case.generator[1].qmin_mvar);
+    assert!(solution.vm_pu[1] > 0.97 + 1e-6, "{}", solution.vm_pu[1]);
+}
+
+#[test]
+fn generators_sharing_a_bus_are_held_at_their_limits_together() {
+    // Two generators at bus 2. pfsoln shares the bus's output in proportion to their ranges,
+    //   so lowering one generator's limit lowers its share too; to force violations, the bus's
+    //   output must exceed both upper limits together
+    let mut case = limits_network(1.06);
+    let mut second = case.generator[1].clone();
+    second.pg_mw = 0.0;
+    case.generator.push(second);
+    let unlimited = ac_power_flow(&case).unwrap();
+    let total = unlimited.qg_mvar[1] + unlimited.qg_mvar[2];
+    for row in [1, 2] {
+        case.generator[row].qmax_mvar = total / 2.0 - 3.0;
+        assert!(case.generator[row].qmax_mvar > case.generator[row].qmin_mvar);
+    }
+    let solution = AcModel::new(&case)
+        .unwrap()
+        .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+        .unwrap();
+    assert_physical(&case, &solution);
+    assert_eq!(solution.limited_generators, [1, 2]);
+    for row in [1, 2] {
+        assert_eq!(solution.qg_mvar[row], case.generator[row].qmax_mvar);
+    }
+}
+
+#[test]
+fn inverted_limits_are_refused_rather_than_looping() {
+    // With Qmin above Qmax, MATPOWER's loop alternates between the two limits forever
+    let mut case = limits_network(1.06);
+    case.generator[1].qmin_mvar = 10.0;
+    case.generator[1].qmax_mvar = 5.0;
+    let model = AcModel::new(&case).unwrap();
+    assert_eq!(
+        model
+            .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+            .err(),
+        Some(PowerflowError::InvertedReactiveLimits { row: 2 })
+    );
+    // Ignoring limits, they don't matter
+    assert!(model.solve(&case, AcOptions::default()).is_ok());
+}
+
+#[test]
+fn a_reference_generator_at_its_limit_hands_the_reference_to_a_pv_bus() {
+    let mut case = network();
+    case.bus[0].va_deg = 10.0;
+    let unlimited = ac_power_flow(&case).unwrap();
+    case.generator[0].qmax_mvar = unlimited.qg_mvar[0] - 5.0;
+    let solution = AcModel::new(&case)
+        .unwrap()
+        .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+        .unwrap();
+    assert_physical(&case, &solution);
+    assert_eq!(solution.limited_generators, [0]);
+    // Bus 2 became the reference and took up the slack, while the angles were shifted back so
+    //   the original reference keeps its case angle
+    assert!(
+        (solution.va_deg[0] - 10.0).abs() < 1e-9,
+        "{}",
+        solution.va_deg[0]
+    );
+    assert!(
+        (solution.vm_pu[1] - 1.02).abs() < 1e-12,
+        "bus 2 holds its voltage"
+    );
+    assert_ne!(
+        solution.pg_mw[1], 40.0,
+        "bus 2's generator is the slack now"
+    );
+}
+
+#[test]
+fn several_references_cannot_lose_one_to_a_limit() {
+    let mut case = two_pv_network();
+    case.bus[3].bus_type = BusType::Ref;
+    let unlimited = ac_power_flow(&case).unwrap();
+    case.generator[2].qmax_mvar = unlimited.qg_mvar[2] - 5.0;
+    assert_eq!(
+        AcModel::new(&case)
+            .unwrap()
+            .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+            .err(),
+        Some(PowerflowError::ReferenceAtReactiveLimit { bus_label: 4 })
+    );
+}
+
+#[test]
+fn every_generator_past_the_same_limit_is_infeasible() {
+    let mut case = limits_network(1.06);
+    let unlimited = ac_power_flow(&case).unwrap();
+    assert!(unlimited.qg_mvar[1] - 5.0 > case.generator[1].qmin_mvar);
+    case.generator[0].qmax_mvar = unlimited.qg_mvar[0] - 5.0;
+    case.generator[1].qmax_mvar = unlimited.qg_mvar[1] - 5.0;
+    assert_eq!(
+        AcModel::new(&case)
+            .unwrap()
+            .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+            .err(),
+        Some(PowerflowError::ReactiveLimitsInfeasible { generators: 2 })
+    );
+}
+
+#[test]
+fn one_at_a_time_converts_the_largest_violation_first() {
+    let mut case = two_pv_network();
+    let unlimited = ac_power_flow(&case).unwrap();
+    // Both PV generators exceed their limits, generator 2 (at bus 4) by more
+    case.generator[1].qmax_mvar = unlimited.qg_mvar[1] - 1.0;
+    case.generator[2].qmax_mvar = unlimited.qg_mvar[2] - 6.0;
+    let model = AcModel::new(&case).unwrap();
+    let all = model
+        .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+        .unwrap();
+    let one = model
+        .solve(&case, with_limits(ReactiveLimits::OneAtATime))
+        .unwrap();
+    assert_physical(&case, &all);
+    assert_physical(&case, &one);
+    assert_eq!(one.limited_generators[0], 2, "the largest violation first");
+    assert!(one.iterations >= all.iterations);
+    for solution in [&all, &one] {
+        for &row in &solution.limited_generators {
+            assert_eq!(solution.qg_mvar[row], case.generator[row].qmax_mvar);
+        }
+    }
+}
