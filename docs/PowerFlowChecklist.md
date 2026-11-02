@@ -736,8 +736,31 @@ The studies that solve many times against one factorization of B′. Planned wit
       buses' labels, so a singular B′ is named without a case. A rerun of the DC survey
       matches the AMD and LU records (59 and 19 cases) in every column but time and memory,
       backward errors included.
-- [ ] PTDF: rows, columns, transfers and the full matrix, with a single or distributed slack,
+- [x] PTDF: rows, columns, transfers and the full matrix, with a single or distributed slack,
       against MATPOWER's `makePTDF`.
+      - **API:** `DcStudy::sensitivity(PtdfSlack)` gives a `DcSensitivity` with `ptdf_rows`,
+        `ptdf_columns`, `ptdf_transfers` and `ptdf`, indexed by case branch and bus rows, with
+        zeros for out-of-service branches and disconnected buses. Each row or column is one
+        sparse-RHS solve. `PtdfSlack` is `Reference` (MATPOWER's default: the first connected
+        bus of type REF, with or without a generator), `Bus(row)` or `Weights`.
+      - **The basis:** `makePTDF` removes only the slack's row and column, so other reference
+        buses are ordinary buses. B′'s factorization serves when the slack is the only
+        reference; otherwise Bbus without the slack is factored. A model with several islands
+        can't have one slack, so it's `IslandWithoutReference`.
+      - **New errors:** `RowOutOfRange` and `InvalidSlack`.
+      - **References:** `generate_reference.m` writes `<case>_ptdf.csv` and
+        `<case>_ptdf_distributed.csv` (weights in proportion to load), labelled with bus numbers
+        and branch rows: in full up to 300 buses, otherwise 50 sampled columns. Committed for
+        case14 and case30 only: case118's would be 1.6 MB, about ten times the packed
+        repository. For a sample, a distributed-slack column is computed as `makePTDF`'s
+        transfer from its bus to the weights, since its vector slack with `bus_idx` adds a
+        column per loaded bus, tens of GB on the largest cases (it exhausted the machine's
+        memory once). Cases with several islands (case16ci, case70da, case_SyntheticUSA) get
+        none: `makePTDF`'s matrix is singular there.
+      - **Validation:** case14 and case30 within 2.9e-15 at both slacks; all 75 local cases
+        within 2.5e-11 (case141). On fixtures, each column equals the DC power flow's change in
+        flows (a phase shifter, a tap, parallel branches, the LU path, another slack bus, two
+        references), and rows, columns, transfers and the full matrix agree within 1e-13.
 - [ ] LODF, with NaN columns for bridges, against MATPOWER's `makeLODF`.
 
 ### PR 3: outages without refactoring

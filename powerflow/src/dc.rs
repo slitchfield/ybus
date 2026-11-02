@@ -21,10 +21,14 @@ use std::f64::consts::PI;
 
 use sparse_mat::compressed_matrix::{Cholesky, CsrMatrix, Lu, LuOptions, Ordering};
 use sparse_mat::sparse_error::SparseError;
+use sparse_mat::sparse_matrix::SparseVector;
 
-use crate::case::Case;
+use crate::case::{BusType, Case};
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Topology;
+
+mod sensitivity;
+pub use sensitivity::{DcSensitivity, PtdfSlack};
 
 /// The DC model of a case: the B matrices and phase-shifter injections in per unit, over the
 /// connected buses and in-service branches, with each bus's role in the solve.
@@ -41,6 +45,9 @@ pub struct DcModel {
     topology: Topology,
     /// The bus label of each internal bus, for errors that name one
     bus_labels: Vec<usize>,
+    /// MATPOWER's default PTDF slack (internal): the first connected bus of type REF, or if
+    /// there is none, the first reference bus `bustypes` chose
+    matpower_slack: usize,
 }
 
 impl DcModel {
@@ -104,6 +111,11 @@ impl DcModel {
             .iter()
             .map(|&row| case.bus[row].bus_label)
             .collect();
+        let matpower_slack = topology
+            .bus_rows
+            .iter()
+            .position(|&row| case.bus[row].bus_type == BusType::Ref)
+            .unwrap_or(topology.ref_buses[0]);
         Ok(DcModel {
             base_mva: case.base_mva,
             bbus,
@@ -112,6 +124,7 @@ impl DcModel {
             pfinj_pu,
             topology,
             bus_labels,
+            matpower_slack,
         })
     }
 
@@ -265,9 +278,21 @@ impl DcModel {
                 factor: None,
             });
         }
+        let factor = self.factor_over(&unknown, ordering)?;
+        Ok(DcStudy {
+            model: self,
+            unknown,
+            factor: Some(factor),
+        })
+    }
+
+    /// Factors Bbus over the internal buses `unknown` (rows and columns in that order), by
+    /// Cholesky under `ordering`, or by LU if that isn't positive definite. Returns
+    /// `PowerflowError::SingularNetwork`, naming a bus, if it's singular.
+    fn factor_over(&self, unknown: &[usize], ordering: Ordering) -> Result<Factor, PowerflowError> {
         let b_unknown = self
             .bbus
-            .select(&unknown, &unknown)
+            .select(unknown, unknown)
             .expect("indices in range");
         let singular = |position: usize| PowerflowError::SingularNetwork {
             bus_label: self.bus_labels[unknown[position]],
@@ -297,11 +322,7 @@ impl DcModel {
             }
             Err(err) => unreachable!("Cholesky of a square system: {err}"),
         };
-        Ok(DcStudy {
-            model: self,
-            unknown,
-            factor: Some(factor),
-        })
+        Ok(factor)
     }
 }
 
@@ -328,6 +349,14 @@ impl Factor {
         match self {
             Factor::Cholesky(factor) => factor.solve(rhs),
             Factor::Lu(factor) => factor.solve(rhs),
+        }
+        .expect("one entry per unknown")
+    }
+
+    fn solve_sparse(&self, rhs: &SparseVector<f64>) -> Vec<f64> {
+        match self {
+            Factor::Cholesky(factor) => factor.solve_sparse(rhs),
+            Factor::Lu(factor) => factor.solve_sparse(rhs),
         }
         .expect("one entry per unknown")
     }
