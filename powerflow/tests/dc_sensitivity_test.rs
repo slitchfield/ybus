@@ -399,3 +399,159 @@ fn ptdf_matches_makeptdf_on_every_local_case() {
         worst.1
     );
 }
+
+/// Compares our LODF columns with MATPOWER's labelled columns (rows and columns labelled by
+/// 1-based branch row), returning the largest difference over the columns of non-bridges and
+/// the number of bridge columns. A bridge's column is NaN here; makeLODF divides by 1 − h,
+/// which is zero in exact arithmetic, so its column there is rounding noise (on case30's
+/// branch 13, 1 − h = −4.4e-16 and the column holds values like −0.125). So bridges are
+/// checked against our own arithmetic instead: each must have |1 − h| at rounding level, and
+/// every other branch an |1 − h| far from it.
+fn lodf_deviation(case: &Case, reference: &Labelled, name: &str) -> (f64, usize) {
+    let model = DcModel::new(case).unwrap();
+    let study = model.study().unwrap();
+    let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
+    let outaged: Vec<usize> = reference.columns.iter().map(|row| row - 1).collect();
+    let columns = sensitivity.lodf_columns(&outaged).unwrap();
+    let (mut worst, mut bridges): (f64, usize) = (0.0, 0);
+    for (j, (column, &k)) in columns.iter().zip(&outaged).enumerate() {
+        let ends = (&case.branch[k].from_label, &case.branch[k].to_label);
+        let transfer = (bus_row(case, *ends.0), bus_row(case, *ends.1));
+        let own = sensitivity.ptdf_transfers(&[transfer]).unwrap()[0][k];
+        let remaining = (1.0 - own).abs();
+        if column.iter().all(|value| value.is_nan()) {
+            assert!(
+                remaining <= 1e-9,
+                "{name}: bridge row {k} has 1 − h = {remaining:e}"
+            );
+            bridges += 1;
+            continue;
+        }
+        assert!(
+            remaining > 1e-6,
+            "{name}: row {k} isn't a bridge but 1 − h = {remaining:e}"
+        );
+        for (row, values) in &reference.rows {
+            worst = worst.max((column[row - 1] - values[j]).abs());
+        }
+    }
+    (worst, bridges)
+}
+
+#[test]
+fn lodf_matches_makelodf_on_the_committed_cases() {
+    let dir = common::reference::committed_dir();
+    for (name, expected_bridges) in [("case14", 1), ("case30", 3)] {
+        let Some(path) = common::matpower_case(name) else {
+            return;
+        };
+        let case = Case::from_path(&path).unwrap();
+        let reference = read_matrix(&dir.join(format!("{name}_lodf.csv"))).unwrap();
+        let (deviation, bridges) = lodf_deviation(&case, &reference, name);
+        eprintln!("{name}: LODF within {deviation:e}, {bridges} bridge columns masked");
+        assert!(deviation <= 1e-12, "{name}");
+        // The bridges find_bridges reports (islands_test checks them against MATPOWER's)
+        assert_eq!(bridges, expected_bridges, "{name}");
+    }
+}
+
+#[test]
+fn an_lodf_column_predicts_the_flows_after_an_outage() {
+    let (buses, gens, branches) = ring();
+    let case = fixture(&buses, &gens, &branches);
+    let base = dc_power_flow(&case).unwrap();
+    let model = DcModel::new(&case).unwrap();
+    let study = model.study().unwrap();
+    let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
+    let full = sensitivity.lodf();
+    for k in 0..6 {
+        let column = &sensitivity.lodf_columns(&[k]).unwrap()[0];
+        let mut outaged = case.clone();
+        outaged.branch[k].status = false;
+        let after = dc_power_flow(&outaged).unwrap();
+        for l in 0..case.branch.len() {
+            let predicted = base.pf_mw[l] + column[l] * base.pf_mw[k];
+            assert!(
+                (after.pf_mw[l] - predicted).abs() <= 1e-9,
+                "outage {k}, branch {l}: {} vs {predicted}",
+                after.pf_mw[l]
+            );
+            assert_eq!(full[l][k].to_bits(), column[l].to_bits());
+        }
+        assert_eq!(column[k], -1.0);
+    }
+    // The out-of-service branch: its column is zeros, and it can't be taken out again
+    assert!(full.iter().all(|row| row[6] == 0.0));
+    assert_eq!(
+        sensitivity.lodf_columns(&[6]).unwrap_err(),
+        PowerflowError::BranchOutOfService { row: 6 }
+    );
+    // The same under another slack: the LODF doesn't depend on it
+    let elsewhere = study.sensitivity(PtdfSlack::Bus(3)).unwrap();
+    for (row, other) in full.iter().zip(elsewhere.lodf()) {
+        for (a, b) in row.iter().zip(other) {
+            assert!((a - b).abs() <= 1e-12);
+        }
+    }
+}
+
+#[test]
+fn a_bridge_has_a_nan_column_but_a_parallel_pair_doesnt() {
+    // The ring with a pendant bus 6 off bus 4: its branch is a bridge. The parallel 1–2 pair
+    //   isn't: taking either out leaves the other
+    let (mut buses, gens, mut branches) = ring();
+    buses.push(B(6, 1, 5.0, 0.0, 0.0));
+    branches.push(L(4, 6, 0.1, 0.0, 0.0, true));
+    let case = fixture(&buses, &gens, &branches);
+    let model = DcModel::new(&case).unwrap();
+    let study = model.study().unwrap();
+    let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
+    let columns = sensitivity.lodf_columns(&[7, 0, 1]).unwrap();
+    assert!(columns[0].iter().all(|value| value.is_nan()));
+    assert!(columns[1]
+        .iter()
+        .chain(&columns[2])
+        .all(|value| value.is_finite()));
+    // Taking out one of the pair moves part of its flow onto the other, and the rest round
+    //   the ring
+    assert!(columns[1][1] > 0.0 && columns[1][1] < 1.0);
+}
+
+#[test]
+fn lodf_matches_makelodf_on_every_local_case() {
+    let Some(dir) = local_reference_dir() else {
+        eprintln!("skipping: no local reference results (scripts/generate-reference.sh)");
+        return;
+    };
+    let normalized = common::normalized_case("case14").unwrap();
+    let normalized = normalized.parent().unwrap();
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            name.strip_suffix("_lodf.csv").map(str::to_string)
+        })
+        .collect();
+    names.sort();
+    let (mut worst, mut bridges) = ((0.0, String::new()), 0);
+    for name in &names {
+        let case = Case::from_path(normalized.join(format!("{name}.m"))).unwrap();
+        let reference = read_matrix(&dir.join(format!("{name}_lodf.csv"))).unwrap();
+        let (deviation, masked) = lodf_deviation(&case, &reference, name);
+        assert!(
+            deviation <= 1e-9,
+            "{name}: LODF differs from makeLODF's by {deviation:e}"
+        );
+        bridges += masked;
+        if deviation > worst.0 {
+            worst = (deviation, name.clone());
+        }
+    }
+    eprintln!(
+        "{} cases' LODF match makeLODF's off the bridges, whose {bridges} columns are NaN \
+         with 1 − h at rounding level; the largest difference is {:e} ({})",
+        names.len(),
+        worst.0,
+        worst.1
+    );
+}

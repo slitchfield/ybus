@@ -139,6 +139,11 @@ pub enum PowerflowError {
         /// The table's number of rows.
         len: usize,
     },
+    /// A study asked for the outage of a branch that's already out of service.
+    BranchOutOfService {
+        /// The 0-based case branch row.
+        row: usize,
+    },
     /// A PTDF slack can't be used: a slack bus that isn't connected, or weights of the wrong
     /// length, summing to zero, or on a bus that isn't connected.
     InvalidSlack {
@@ -237,6 +242,12 @@ impl fmt::Display for PowerflowError {
                 write!(
                     f,
                     "{table} row {row} is past the end of the {len}-row table"
+                )
+            }
+            PowerflowError::BranchOutOfService { row } => {
+                write!(
+                    f,
+                    "branch row {row} is out of service, so it can't be taken out"
                 )
             }
             PowerflowError::InvalidSlack { reason } => write!(f, "invalid PTDF slack: {reason}"),

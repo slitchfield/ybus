@@ -37,6 +37,9 @@ For each case:
 | `<case>_qlim1_*.csv`, `<case>_qlim2_*.csv` | The same four tables for Newton's method with reactive limits enforced, all at once (1) or one at a time (2); `iterations` totals every solve |
 | `<case>_islands.csv` | `bus`, `island`: each bus's island from `find_islands` (1-based, in MATPOWER's order, largest first), or 0 for a bus with no in-service branch |
 | `<case>_bridges.csv` | `row`: the branches `find_bridges` reports as bridges (1-based rows, increasing). Only where `find_bridges` succeeds: case14 and case30, but not case118, whose parallel branches make it fail |
+| `<case>_ptdf.csv` | `makePTDF`'s PTDF at the default slack, after `ext2int`: a header `row` and the columns' bus numbers, then one line per in-service branch, its 1-based row and its entries. case14 and case30 only: case118's would be 1.6 MB |
+| `<case>_ptdf_distributed.csv` | The same with the slack distributed in proportion to each bus's load |
+| `<case>_lodf.csv` | `makeLODF`'s LODF, unmasked: a header `row` and the outaged branches' rows, then one line per in-service branch. A bridge's column is rounding noise there (division by 1 − h ≈ 0), which the tests check by `powerflow`'s own arithmetic instead |
 | `<case>_qlim1_limited.csv`, `<case>_qlim2_limited.csv` | `row`: the generators held at a reactive limit (1-based rows, increasing), found as those in service at a bus `runpf` made PQ, at exactly one of their limits, since `runpf` doesn't report them. A generator with equal limits is left out when one with unequal limits at its bus is held: it sits at its limits whenever its bus is PQ |
 
 Values have 17 significant digits, so they parse back to the exact doubles MATPOWER computed.

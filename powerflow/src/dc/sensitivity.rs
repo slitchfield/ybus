@@ -1,5 +1,5 @@
-//! Sensitivities of the DC power flow: power transfer distribution factors (PTDF), as MATPOWER's
-//! `makePTDF` computes them.
+//! Sensitivities of the DC power flow: power transfer distribution factors (PTDF) and line outage
+//! distribution factors (LODF), as MATPOWER's `makePTDF` and `makeLODF` compute them.
 //!
 //! A PTDF is the change in a branch's from-end flow per unit of power injected at a bus and
 //! withdrawn at the slack, so `PTDF[k][j] = b_k (θ_f − θ_t)` where `θ` solves `B θ = e_j` with the
@@ -7,6 +7,14 @@
 //! so the angle reference doesn't. MATPOWER returns the whole dense matrix (branches × buses),
 //! which large cases can't hold, so this module also gives selected rows and columns, each from
 //! one solve with a sparse right-hand side.
+//!
+//! An LODF is the change in each branch's flow, as a fraction of a branch's flow before its
+//! outage, when that branch is taken out: `LODF[l][k] = H[l][k] / (1 − H[k][k])`, where `H[·][k]`
+//! is the PTDF of a transfer from branch `k`'s from bus to its to bus, and `LODF[k][k] = −1`.
+//! A transfer doesn't depend on the slack, so neither does the LODF. Taking out a bridge
+//! splits the network, and `1 − H[k][k]` is zero in exact arithmetic, so rounding decides what
+//! the division gives; here a bridge's column is NaN, as with `makeLODF`'s `mask_bridge`, with
+//! bridges found from the graph rather than the arithmetic.
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -15,6 +23,7 @@ use sparse_mat::compressed_matrix::Ordering;
 use sparse_mat::sparse_matrix::SparseVector;
 
 use super::{DcModel, DcStudy, Factor};
+use crate::islands::bridges;
 use crate::powerflow_error::PowerflowError;
 
 /// How a PTDF's injections are balanced.
@@ -49,6 +58,8 @@ pub struct DcSensitivity<'a> {
     /// Each internal bus's position among the factorization's unknowns, `None` for the slack
     position: Vec<Option<usize>>,
     factor: Option<Cow<'a, Factor>>,
+    /// Whether each internal branch is a bridge of the model's graph
+    bridge: Vec<bool>,
 }
 
 impl DcStudy<'_> {
@@ -159,12 +170,17 @@ impl DcStudy<'_> {
         for (index, &bus) in unknown.iter().enumerate() {
             position[bus] = Some(index);
         }
+        let mut bridge = vec![false; topology.ends.len()];
+        for k in bridges(nb, &topology.ends) {
+            bridge[k] = true;
+        }
         Ok(DcSensitivity {
             model,
             slack: slack_bus,
             weights,
             position,
             factor,
+            bridge,
         })
     }
 }
@@ -275,6 +291,54 @@ impl DcSensitivity<'_> {
         (0..nl)
             .map(|k| columns.iter().map(|column| column[k]).collect())
             .collect()
+    }
+
+    /// LODF columns for taking out the case branch rows `outaged`: each is every branch's change
+    /// in flow as a fraction of the outaged branch's flow before (one entry per case branch
+    /// row), with −1 for the outaged branch itself, from one solve each. A bridge's column is
+    /// NaN. An out-of-service branch's entry is zero. Returns `PowerflowError::RowOutOfRange`
+    /// for a row past the branch table, and `BranchOutOfService` for a branch not in service.
+    pub fn lodf_columns(&self, outaged: &[usize]) -> Result<Vec<Vec<f64>>, PowerflowError> {
+        let internal = self.internal_branches(outaged)?;
+        let nl = self.model.topology.case_shape.2;
+        outaged
+            .iter()
+            .zip(internal)
+            .map(|(&row, branch)| {
+                let k = branch.ok_or(PowerflowError::BranchOutOfService { row })?;
+                if self.bridge[k] {
+                    return Ok(vec![f64::NAN; nl]);
+                }
+                let (from, to) = self.model.topology.ends[k];
+                let mut column = self.flows(&self.solve(&[(from, 1.0), (to, -1.0)]));
+                let remaining = 1.0 - column[row];
+                for value in &mut column {
+                    *value /= remaining;
+                }
+                column[row] = -1.0;
+                Ok(column)
+            })
+            .collect()
+    }
+
+    /// The whole LODF matrix, as `makeLODF` returns it (with bridges masked): one row per case
+    /// branch row, each with one entry per case branch row, so `lodf()[l][k]` is branch `l`'s
+    /// change for the outage of branch `k`. The column of a branch that's out of service is
+    /// zeros, since taking it out changes nothing. It's dense, so it suits small cases: one
+    /// solve per in-service branch.
+    pub fn lodf(&self) -> Vec<Vec<f64>> {
+        let topology = &self.model.topology;
+        let nl = topology.case_shape.2;
+        let columns = self
+            .lodf_columns(&topology.branch_rows)
+            .expect("in-service branch rows are in range and in service");
+        let mut matrix = vec![vec![0.0; nl]; nl];
+        for (&k, column) in topology.branch_rows.iter().zip(&columns) {
+            for (row, &value) in matrix.iter_mut().zip(column) {
+                row[k] = value;
+            }
+        }
+        matrix
     }
 
     /// The internal branch of each case branch row, `None` if it isn't in service, checking

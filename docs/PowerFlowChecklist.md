@@ -761,7 +761,23 @@ The studies that solve many times against one factorization of B′. Planned wit
         within 2.5e-11 (case141). On fixtures, each column equals the DC power flow's change in
         flows (a phase shifter, a tap, parallel branches, the LU path, another slack bus, two
         references), and rows, columns, transfers and the full matrix agree within 1e-13.
-- [ ] LODF, with NaN columns for bridges, against MATPOWER's `makeLODF`.
+- [x] LODF, with NaN columns for bridges, against MATPOWER's `makeLODF`.
+      - **API:** `DcSensitivity::lodf_columns` and `lodf`, indexed by case branch rows. A column
+        is a transfer from the outaged branch's from bus to its to bus, divided by `1 − H(k, k)`,
+        with −1 on the diagonal, so it doesn't depend on the slack. Bridges of the model's graph
+        (PR 1's `bridges`) get NaN columns, and an out-of-service branch can't be outaged (the
+        new `BranchOutOfService`); in `lodf()` its column is zeros.
+      - **Changed from the plan:** the self term comes from the transfer column itself, since
+        the whole column is needed. The forward-solve-only quadratic form waits for Woodbury,
+        which needs only the k×k Gram matrix.
+      - **MATPOWER's unmasked bridge columns are noise, not infinities.** On case30's branch 13
+        (a bridge to a PV bus), `makeLODF` computes `1 − h` as −4.4e-16 and gives finite values
+        like −0.125. So the tests check bridges by our arithmetic: every NaN column has
+        `|1 − h| ≤ 1e-9`, and every other column `|1 − h| > 1e-6`.
+      - **Validation:** off the bridges, case14 and case30 agree within 2.7e-14, and all 75
+        local cases (50 sampled outages above 300 buses) within 7.5e-12 (case300), with 1,876
+        bridge columns. On fixtures, each column predicts the DC power flow after the outage
+        within 1e-9 MW, and the matrix is the same under another slack.
 
 ### PR 3: outages without refactoring
 

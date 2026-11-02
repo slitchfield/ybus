@@ -65,8 +65,8 @@ None of this guarantees the absence of errors. Please report any you find.
 Considerable care went into attributing the ideas this code is built on:
 - **No copied code:** the sparse matrix algorithms were implemented from published
   descriptions in papers and textbooks, and no source code from other libraries was knowingly
-  copied or ported. The DC and AC power flows, and the island and bridge listing, are the
-  exception: they reproduce MATPOWER's results, and were written with reference to MATPOWER's
+  copied or ported. The DC and AC power flows, the DC sensitivities (PTDF and LODF), and the
+  island and bridge listing, are the exception: they reproduce MATPOWER's results, and were written with reference to MATPOWER's
   BSD-licensed source code as well as
   its documentation and technical notes. They are reimplementations in Rust, not translations;
   the README's [References](README.md#references) section names the MATPOWER files consulted,
