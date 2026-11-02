@@ -27,6 +27,41 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
     }
 }
 
+/// The reach of a sparse right-hand side in a triangular factor's graph: every node reachable
+/// from `starts` along the factor's edges, in increasing order, which is the pattern of the
+/// forward solve's result (Gilbert 1994).
+///
+/// Node `j`'s children are `idx[ptr[j] + 1..ptr[j + 1]]`: each major index stores its diagonal
+/// first and then larger indices, as the columns of `L` do in `Lu` and in `Cholesky`'s `Lᴴ`.
+/// Every edge leads to a larger node, so increasing order is a topological order and the solve
+/// can take the reach in that order. `starts` must be distinct. Allocates O(n) for the marks but
+/// visits only the reach.
+pub(crate) fn reach(
+    n: usize,
+    ptr: &[usize],
+    idx: &[usize],
+    starts: impl IntoIterator<Item = usize>,
+) -> Vec<usize> {
+    let mut marked = vec![false; n];
+    let mut stack: Vec<usize> = starts.into_iter().collect();
+    let mut found = Vec::with_capacity(stack.len());
+    for &start in &stack {
+        marked[start] = true;
+        found.push(start);
+    }
+    while let Some(node) = stack.pop() {
+        for &child in &idx[ptr[node] + 1..ptr[node + 1]] {
+            if !marked[child] {
+                marked[child] = true;
+                found.push(child);
+                stack.push(child);
+            }
+        }
+    }
+    found.sort_unstable();
+    found
+}
+
 impl<T: Scalar + ComplexFloat, O: Orientation> CompressedMatrix<T, O> {
     /// Solves `L x = b` by forward substitution, reading only the lower triangle of `self`
     /// (entries above the diagonal are ignored). CSR substitutes row by row and CSC column by

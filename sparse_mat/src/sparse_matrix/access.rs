@@ -4,6 +4,7 @@
 use std::ops::Index;
 
 use super::SparseMatrix;
+use crate::sparse_error::SparseError;
 use crate::Scalar;
 
 /// One row or column of a matrix, holding only its stored entries.
@@ -18,6 +19,34 @@ pub struct SparseVector<T = f64> {
 }
 
 impl<T: Scalar> SparseVector<T> {
+    /// A vector of length `len` whose stored entries are `values` at `indices`, as for a sparse
+    /// right-hand side. Stored zeros are kept.
+    ///
+    /// Returns `SparseError::LengthMismatch` unless `indices` and `values` have the same length,
+    /// `SparseError::OutOfRange` for an index not below `len`, and
+    /// `SparseError::InvalidCompressed` unless the indices are strictly increasing.
+    pub fn new(len: usize, indices: Vec<usize>, values: Vec<T>) -> Result<Self, SparseError> {
+        if indices.len() != values.len() {
+            return Err(SparseError::LengthMismatch {
+                expected: indices.len(),
+                found: values.len(),
+            });
+        }
+        if let Some(&index) = indices.iter().find(|&&index| index >= len) {
+            return Err(SparseError::OutOfRange { index, len });
+        }
+        if indices.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(SparseError::InvalidCompressed {
+                reason: "a sparse vector's indices must be strictly increasing",
+            });
+        }
+        Ok(SparseVector {
+            len,
+            indices,
+            values,
+        })
+    }
+
     /// The length of the vector, counting implicit zeros.
     pub fn len(&self) -> usize {
         self.len

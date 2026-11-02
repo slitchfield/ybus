@@ -686,10 +686,23 @@ The studies that solve many times against one factorization of B′. Planned wit
 
 ### PR 1: sparse right-hand sides, islands and bridges
 
-- [ ] Sparse right-hand-side solves, using the reach to touch only the needed part of the
+- [x] Sparse right-hand-side solves, using the reach to touch only the needed part of the
       factor: `SparseVector::new`, and `solve_lower_sparse` and `solve_sparse` for `Cholesky`
-      (the elimination tree's paths) and `Lu` (the Gilbert–Peierls reach, shared with the
-      factorization).
+      and `Lu`.
+      - **The reach:** one helper (`solvers::reach`) serves both factors: the nodes reachable
+        from `b`'s entries along `L`'s columns (`Lu`'s `L`, `Cholesky`'s `Lᴴ` rows), sorted
+        increasing, which is a topological order since `L` is lower triangular. Changed from the
+        plan: the factorization's own reach in `gilbert_peierls` isn't shared, since it works in
+        the original row numbering while rows pivot; the factorization is untouched.
+      - **Results:** `solve_lower_sparse` gives `L⁻¹ P b` over the reach, as a `SparseVector` in
+        the factor's ordering; `‖L⁻¹ P b‖²` is `bᵀ A⁻¹ b` for Cholesky, with no back
+        substitution. `solve_sparse` adds the dense back substitution. For `Lu` both are bit
+        for bit the dense solve's, apart from the sign of a zero; for `Cholesky` they agree
+        within rounding, since the forward solve goes by columns rather than rows.
+      - **Tests** (`sparse_mat/tests/sparse_rhs_test.rs`): against the dense solves on random
+        SPD and unsymmetric matrices, real and complex; the reach equals a brute-force
+        structural pattern; a path graph's last row reaches only itself. On case118's B′, a
+        branch transfer's forward solve reaches 11.3 of the 117 rows on average.
 - [ ] Island detection: list every island and bridge, as MATPOWER's `find_islands` and
       `find_bridges` do, with reference results. `IslandWithoutReference` already replaces
       `SingularMatrix` for an island the solve can't handle, naming one of its buses.

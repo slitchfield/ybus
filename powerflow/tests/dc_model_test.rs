@@ -274,3 +274,68 @@ fn an_edited_case_is_validated() {
         PowerflowError::InvalidBaseMva { base_mva: 0.0 }
     );
 }
+
+#[test]
+fn sparse_solves_on_case118s_b_prime_match_dense_ones() {
+    use powerflow::case::Case;
+    use sparse_mat::compressed_matrix::Ordering;
+    use sparse_mat::sparse_matrix::SparseVector;
+
+    let Some(path) = common::matpower_case("case118") else {
+        return; // not fetched; the skip was reported on stderr
+    };
+    let case = Case::from_path(&path).unwrap();
+    let model = DcModel::new(&case).unwrap();
+    let unknown: Vec<usize> = model
+        .pv_buses()
+        .iter()
+        .chain(model.pq_buses())
+        .copied()
+        .collect();
+    let b_prime = model.bbus().select(&unknown, &unknown).unwrap();
+    let factor = b_prime
+        .analyze_cholesky(Ordering::Amd)
+        .unwrap()
+        .factor(&b_prime)
+        .unwrap();
+    let n = unknown.len();
+    let (mut reached, mut solves) = (0, 0);
+    // A transfer between the two ends of every branch with neither end a reference bus: the
+    //   right-hand side of a PTDF row or an LODF self term
+    let position = |bus: usize| unknown.iter().position(|&u| u == bus);
+    for k in 0..model.branch_rows().len() {
+        let (from, to) = {
+            let (cols, values) = model.bf().outer(k).unwrap();
+            let from = cols[values.iter().position(|&v| v > 0.0).unwrap()];
+            let to = cols[values.iter().position(|&v| v < 0.0).unwrap()];
+            (from, to)
+        };
+        let (Some(f), Some(t)) = (position(from), position(to)) else {
+            continue;
+        };
+        let (indices, values) = if f < t {
+            (vec![f, t], vec![1.0, -1.0])
+        } else {
+            (vec![t, f], vec![-1.0, 1.0])
+        };
+        let b = SparseVector::new(n, indices, values).unwrap();
+        let expected = factor.solve(&b.to_dense()).unwrap();
+        let x = factor.solve_sparse(&b).unwrap();
+        let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        for (got, want) in x.iter().zip(&expected) {
+            assert!(
+                (got - want).abs() <= 1e-13 * scale,
+                "branch {k}: {got} vs {want}"
+            );
+        }
+        reached += factor.solve_lower_sparse(&b).unwrap().nnz();
+        solves += 1;
+    }
+    // Each forward solve touches a fraction of B′'s rows: on case118, 11.3 of the 117 unknowns
+    //   on average
+    eprintln!(
+        "case118: {solves} transfers, the forward solve reaching {:.1} of {n} rows on average",
+        reached as f64 / solves as f64
+    );
+    assert!(reached < solves * n / 2);
+}
