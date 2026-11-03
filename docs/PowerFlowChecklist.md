@@ -819,7 +819,23 @@ The studies that solve many times against one factorization of B′. Planned wit
 
 ### PR 4: accuracy and parallel batches
 
-- [ ] Iterative refinement and a condition estimate (with `Lu::solve_transpose`).
+- [x] Iterative refinement and a condition estimate (with `Lu::solve_transpose`).
+      - **`Lu::solve_transpose`:** `Aᵀ x = b` from the same factors (`Aᵀ = Q Uᵀ Lᵀ P`), the plain
+        transpose for complex matrices.
+      - **`solve_refined(a, b, max_steps)`** on `Lu` and `Cholesky`, returning `Refined { x,
+        steps, backward_error }`: fixed-precision refinement (Skeel 1980), keeping the iterate
+        with the smallest componentwise backward error (Oettli and Prager 1964), and stopping at
+        the unit roundoff, when it stops halving, or after `max_steps`.
+      - **`inverse_norm_1_estimate` and `condition_estimate_1`** on `Lu<f64>` and
+        `Cholesky<f64>`: Hager's estimator with Higham's refinements, as LAPACK's `xLACON`,
+        keeping the largest of its lower bounds. Real matrices only, for now: the complex
+        version needs `Aᴴ`, which nothing here uses yet.
+      - **Tests** (`sparse_mat/tests/accuracy_test.rs`): `solve_transpose` against products with
+        `Aᵀ`, real and complex; the estimate never exceeds the exact ‖A⁻¹‖₁ (dense inverse) and
+        equals it on 118 of 120 random SPD and unsymmetric matrices, the rest within a factor of
+        3; refinement takes an LU solve's componentwise backward error from 4.5e-14 to 1.5e-16
+        in two steps, and leaves the Hilbert matrix's (κ₁ ≈ 3.5e13), already below the unit
+        roundoff, alone.
 - [ ] Parallel batch solves over a shared factorization (`rayon`). Check that `Lu` is
       `Send + Sync` and that results are deterministic.
 - [ ] The DC survey with B′'s condition and refined backward error, and the N-1 survey in

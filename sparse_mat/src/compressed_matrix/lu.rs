@@ -410,6 +410,39 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
             .collect())
     }
 
+    /// Solves `Aᵀ x = b` (the plain transpose, not conjugated, for a complex matrix) with the same
+    /// factors: `Aᵀ = Q Uᵀ Lᵀ P`, so it substitutes forward with `Uᵀ` and back with `Lᵀ`,
+    /// reading their stored columns as rows. Returns `SparseError::ShapeMismatch` unless `b`
+    /// has one entry per row of `A`.
+    pub fn solve_transpose(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
+        self.check_rhs(b.len())?;
+        let n = self.row_perm.len();
+        // Uᵀ y = Qᵀ b: column j of U is row j of Uᵀ, its diagonal stored last
+        let mut y: Vec<T> = self.col_perm.iter().map(|&col| b[col]).collect();
+        for j in 0..n {
+            let diagonal = self.u.ptr[j + 1] - 1;
+            let mut remainder = y[j];
+            for p in self.u.ptr[j]..diagonal {
+                remainder = remainder - self.u.data[p] * y[self.u.idx[p]];
+            }
+            y[j] = remainder / self.u.data[diagonal];
+        }
+        // Lᵀ z = y: column j of L is row j of Lᵀ, its unit diagonal stored first
+        for j in (0..n).rev() {
+            let mut remainder = y[j];
+            for p in self.l.ptr[j] + 1..self.l.ptr[j + 1] {
+                remainder = remainder - self.l.data[p] * y[self.l.idx[p]];
+            }
+            y[j] = remainder;
+        }
+        // P x = z
+        let mut x = vec![T::zero(); n];
+        for (&row, &value) in self.row_perm.iter().zip(&y) {
+            x[row] = value;
+        }
+        Ok(x)
+    }
+
     /// Solves `L y = P b` for a sparse `b`, touching only the part of `L` the solve needs: the
     /// entries of `y` that can be nonzero are those reachable from `b`'s entries in the graph
     /// of `L` (Gilbert 1994), and only those are computed. `y`'s indices are positions in the
