@@ -887,7 +887,10 @@ PRs.
 
 ### PR A: the limit loop without repeated AMD
 
-- [ ] `CscMatrix::analyze_lu_with_permutation`: an LU analysis under a given column ordering.
+- [x] `CscMatrix::analyze_lu_with_permutation`: an LU analysis under a given column ordering.
+      Validated with the existing `check_permutation` (`InvalidPermutation`, and `NotSquare`).
+      Given `analyze_lu(Amd)`'s own permutation it factors bit for bit the same, and any valid
+      permutation factors and solves correctly (`factorization_test.rs`).
 - [ ] Measure a round's parts on case2383wp's Jacobian (assembly, AMD analysis, factorization,
       refactor, refill) with criterion, and decide whether the assembly is worth reusing.
 - [ ] From a limit loop's second round, order each round's Jacobian by one superset ordering

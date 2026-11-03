@@ -1471,3 +1471,50 @@ fn every_solver_works_for_f64() {
 fn every_solver_works_for_complex_f64() {
     solver_suite::<Complex<f64>>();
 }
+
+#[test]
+fn an_lu_analysis_can_take_a_given_permutation() {
+    let a = random_square(60, 6, 0.2, 77).to_csc();
+    let computed = a.analyze_lu(Ordering::Amd).unwrap();
+    let given = a
+        .analyze_lu_with_permutation(computed.column_permutation().to_vec())
+        .unwrap();
+    assert_eq!(given.column_permutation(), computed.column_permutation());
+    // The same analysis, so the same factorization, bit for bit
+    let (x, y) = (
+        computed.factor(&a, LuOptions::default()).unwrap(),
+        given.factor(&a, LuOptions::default()).unwrap(),
+    );
+    assert_eq!(x.permutation(), y.permutation());
+    assert_eq!(x.column_permutation(), y.column_permutation());
+    let bits = |m: &CscMatrix<f64>| m.values().iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(x.l()), bits(y.l()));
+    assert_eq!(bits(x.u()), bits(y.u()));
+
+    // Any permutation gives a valid factorization: here, the reverse
+    let reverse: Vec<usize> = (0..60).rev().collect();
+    let lu = a
+        .analyze_lu_with_permutation(reverse)
+        .unwrap()
+        .factor(&a, LuOptions::default())
+        .unwrap();
+    let truth: Vec<f64> = (0..60).map(|i| (i as f64).cos()).collect();
+    let solved = lu.solve(&a.mul_vec(&truth).unwrap()).unwrap();
+    assert_close(&solved, &truth, 1e-9);
+
+    // A list that isn't a permutation of the columns, or a matrix that isn't square
+    let invalid = |perm: Vec<usize>| {
+        matches!(
+            a.analyze_lu_with_permutation(perm),
+            Err(SparseError::InvalidPermutation { .. })
+        )
+    };
+    assert!(invalid((0..59).collect()));
+    assert!(invalid((0..60).map(|i| i % 59).collect()));
+    assert!(invalid((1..=60).collect()));
+    let wide = CscMatrix::<f64>::from_triplets(2, 3, vec![(0, 0, 1.0)]).unwrap();
+    assert_eq!(
+        wide.analyze_lu_with_permutation(vec![0, 1, 2]).unwrap_err(),
+        SparseError::NotSquare { shape: (2, 3) }
+    );
+}
