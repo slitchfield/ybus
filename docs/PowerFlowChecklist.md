@@ -908,9 +908,26 @@ PRs.
         factorization under the same ordering), instead of an AMD and a fresh factorization.
         This subsumes the planned restricted ordering, at the cost of stored zeros for the
         unknowns a round pins.
-- [ ] From a limit loop's second round, solve every round against one superset Jacobian
+- [x] From a limit loop's second round, solve every round against one superset Jacobian
       (fixed pattern, unknowns a round doesn't solve for pinned), ordered once by AMD on Ybus
       expanded to each bus's angle then magnitude, with its LU refactored across rounds.
+      - **`SupersetJacobian`** (`ac.rs`): nodes `2i` (angle) and `2i + 1` (magnitude) for every
+        bus, laid out once through an assembly map, ordered by AMD on Ybus expanded, and
+        analyzed with `analyze_lu_with_permutation`. A pinned node's row and column are zero
+        with a unit diagonal, and its right-hand side zero, so its update is exactly zero.
+        `newton_superset` iterates as `newton` does, refactoring the kept LU across iterations
+        and rounds. The entry formula is shared with `JacobianAssembly` (`source_value`), with
+        its operations unchanged.
+      - **The first round** still solves as plain Newton does, so a run that holds nothing is
+        bit-identical to it (checked on case30 in `ac_reference_test.rs`). Fast-decoupled with
+        limits is unchanged.
+      - **Tests:** the superset, pinned and restricted to a round's unknowns, is that round's
+        Jacobian bit for bit, for each set of roles a fixture's loop can reach. The committed
+        `qlim1`/`qlim2` references still take MATPOWER's iteration counts and held generators,
+        within 9.7e-12 (case118 one at a time; 8.1e-12 before).
+      - **First timings,** one at a time: case2383wp 1.42 s → 0.45 s, case_ACTIVSg10k 36.6 s →
+        10.5 s, the refactor never repivoting (two full factorizations instead of 253 and
+        1,245).
 - [ ] Rerun both limit surveys against MATPOWER, and record the times before and after.
 
 ### PR B: COLAMD
