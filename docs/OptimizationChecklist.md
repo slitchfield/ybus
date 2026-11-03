@@ -97,9 +97,15 @@ Facts checked when this roadmap was written (2026-11-03):
 
 ### PR 1: the `interior_point` crate and generator costs
 
-- [ ] The `interior_point` crate and its problem interface: an objective with gradient and
+- [x] The `interior_point` crate and its problem interface: an objective with gradient and
       Hessian, nonlinear constraints with Jacobians, the Lagrangian's Hessian, linear constraints
       and bounds; `MipsOptions` with MIPS's defaults; and a result with the multipliers.
+      `interior_point::problem` has the `Problem` trait (with nonlinear constraints and the
+      Lagrangian's Hessian optional), `Constraints` (linear constraints and bounds, each
+      optional) and `QuadraticProblem` (`½ xᵀ H x + cᵀ x`, as `qps_mips` builds). Constraint
+      Jacobians take one row per constraint, transposed from MIPS's convention.
+      `interior_point::mips` has `MipsOptions` (MIPS's defaults, including step control's), the
+      exit status, the multipliers as MIPS reports them, and each iteration's record.
 - [ ] MIPS, ported from `mips.m`, and `qps_mips`'s quadratic-program wrapper, tested on the
       problems of `t_mips.m` and `t_qps_mips.m` with MATPOWER's tolerances and iteration counts.
 - [ ] Generator costs in `powerflow`: polynomial (with `opf_setup`'s handling) and
