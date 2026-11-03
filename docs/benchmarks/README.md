@@ -13,6 +13,7 @@ change. Each record names the code, the machine and the method it used.
 | [`dc-power-flow-condition-2026-11-02.md`](dc-power-flow-condition-2026-11-02.md) | The DC survey with B′'s estimated condition number and the backward error after iterative refinement (Phase 5): condition doesn't explain the backward error, and refinement has little left to do. |
 | [`dc-contingency-parallel-2026-11-02.md`](dc-contingency-parallel-2026-11-02.md) | The N-1 survey with the outages solved in parallel (Phase 5): the same results, and 11× faster on cases of 1,000 buses or more. |
 | [`dc-contingency-2026-11-02.md`](dc-contingency-2026-11-02.md) | Every single-branch outage of every case by rank-1 updates of B′'s kept factorization (Phase 5), against refactoring. |
+| [`ac-reactive-limits-reuse-2026-11-03.md`](ac-reactive-limits-reuse-2026-11-03.md) | The reactive-limit survey with a limit loop's later rounds solving against one superset Jacobian: the same results as MATPOWER, one at a time 2.9× faster in all. |
 | [`ac-reactive-limits-2026-11-01.md`](ac-reactive-limits-2026-11-01.md) | Newton's method on every case with generator reactive limits enforced, all at once and one at a time, against MATPOWER's legacy `runpf`, including the held generators. |
 
 ## Measuring

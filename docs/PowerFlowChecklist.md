@@ -928,7 +928,15 @@ PRs.
       - **First timings,** one at a time: case2383wp 1.42 s → 0.45 s, case_ACTIVSg10k 36.6 s →
         10.5 s, the refactor never repivoting (two full factorizations instead of 253 and
         1,245).
-- [ ] Rerun both limit surveys against MATPOWER, and record the times before and after.
+- [x] Rerun both limit surveys against MATPOWER, and record the times before and after.
+      Recorded in `docs/benchmarks/ac-reactive-limits-reuse-2026-11-03.md`. Both modes match
+      the earlier record and MATPOWER on every case (convergence, iterations, held generators),
+      the worst relative difference unchanged at 1.7e-10, and the default Newton survey matches
+      its record. One at a time takes 1,519 s over all cases instead of 4,397 (a median 3.38× on
+      the cases that hold a generator; case_SyntheticUSA 40.8 → 14.5 minutes), all at once
+      4.12 s instead of 6.54 (1.45×); every run takes two or three full factorizations. The
+      smallest cases are slightly slower (0.79–0.93×), and the peak memory rises 4–29% on cases
+      of 9,000 buses or more.
 
 ### PR B: COLAMD
 
