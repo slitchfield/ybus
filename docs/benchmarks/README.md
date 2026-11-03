@@ -13,6 +13,7 @@ change. Each record names the code, the machine and the method it used.
 | [`dc-power-flow-condition-2026-11-02.md`](dc-power-flow-condition-2026-11-02.md) | The DC survey with B′'s estimated condition number and the backward error after iterative refinement (Phase 5): condition doesn't explain the backward error, and refinement has little left to do. |
 | [`dc-contingency-parallel-2026-11-02.md`](dc-contingency-parallel-2026-11-02.md) | The N-1 survey with the outages solved in parallel (Phase 5): the same results, and 11× faster on cases of 1,000 buses or more. |
 | [`dc-contingency-2026-11-02.md`](dc-contingency-2026-11-02.md) | Every single-branch outage of every case by rank-1 updates of B′'s kept factorization (Phase 5), against refactoring. |
+| [`colamd-2026-11-03.md`](colamd-2026-11-03.md) | COLAMD against AMD on every case's Jacobian and B′: AMD fills less on every case, so it stays the default. |
 | [`ac-reactive-limits-reuse-2026-11-03.md`](ac-reactive-limits-reuse-2026-11-03.md) | The reactive-limit survey with a limit loop's later rounds solving against one superset Jacobian: the same results as MATPOWER, one at a time 2.9× faster in all. |
 | [`ac-reactive-limits-2026-11-01.md`](ac-reactive-limits-2026-11-01.md) | Newton's method on every case with generator reactive limits enforced, all at once and one at a time, against MATPOWER's legacy `runpf`, including the held generators. |
 
@@ -33,6 +34,8 @@ change. Each record names the code, the machine and the method it used.
   each case alone with the `n1_survey` example, by rank-k updates of B′'s kept factorization,
   and compares a sample with refactoring (every outage up to 3,000 buses, about 300 above).
   `YBUS_BENCH_PARALLEL=1` solves them in parallel (`rayon`).
+- **Orderings:** `scripts/benchmark-ordering.sh [<output.csv>]` factors each case's Jacobian and
+  B′ under AMD and COLAMD with the `ordering_survey` example.
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example
   on each MATPOWER case in its own process, under a time and memory limit, and compares the
   results with MATPOWER's own. `YBUS_BENCH_ORDERING` chooses the Cholesky ordering. Its header comment lists what it needs and its settings.

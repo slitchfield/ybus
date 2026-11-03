@@ -959,7 +959,15 @@ PRs.
         less than AMD-on-`A+Aᵀ`'s (212,442 against 232,698) and barely changes from the rows in
         order; with the rows in order and their dominant diagonal intact, AMD fills less
         (130,198 against 213,181).
-- [ ] Benchmark COLAMD against AMD on power-flow matrices and synthetic unsymmetric ones.
+- [x] Benchmark COLAMD against AMD on power-flow matrices and synthetic unsymmetric ones.
+      `scripts/benchmark-ordering.sh` and the `ordering_survey` example, recorded in
+      `docs/benchmarks/colamd-2026-11-03.md`: on all 78 cases' Jacobians and B′, AMD fills less
+      on every case (COLAMD a median 1.45× and 1.26× as much, 1.67× and 1.51× from 1,000
+      buses) in about half the time, so AMD stays the default. Preferring diagonal pivots under
+      COLAMD's ordering recovers little (1.36× and 1.16×): the ordering makes the difference.
+      The synthetic comparison is in `colamd_test.rs` (COLAMD 8.7% less fill when the rows are
+      out of order). Changed from the plan: no separate criterion bench, since the survey times
+      every case.
 
 ## Housekeeping (carried over from the PR #1 review)
 
