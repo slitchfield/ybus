@@ -853,8 +853,21 @@ The studies that solve many times against one factorization of B′. Planned wit
       - **Tests:** on case118, every single outage and 38 pairs, and every PTDF and LODF
         column at a single and a distributed slack, bit for bit against the sequential methods
         (`powerflow/tests/dc_parallel_test.rs`, `sparse_mat/tests/rayon_test.rs`).
-- [ ] The DC survey with B′'s condition and refined backward error, and the N-1 survey in
+- [x] The DC survey with B′'s condition and refined backward error, and the N-1 survey in
       parallel.
+      - **DC** (`docs/benchmarks/dc-power-flow-condition-2026-11-02.md`): `dc_survey` gains
+        `condition_estimate`, `refined_backward_error` and `refinement_steps`; every earlier
+        column matches the AMD and LU records on all 78 cases. κ₁ runs from 7.8 to 5.8e8
+        (median 1.5e4; the LU cases' median 4.8e6). Its rank correlation with the backward
+        error is −0.08: condition doesn't explain it, as a backward-stable solve implies, and
+        no case has a gap left (worst 0.78 ε). Refinement takes 0–2 corrections and leaves every
+        case within 0.75 ε, so `DcModel::solve` doesn't use it. `tests/common/accuracy.rs`
+        exposes the DC system it builds (`system`), with `backward_error` unchanged.
+      - **N-1 in parallel** (`docs/benchmarks/dc-contingency-parallel-2026-11-02.md`):
+        `n1_survey --parallel` and `YBUS_BENCH_PARALLEL=1`. The same results as the serial
+        survey on all 78 cases, in 3.5 minutes instead of 21.5, with a median speedup of 11.0×
+        from 1,000 buses on 28 threads; 5.8–5.9× on the two largest cases, where the survey's
+        chunks repeat the serial base solve. Small cases are slower in parallel.
 
 ## Housekeeping (carried over from the PR #1 review)
 

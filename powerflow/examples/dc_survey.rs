@@ -22,6 +22,7 @@ mod accuracy;
 mod reference;
 
 use std::env;
+use std::f64::consts::PI;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -36,12 +37,20 @@ use sparse_mat::compressed_matrix::{LuOptions, Ordering};
 /// Cholesky, or L and U for LU, counting their diagonal once. `backward_error` is the
 /// normwise backward error of the solve's angles (`tests/common/accuracy.rs`), and
 /// `matpower_backward_error` that of MATPOWER's angles for the same system: a control, since
-/// MATPOWER's solve reorders B′ to limit fill-in.
+/// MATPOWER's solve reorders B′ to limit fill-in. `condition_estimate` estimates B′'s 1-norm
+/// condition number κ₁ from its factor (Hager and Higham's estimator), and
+/// `refined_backward_error` is the normwise backward error, as `backward_error`, of the angles
+/// after iterative refinement (`solve_refined`, at most `REFINEMENT_STEPS` corrections), which
+/// took `refinement_steps`. All three are empty when there's nothing to solve.
 const HEADER: &str = "case,buses,branches,generators,connected_buses,in_service_branches,\
                       negative_branches,parse_ms,model_ms,solve_ms,solve_runs,solver,ordering,\
                       bprime_dimension,bprime_entries,factor_entries,\
                       backward_error,matpower_backward_error,\
-                      va_deviation_deg,pf_deviation_mw,pg_deviation_mw";
+                      va_deviation_deg,pf_deviation_mw,pg_deviation_mw,\
+                      condition_estimate,refined_backward_error,refinement_steps";
+
+/// The most corrections iterative refinement may apply
+const REFINEMENT_STEPS: usize = 10;
 
 /// How long to keep repeating a step for its median time
 const BUDGET: Duration = Duration::from_secs(1);
@@ -124,9 +133,14 @@ fn survey(path: &Path, references: Option<&Path>, ordering: Ordering) -> Result<
         }
         _ => ",,,".to_string(),
     };
+    let refinement = match refinement(&case, &model, solution.solver, ordering)? {
+        Some((condition, refined, steps)) => format!("{condition:e},{refined:e},{steps}"),
+        None => ",,".to_string(),
+    };
     Ok(format!(
         "{name},{},{},{},{},{},{negative_branches},{:.3},{:.3},{:.3},{solve_runs},{:?},{},\
-         {bprime_dimension},{bprime_entries},{factor_entries},{backward_error:e},{comparison}",
+         {bprime_dimension},{bprime_entries},{factor_entries},{backward_error:e},{comparison},\
+         {refinement}",
         case.bus.len(),
         case.branch.len(),
         case.generator.len(),
@@ -138,6 +152,57 @@ fn survey(path: &Path, references: Option<&Path>, ordering: Ordering) -> Result<
         solution.solver,
         ordering_name(ordering),
     ))
+}
+
+/// B′'s condition estimate, and the normwise backward error and steps of its solve after
+/// iterative refinement: B′ and P′ built independently of the model's solve
+/// (`tests/common/accuracy.rs`), factored as the solve factors them (by `solver`, ordered by
+/// `ordering`). `None` when there's nothing to solve.
+fn refinement(
+    case: &Case,
+    model: &DcModel,
+    solver: DcSolver,
+    ordering: Ordering,
+) -> Result<Option<(f64, f64, usize)>, String> {
+    let original: Vec<f64> = case.bus.iter().map(|bus| bus.va_deg).collect();
+    let Some((bprime, p, _)) = accuracy::system(case, model, &original) else {
+        return Ok(None);
+    };
+    let (condition, refined) = match solver {
+        DcSolver::Cholesky => {
+            let factor = bprime
+                .analyze_cholesky(ordering)
+                .and_then(|symbolic| symbolic.factor(&bprime))
+                .map_err(|err| err.to_string())?;
+            let refined = factor
+                .solve_refined(&bprime, &p, REFINEMENT_STEPS)
+                .map_err(|err| err.to_string())?;
+            (factor.condition_estimate_1(&bprime), refined)
+        }
+        DcSolver::Lu => {
+            let columns = bprime.to_csc();
+            let lu = columns
+                .analyze_lu(ordering)
+                .and_then(|symbolic| symbolic.factor(&columns, LuOptions::default()))
+                .map_err(|err| err.to_string())?;
+            let refined = lu
+                .solve_refined(&columns, &p, REFINEMENT_STEPS)
+                .map_err(|err| err.to_string())?;
+            (lu.condition_estimate_1(&columns), refined)
+        }
+        DcSolver::NoSolve => return Ok(None),
+    };
+    // The refined angles in degrees, as a solution reports them, for the same backward error
+    let mut va_deg = original;
+    let unknown = model.pv_buses().iter().chain(model.pq_buses());
+    for (&bus, &theta) in unknown.zip(&refined.x) {
+        va_deg[model.bus_rows()[bus]] = theta / (PI / 180.0);
+    }
+    Ok(Some((
+        condition,
+        accuracy::backward_error(case, model, &va_deg),
+        refined.steps,
+    )))
 }
 
 /// B′'s dimension and stored entries, and the stored entries of the factor `solver` made of it.
