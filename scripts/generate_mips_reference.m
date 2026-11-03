@@ -1,5 +1,6 @@
 % Records MIPS's results on the test problems of MATPOWER's own MIPS tests (mips/lib/t/t_mips.m
-%   and t_qps_mips.m), restated here, for interior_point's tests: each problem solved with step
+%   and t_qps_mips.m), restated here, plus two starts of Hock and Schittkowski's problem 71 that
+%   exercise step control and the iteration limit, for interior_point's tests: each problem solved with step
 %   control off and on, printing the exit flag, iteration count, objective, solution and
 %   multipliers with 17 significant digits. Run through scripts/generate-mips-reference.sh, which
 %   fetches MATPOWER and writes interior_point/tests/data/mips_reference.txt.
@@ -119,6 +120,12 @@ for sc = [0 1]
     report('nonlinear3', sc, x, f, s, out, lam);
     [x, f, s, out, lam] = mips(@f7, [1; 5; 5; 1], [], [], [], ones(4,1), 5*ones(4,1), @gh7, @hess7, opt);
     report('hs71', sc, x, f, s, out, lam);
+    % Not in t_mips.m: starts where step control changes the run, and where MIPS reaches its
+    %   iteration limit
+    [x, f, s, out, lam] = mips(@f7, 4.5*ones(4,1), [], [], [], ones(4,1), 5*ones(4,1), @gh7, @hess7, opt);
+    report('hs71_from_4.5', sc, x, f, s, out, lam);
+    [x, f, s, out, lam] = mips(@f7, 2*ones(4,1), [], [], [], ones(4,1), 5*ones(4,1), @gh7, @hess7, opt);
+    report('hs71_from_2', sc, x, f, s, out, lam);
 
     % The problems of t_qps_mips.m, which sets comptol 1e-8
     qopt = opt;

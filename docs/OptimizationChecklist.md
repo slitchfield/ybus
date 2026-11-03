@@ -106,8 +106,24 @@ Facts checked when this roadmap was written (2026-11-03):
       Jacobians take one row per constraint, transposed from MIPS's convention.
       `interior_point::mips` has `MipsOptions` (MIPS's defaults, including step control's), the
       exit status, the multipliers as MIPS reports them, and each iteration's record.
-- [ ] MIPS, ported from `mips.m`, and `qps_mips`'s quadratic-program wrapper, tested on the
+- [x] MIPS, ported from `mips.m`, and `qps_mips`'s quadratic-program wrapper, tested on the
       problems of `t_mips.m` and `t_qps_mips.m` with MATPOWER's tolerances and iteration counts.
+      - **`interior_point::mips::mips` and `qps_mips`,** following `mips.m` step by step: the
+        bounds and linear constraints split into equalities and one- or two-sided inequalities,
+        the starting slacks and multipliers, the reduced KKT system solved with `sparse_mat`'s
+        AMD-ordered LU (where MATLAB uses its backslash; a singular system counts as MIPS's
+        numerical failure, as MATLAB's NaN does), step control, the step lengths, the barrier
+        update, the termination and failure tests, and the multipliers' filtering and mapping
+        back to the bounds and linear constraints.
+      - **References:** `scripts/generate-mips-reference.sh` records MATPOWER's MIPS 1.5.2 on the
+        problems of `t_mips.m` and `t_qps_mips.m`, plus two starts of Hock and Schittkowski's
+        problem 71 where step control changes the run and where MIPS reaches its iteration
+        limit, each with step control off and on (`interior_point/tests/data/mips_reference.txt`).
+      - **Agreement:** every run takes MATPOWER's exit status and iteration count (including the
+        infeasible LP's numerical failure after 6, and 150 at the limit), and its solution,
+        objective and multipliers agree within 6.5e-14 relative (the bar is 1e-12), except a
+        failed run's diverged multipliers (about 3e24), within 3.3e-7. Each problem also meets
+        `t_mips`'s known answers to its precision.
 - [ ] Generator costs in `powerflow`: polynomial (with `opf_setup`'s handling) and
       piecewise-linear (with `makeAy`'s constraints), reactive-power cost rows, and the total
       cost.
