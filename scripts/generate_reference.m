@@ -32,14 +32,28 @@
 %   <case>_islands.csv      bus number and its island from find_islands (1-based, in
 %                           MATPOWER's order, largest first), or 0 for a bus with no in-service
 %                           branch
+%   <case>_ptdf.csv         makePTDF's PTDF with the default slack (the first REF bus), after
+%                           ext2int: a header of the columns' bus numbers, then one line per
+%                           in-service branch, its 1-based row first. Every bus on cases of up
+%                           to 300 buses, otherwise an evenly spaced sample of 50 (bus_idx)
+%   <case>_ptdf_distributed.csv
+%                           the same with the slack distributed in proportion to each bus's
+%                           Pd (makePTDF's vector slack), where some bus has load; for a sample,
+%                           each column is the transfer from its bus to the weights (txfr)
+%   <case>_lodf.csv         makeLODF's LODF: a header of the outaged branches' rows, then one
+%                           line per in-service branch, its row first. Every branch up to 300
+%                           buses, otherwise 50 evenly spaced, from makePTDF's transfer columns
+%                           (txfr) with makeLODF's formula. The committed results have these
+%                           three for case14 and case30 only, and none for a case with
+%                           several islands, which a single slack can't balance
 %   <case>_bridges.csv      branch rows (1-based, increasing) find_bridges reports as bridges,
 %                           only where it succeeds: it fails on cases with parallel branches
 %                           whose summed rows pass the end of the table, with more buses than
 %                           branches, or deep enough to pass Octave's recursion limit
 % Values are printed with 17 significant digits, enough to round-trip a double exactly.
 %
-% YBUS_REFERENCE_RUNS, if set, chooses which of the runs islands, dcpf, acpf, fdxb, fdbx,
-%   qlim1 and qlim2 to make, separated by commas (default: all), so that new results don't
+% YBUS_REFERENCE_RUNS, if set, chooses which of the runs islands, ptdf, dcpf, acpf, fdxb,
+%   fdbx, qlim1 and qlim2 to make, separated by commas (default: all), so that new results don't
 %   need the slow ones again. The AC runs follow dcpf only if it's chosen and succeeds.
 
 % Marks this file as a script, so Octave accepts the function definition that follows. Octave
@@ -56,6 +70,17 @@ function write_csv(path, header, row_format, data)
     fclose(fid);
 end
 
+% A dense matrix with a header of column labels, and each line led by its row label
+function write_matrix(path, column_labels, row_labels, data)
+    fid = fopen(path, 'w');
+    fprintf(fid, 'row');
+    fprintf(fid, ',%d', column_labels);
+    fprintf(fid, '\n');
+    format = ['%d' repmat(',%.17g', 1, size(data, 2)) '\n'];
+    fprintf(fid, format, [row_labels(:), full(data)]');
+    fclose(fid);
+end
+
 args = argv();
 if numel(args) < 2
     error('usage: generate_reference.m <matpower-dir> <output-dir> [<case>...]');
@@ -66,13 +91,18 @@ define_constants;
 
 if numel(args) > 2
     cases = args(3:end);
+    % Local results: PTDF and LODF for every case named
+    ptdf_cases = cases;
 else
     cases = {'case14', 'case30', 'case118'};
+    % Committed results: case118's PTDF and LODF would take 1.6 MB, about ten times the
+    %   packed repository, so they're compared locally instead
+    ptdf_cases = {'case14', 'case30'};
 end
 mpopt = mpoption('verbose', 0, 'out.all', 0);
 chosen = getenv('YBUS_REFERENCE_RUNS');
 if isempty(chosen)
-    chosen = {'islands', 'dcpf', 'acpf', 'fdxb', 'fdbx', 'qlim1', 'qlim2'};
+    chosen = {'islands', 'ptdf', 'dcpf', 'acpf', 'fdxb', 'fdbx', 'qlim1', 'qlim2'};
 else
     chosen = strsplit(chosen, ',');
 end
@@ -100,6 +130,74 @@ for k = 1:numel(cases)
             fprintf(2, '%s: find_bridges failed: %s\n', name, err.message);
         end
     end
+
+    % PTDF and LODF, in ext2int's internal numbering, labelled with the case's bus numbers
+    %   and 1-based branch rows. The full matrices are dense, so larger cases get a sample of
+    %   columns, computed column by column as makePTDF's bus_idx and txfr do
+    if wanted('ptdf') && any(strcmp(name, ptdf_cases))
+        mpc = ext2int(loadcase(name));
+    end
+    % A single slack can't balance several islands: makePTDF's matrix is then singular
+    if wanted('ptdf') && any(strcmp(name, ptdf_cases)) && numel(find_islands(mpc)) > 1
+        fprintf(2, '%s: %d islands, so no PTDF or LODF\n', name, numel(find_islands(mpc)));
+        for file = {'_ptdf.csv', '_ptdf_distributed.csv', '_lodf.csv'}
+            if exist(fullfile(out_dir, [name file{1}]), 'file')
+                delete(fullfile(out_dir, [name file{1}]));
+            end
+        end
+    elseif wanted('ptdf') && any(strcmp(name, ptdf_cases))
+        nb = size(mpc.bus, 1);
+        nl = size(mpc.branch, 1);
+        labels = mpc.order.bus.i2e;
+        rows = mpc.order.branch.status.on;
+        slack = find(mpc.bus(:, BUS_TYPE) == REF, 1);
+        if nb <= 300
+            buses = (1:nb)';
+            outages = (1:nl)';
+        else
+            buses = unique(round(linspace(1, nb, 50)))';
+            outages = unique(round(linspace(1, nl, 50)))';
+        end
+        if nb <= 300
+            H = makePTDF(mpc, slack);
+        else
+            H = makePTDF(mpc, slack, buses);
+        end
+        write_matrix(fullfile(out_dir, [name '_ptdf.csv']), labels(buses), rows, H);
+        w = mpc.bus(:, PD);
+        if any(w)
+            if nb <= 300
+                Hd = makePTDF(mpc, w);
+            else
+                % makePTDF's vector slack with bus_idx adds a column for every bus with
+                %   weight, which on the largest cases is tens of GB. A distributed-slack column
+                %   is the transfer from its bus to the normalized weights, e_j - w, whose
+                %   columns sum to zero, so makePTDF's txfr computes it column by column
+                txfr = full(sparse(buses, 1:numel(buses), 1, nb, numel(buses))) ...
+                    - (w / sum(w)) * ones(1, numel(buses));
+                Hd = makePTDF(mpc, slack, txfr);
+            end
+            write_matrix(fullfile(out_dir, [name '_ptdf_distributed.csv']), labels(buses), ...
+                rows, Hd);
+        end
+        if nb <= 300
+            LODF = makeLODF(mpc, H);
+        else
+            % makeLODF's formula, column by column: the transfer from each outaged branch's
+            %   from bus to its to bus, scaled by 1 / (1 - its own term), with -1 on the
+            %   diagonal
+            f = mpc.branch(outages, F_BUS);
+            t = mpc.branch(outages, T_BUS);
+            k = numel(outages);
+            txfr = full(sparse([f; t], [1:k 1:k]', [ones(k, 1); -ones(k, 1)], nb, k));
+            Ht = makePTDF(mpc, slack, txfr);
+            own = Ht(sub2ind(size(Ht), outages, (1:k)'));
+            LODF = Ht ./ (1 - own');
+            LODF(sub2ind(size(LODF), outages, (1:k)')) = -1;
+        end
+        write_matrix(fullfile(out_dir, [name '_lodf.csv']), rows(outages), rows, LODF);
+    end
+
     if ~wanted('dcpf')
         continue;
     end

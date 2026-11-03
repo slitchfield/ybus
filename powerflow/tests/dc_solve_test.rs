@@ -260,6 +260,56 @@ fn a_model_solves_new_injections() {
 }
 
 #[test]
+fn a_study_keeps_the_factorization_for_any_number_of_solves() {
+    // Cholesky (the triangle), LU (a series capacitor) and no solve (one bus)
+    let mut capacitor = triangle();
+    capacitor.2[1] = L(2, 3, -0.05, 0.0, 0.0, true);
+    let single = (vec![B(1, 3, 12.0, 3.0, 4.0)], vec![G(1, 0.0, true)], vec![]);
+    for (tables, solver) in [
+        (triangle(), DcSolver::Cholesky),
+        (capacitor, DcSolver::Lu),
+        (single, DcSolver::NoSolve),
+    ] {
+        let base = case(&tables);
+        let model = DcModel::new(&base).unwrap();
+        let study = model.study().unwrap();
+        assert_eq!(study.solver(), solver);
+        let mut changed = base.clone();
+        changed.bus[0].pd_mw += 25.0;
+        // Bit for bit DcModel::solve's results, which factor afresh each time
+        for injections in [&base, &changed, &base] {
+            assert_eq!(
+                study.solve(injections).unwrap(),
+                model.solve(injections).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_study_finds_a_singular_network_without_a_case() {
+    // As cancelling_reactances_are_a_singular_network, found when B′ is factored
+    let tables = (
+        vec![
+            B(1, 3, 0.0, 0.0, 0.0),
+            B(2, 1, 10.0, 0.0, 0.0),
+            B(3, 1, 10.0, 0.0, 0.0),
+        ],
+        vec![G(1, 0.0, true)],
+        vec![
+            L(1, 2, 0.1, 0.0, 0.0, true),
+            L(2, 3, 0.2, 0.0, 0.0, true),
+            L(2, 3, -0.2, 0.0, 0.0, true),
+        ],
+    );
+    let model = DcModel::new(&case(&tables)).unwrap();
+    assert_eq!(
+        model.study().unwrap_err(),
+        PowerflowError::SingularNetwork { bus_label: 3 }
+    );
+}
+
+#[test]
 fn a_model_rejects_a_different_case() {
     let model = DcModel::new(&case(&triangle())).unwrap();
     let mut other = triangle();

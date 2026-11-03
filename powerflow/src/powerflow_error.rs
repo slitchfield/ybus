@@ -130,6 +130,26 @@ pub enum PowerflowError {
         /// The reference bus whose generator reached its limit.
         bus_label: usize,
     },
+    /// A row index given to a study is past the end of its table.
+    RowOutOfRange {
+        /// The table: `"bus"` or `"branch"`.
+        table: &'static str,
+        /// The 0-based row given.
+        row: usize,
+        /// The table's number of rows.
+        len: usize,
+    },
+    /// A study asked for the outage of a branch that's already out of service.
+    BranchOutOfService {
+        /// The 0-based case branch row.
+        row: usize,
+    },
+    /// A PTDF slack can't be used: a slack bus that isn't connected, or weights of the wrong
+    /// length, summing to zero, or on a bus that isn't connected.
+    InvalidSlack {
+        /// What is wrong with it.
+        reason: &'static str,
+    },
     /// The AC power flow didn't meet its tolerance within its iteration limit.
     NoConvergence {
         /// How many Newton iterations were taken.
@@ -218,6 +238,19 @@ impl fmt::Display for PowerflowError {
                 "reference bus {bus_label} reached a reactive power limit in a system with several \
                  reference buses"
             ),
+            PowerflowError::RowOutOfRange { table, row, len } => {
+                write!(
+                    f,
+                    "{table} row {row} is past the end of the {len}-row table"
+                )
+            }
+            PowerflowError::BranchOutOfService { row } => {
+                write!(
+                    f,
+                    "branch row {row} is out of service, so it can't be taken out"
+                )
+            }
+            PowerflowError::InvalidSlack { reason } => write!(f, "invalid PTDF slack: {reason}"),
             PowerflowError::NoConvergence {
                 iterations,
                 mismatch_pu,
