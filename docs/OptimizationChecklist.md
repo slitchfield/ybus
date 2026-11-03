@@ -69,45 +69,58 @@ Facts checked when this roadmap was written (2026-11-03):
 
 ## Phase O1: OPF following MIPS
 
-- [ ] **Decide:**
-      - **Where the solver lives.** Proposed: a new workspace crate (for example
-        `interior_point`) for MIPS, and later the phase O3 solver, behind one problem interface;
-        `sparse_mat` stays linear algebra, and the OPF formulation goes in `powerflow`.
-      - **Which MATPOWER code is the reference.** MATPOWER 8.1 runs OPF through MP-Core by
-        default. Measure MP-Core against the legacy code first, and if they differ, take the
-        references from the legacy code this implementation follows, as for the power flow.
-      - **Which constraints come first.** Proposed: generator real and reactive limits, voltage
-        limits, branch flow limits and angle-difference limits; reactive capability curves,
-        dispatchable loads and user-defined extras deferred.
-      - **The acceptance bar.** MIPS stops at 1e-6, so 1e-9 agreement isn't realistic. Proposed:
-        MIPS's iteration counts on the committed cases, and the objective, dispatch, voltages
-        and multipliers within a tolerance set from measured MATPOWER-to-MATPOWER agreement
-        (for example MP-Core against legacy).
-- [ ] **OPF reference results.** `generate_reference.m` gains `dcopf` and `opf` runs, selectable
-      with `YBUS_REFERENCE_RUNS`. Each records the objective, each generator's `PG` and `QG`, each
-      bus's `VM` and `VA`, the multipliers (`LAM_P` and `LAM_Q`, the prices, and the flow,
-      generator and voltage limits' `MU_*`), the iteration count and success. Committed for
-      case14, case30 and case118, and generated locally for every case with costs.
-- [ ] **Generator costs.** Polynomial and piecewise-linear costs, and MATPOWER's conversion of a
-      piecewise-linear cost to linear constraints on a helper variable. Tested against
-      MATPOWER's `totcost`.
-- [ ] **MIPS in Rust.** The primal-dual iteration: the reduced KKT system solved with
-      `sparse_mat`'s LU (its analysis reused while the pattern stays fixed), the step lengths,
-      the termination tests and the multipliers. Tested on the problems of MATPOWER's MIPS test
-      suite (`mips/lib/t`), against its results.
-- [ ] **DC OPF.** The variables (bus angles, generator outputs, piecewise-linear helpers), the DC
-      power balance through `DcModel`'s Bbus, flow limits through Bf and angle-difference limits,
-      as a quadratic program for MIPS. Tested against `rundcopf`'s references.
-- [ ] **AC OPF.**
-      - **The constraints:** the power balance and its derivatives, reusing Ybus and the
-        `dS/dV` formulas of MATPOWER Technical Note 2; branch flow limits and their derivatives;
-        voltage and generator limits.
-      - **The Hessian:** the constraints' second derivatives.
-      - **The start:** MATPOWER's starting point.
-      - **Tests:** derivatives against finite differences, then results against `runopf`'s
-        references.
-- [ ] **The OPF survey.** Every case with costs, DC and AC, against MATPOWER: convergence,
-      iterations, objective, dispatch and prices, recorded in `docs/benchmarks/`. Then the docs.
+- [x] **Decide:** where the solver lives, which MATPOWER code is the reference, which constraints
+      come first, and the acceptance bar.
+      Decided (2026-11-03):
+      - **The solver** goes in a new workspace crate, `interior_point`: MIPS now, the phase O3
+        solver later, behind one problem interface. It depends on `sparse_mat`; `powerflow`,
+        which holds the OPF formulation, depends on it.
+      - **The reference is MATPOWER's default code.** Measured on case9, case14, case30, case118,
+        case300 and case2383wp, AC and DC: MP-Core and the legacy code take the same iteration
+        counts, with objectives within 6e-14 relative and voltages, dispatch and prices within
+        3.5e-9. The legacy rule applies only where they differ, so the survey rechecks every
+        case.
+      - **DC references force MIPS** (`opf.dc.solver = 'MIPS'`): MATPOWER's default hands a
+        linear program (costs whose quadratic terms are zero) to GLPK. Parity includes MIPS's
+        failures: forced onto MIPS, case2383wp's DC OPF doesn't converge in 150 iterations,
+        though GLPK solves it. The default solver's objective is kept as a cross-check.
+      - **The constraints:** everything the cases use. Of the 78, 73 have costs, 42 flow limits,
+        16 angle-difference limits, 8 dispatchable loads (so `makeAvl`'s constant power factor
+        is in, changed from the roadmap, which deferred dispatchable loads), 2 piecewise-linear
+        costs and 2 reactive-power costs. None has reactive capability curves, costs above
+        quadratic or user constraints, so those are refused with an error until needed.
+      - **The acceptance bar:** MATPOWER's iteration counts on the committed cases, and every
+        result within 1e-6, MIPS's stopping tolerance. Then the survey records how close the
+        results actually come, and the bar is tightened to what's measured, as the power flow's
+        1e-9 was.
+      - **Three PRs,** below.
+
+### PR 1: the `interior_point` crate and generator costs
+
+- [ ] The `interior_point` crate and its problem interface: an objective with gradient and
+      Hessian, nonlinear constraints with Jacobians, the Lagrangian's Hessian, linear constraints
+      and bounds; `MipsOptions` with MIPS's defaults; and a result with the multipliers.
+- [ ] MIPS, ported from `mips.m`, and `qps_mips`'s quadratic-program wrapper, tested on the
+      problems of `t_mips.m` and `t_qps_mips.m` with MATPOWER's tolerances and iteration counts.
+- [ ] Generator costs in `powerflow`: polynomial (with `opf_setup`'s handling) and
+      piecewise-linear (with `makeAy`'s constraints), reactive-power cost rows, and the total
+      cost.
+
+### PR 2: OPF references and the DC OPF
+
+- [ ] OPF reference results: `dcopf` (MIPS forced) and `opf` runs in `generate_reference.m`,
+      committed for case14, case30 and case118 and generated locally for every case with costs.
+- [ ] The DC OPF: `[Va, Pg, y]` with the power balance, flow limits, angle limits and the
+      piecewise-linear rows, solved through the quadratic-program wrapper, against `rundcopf`.
+
+### PR 3: the AC OPF and the survey
+
+- [ ] The AC OPF: `[Va, Vm, Pg, Qg, y]` with the power balance and flow limits (and their first
+      and second derivatives), angle limits, dispatchable loads and the piecewise-linear rows,
+      from `nlpopf_solver`'s starting point, against `runopf`.
+- [ ] The OPF survey over every case with costs, DC and AC, rechecking MP-Core against the
+      legacy code, recorded in `docs/benchmarks/`, with the bar tightened to the measured
+      agreement. Then the docs.
 
 ## Phase O2: accelerating the power flow
 
