@@ -232,27 +232,48 @@ impl DcSensitivity<'_> {
     /// bus table.
     pub fn ptdf_columns(&self, buses: &[usize]) -> Result<Vec<Vec<f64>>, PowerflowError> {
         let internal = self.internal_buses(buses)?;
-        // With a distributed slack, every column less H w, the flows its withdrawal causes
-        let shift = self.weights.as_ref().map(|weights| {
-            let injections: Vec<(usize, f64)> = weights.iter().copied().enumerate().collect();
-            self.flows(&self.solve(&injections))
-        });
-        let nl = self.model.topology.case_shape.2;
+        let shift = self.distributed_shift();
         Ok(internal
             .into_iter()
-            .map(|bus| {
-                let Some(bus) = bus else {
-                    return vec![0.0; nl];
-                };
-                let mut column = self.flows(&self.solve(&[(bus, 1.0)]));
-                if let Some(shift) = &shift {
-                    for (value, shift) in column.iter_mut().zip(shift) {
-                        *value -= shift;
-                    }
-                }
-                column
-            })
+            .map(|bus| self.ptdf_column(bus, shift.as_deref()))
             .collect())
+    }
+
+    /// [`DcSensitivity::ptdf_columns`] with the columns computed in parallel (feature `rayon`).
+    /// Each column is computed by one thread with exactly the sequential operations, so the
+    /// result is bit for bit `ptdf_columns`'s.
+    #[cfg(feature = "rayon")]
+    pub fn par_ptdf_columns(&self, buses: &[usize]) -> Result<Vec<Vec<f64>>, PowerflowError> {
+        use rayon::prelude::*;
+        let internal = self.internal_buses(buses)?;
+        let shift = self.distributed_shift();
+        Ok(internal
+            .into_par_iter()
+            .map(|bus| self.ptdf_column(bus, shift.as_deref()))
+            .collect())
+    }
+
+    /// With a distributed slack, the flows the weighted withdrawal causes, `H w`, which every
+    /// column loses.
+    fn distributed_shift(&self) -> Option<Vec<f64>> {
+        self.weights.as_ref().map(|weights| {
+            let injections: Vec<(usize, f64)> = weights.iter().copied().enumerate().collect();
+            self.flows(&self.solve(&injections))
+        })
+    }
+
+    /// One PTDF column, for an internal bus (`None`: not connected, zeros).
+    fn ptdf_column(&self, bus: Option<usize>, shift: Option<&[f64]>) -> Vec<f64> {
+        let Some(bus) = bus else {
+            return vec![0.0; self.model.topology.case_shape.2];
+        };
+        let mut column = self.flows(&self.solve(&[(bus, 1.0)]));
+        if let Some(shift) = shift {
+            for (value, shift) in column.iter_mut().zip(shift) {
+                *value -= shift;
+            }
+        }
+        column
     }
 
     /// PTDF columns for transfers from one case bus row to another: each is every branch's
@@ -300,25 +321,44 @@ impl DcSensitivity<'_> {
     /// for a row past the branch table, and `BranchOutOfService` for a branch not in service.
     pub fn lodf_columns(&self, outaged: &[usize]) -> Result<Vec<Vec<f64>>, PowerflowError> {
         let internal = self.internal_branches(outaged)?;
-        let nl = self.model.topology.case_shape.2;
         outaged
             .iter()
             .zip(internal)
-            .map(|(&row, branch)| {
-                let k = branch.ok_or(PowerflowError::BranchOutOfService { row })?;
-                if self.bridge[k] {
-                    return Ok(vec![f64::NAN; nl]);
-                }
-                let (from, to) = self.model.topology.ends[k];
-                let mut column = self.flows(&self.solve(&[(from, 1.0), (to, -1.0)]));
-                let remaining = 1.0 - column[row];
-                for value in &mut column {
-                    *value /= remaining;
-                }
-                column[row] = -1.0;
-                Ok(column)
-            })
+            .map(|(&row, branch)| self.lodf_column(row, branch))
             .collect()
+    }
+
+    /// [`DcSensitivity::lodf_columns`] with the columns computed in parallel (feature `rayon`),
+    /// bit for bit `lodf_columns`'s. An error is the first in `outaged`'s order, as there.
+    #[cfg(feature = "rayon")]
+    pub fn par_lodf_columns(&self, outaged: &[usize]) -> Result<Vec<Vec<f64>>, PowerflowError> {
+        use rayon::prelude::*;
+        let internal = self.internal_branches(outaged)?;
+        // Collecting a parallel iterator straight into a Result stops at some error, not
+        //   necessarily the first, so collect every result and take the first error in order
+        let results: Vec<Result<Vec<f64>, PowerflowError>> = outaged
+            .par_iter()
+            .zip(internal)
+            .map(|(&row, branch)| self.lodf_column(row, branch))
+            .collect();
+        results.into_iter().collect()
+    }
+
+    /// One LODF column, for the outage of case branch row `row` (internal branch `branch`,
+    /// `None` if it isn't in service).
+    fn lodf_column(&self, row: usize, branch: Option<usize>) -> Result<Vec<f64>, PowerflowError> {
+        let k = branch.ok_or(PowerflowError::BranchOutOfService { row })?;
+        if self.bridge[k] {
+            return Ok(vec![f64::NAN; self.model.topology.case_shape.2]);
+        }
+        let (from, to) = self.model.topology.ends[k];
+        let mut column = self.flows(&self.solve(&[(from, 1.0), (to, -1.0)]));
+        let remaining = 1.0 - column[row];
+        for value in &mut column {
+            *value /= remaining;
+        }
+        column[row] = -1.0;
+        Ok(column)
     }
 
     /// The whole LODF matrix, as `makeLODF` returns it (with bridges masked): one row per case

@@ -9,8 +9,14 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+# Parallel batches: outages, PTDF and LODF columns (DcStudy::par_solve_outages,
+#   DcSensitivity::par_ptdf_columns and par_lodf_columns)
+rayon = ["sparse_mat/rayon", "dep:rayon"]
+
 [dependencies]
 sparse_mat = { path = "../sparse_mat" }
+rayon = { version = "1", optional = true }
 
 [dev-dependencies]
 # The benchmarks in benches/, without plotting or parallel analysis, which keeps the dependency

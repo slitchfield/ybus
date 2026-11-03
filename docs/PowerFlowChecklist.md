@@ -836,8 +836,23 @@ The studies that solve many times against one factorization of B′. Planned wit
         3; refinement takes an LU solve's componentwise backward error from 4.5e-14 to 1.5e-16
         in two steps, and leaves the Hilbert matrix's (κ₁ ≈ 3.5e13), already below the unit
         roundoff, alone.
-- [ ] Parallel batch solves over a shared factorization (`rayon`). Check that `Lu` is
+- [x] Parallel batch solves over a shared factorization (`rayon`). Check that `Lu` is
       `Send + Sync` and that results are deterministic.
+      - **`sparse_mat`:** `Lu::par_solve_many` and `Cholesky::par_solve_many` (feature
+        `rayon`). Each right-hand side runs on one thread with its own scratch vector and
+        `solve`'s exact operations, so the results are bit for bit `solve_many`'s, real and
+        complex. `Lu`, `Cholesky` and their symbolic analyses are `Send + Sync` (a test checks
+        it at compile time).
+      - **`powerflow`:** a `rayon` feature (`sparse_mat/rayon` and `rayon`) with
+        `DcStudy::par_solve_outages`, `DcSensitivity::par_ptdf_columns` and
+        `par_lodf_columns`, each sharing its per-item code with the sequential method, so each
+        is bit for bit the same, errors included: `par_lodf_columns` collects every column's
+        result before taking the first error in order, since collecting a parallel iterator
+        into a `Result` stops at an arbitrary one.
+      - **`check.sh`** builds and tests `powerflow/rayon` on its own, as it does each feature.
+      - **Tests:** on case118, every single outage and 38 pairs, and every PTDF and LODF
+        column at a single and a distributed slack, bit for bit against the sequential methods
+        (`powerflow/tests/dc_parallel_test.rs`, `sparse_mat/tests/rayon_test.rs`).
 - [ ] The DC survey with B′'s condition and refined backward error, and the N-1 survey in
       parallel.
 
