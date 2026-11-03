@@ -23,7 +23,8 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
   and the whole of `powerflow`: the case model and MATPOWER reader, the DC power flow, and the AC
   power flow by Newton's method and fast-decoupled (Phases 1.5 and 4.5), with their tests,
   survey tools and benchmark records. [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md)
-  records each phase.
+  records each phase. Likewise the whole of `interior_point` (MIPS) and the optimal power flow
+  in `powerflow` (phase O1 of [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md)).
 - **Commits:** commits produced with AI assistance carry a `Co-Authored-By: Claude …` trailer.
   Some of them also contain code the maintainer wrote and the AI committed. The trailer marks
   AI involvement, not exclusive AI authorship.
@@ -66,7 +67,7 @@ Considerable care went into attributing the ideas this code is built on:
 - **No copied code:** the sparse matrix algorithms were implemented from published
   descriptions in papers and textbooks, and no source code from other libraries was knowingly
   copied or ported. The DC and AC power flows, the DC sensitivities (PTDF and LODF), and the
-  island and bridge listing, are the exception: they reproduce MATPOWER's results, and were written with reference to MATPOWER's
+  island and bridge listing, MIPS and the optimal power flow's generator costs, are the exception: they reproduce MATPOWER's results, and were written with reference to MATPOWER's
   BSD-licensed source code as well as
   its documentation and technical notes. They are reimplementations in Rust, not translations;
   the README's [References](README.md#references) section names the MATPOWER files consulted,
@@ -114,7 +115,8 @@ licensing follows current best practices for AI-assisted software development:
 - **Third-party test data:** MATPOWER's case files are not included; a script downloads them
   for testing. The repository does include power flow results that MATPOWER computed from three
   public test cases (DC, and AC by Newton's method and fast-decoupled), as expected values for
-  tests, and benchmark records that hold only case names and measurements. The results' sources
+  tests, MIPS's results on the test problems of MATPOWER's own MIPS tests
+  (`interior_point/tests/data/mips_reference.txt`, which contains no case data), and benchmark records that hold only case names and measurements. The results' sources
   are credited in
   [`powerflow/tests/data/matpower-reference/README.md`](powerflow/tests/data/matpower-reference/README.md).
 - **Compatible dependencies:** every dependency, including transitive and development ones, is

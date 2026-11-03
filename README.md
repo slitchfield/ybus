@@ -1,11 +1,13 @@
 # ybus
 
-Sparse linear algebra and power flow for Rust. A Cargo workspace with two crates:
+Sparse linear algebra, power flow and interior-point optimization for Rust. A Cargo workspace
+with three crates:
 
 | Crate | Status | Contents |
 |---|---|---|
 | [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM, COLAMD), sparse Cholesky and LU (complex too, with refactoring, sparse right-hand sides and transposed solves), iterative refinement and condition estimates, conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
-| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. It also lists a network's islands and bridges, computes PTDF and LODF from a kept factorization of B′, as MATPOWER does, and solves branch outages by rank-k updates of that factorization, matching a refactored solve, optionally in parallel (`rayon`). |
+| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. It also lists a network's islands and bridges, computes PTDF and LODF from a kept factorization of B′, as MATPOWER does, and solves branch outages by rank-k updates of that factorization, matching a refactored solve, optionally in parallel (`rayon`). Started: the optimal power flow, with the generator costs in the form it uses. |
+| [`interior_point`](interior_point/) | In progress | Interior-point solvers on top of `sparse_mat`. Done: MIPS, MATPOWER's primal-dual interior-point solver, reimplemented step for step from `mips.m`, with its quadratic-program wrapper. On the problems of MATPOWER's MIPS tests, it ends as MATPOWER does in the same number of iterations, and its results agree within 6.5e-14. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
 formulation is built around.
@@ -99,6 +101,11 @@ Manual defines them) and the Newton Jacobian's derivatives (what `dSbus_dV` comp
 Technical Note 2, cited below). Both power flows are reimplementations in Rust, not
 translations, and the module documentation names the MATPOWER functions each step follows.
 
+`interior_point`'s MIPS (`interior_point::mips`) was written the same way, with reference to
+the source of MATPOWER's `mips.m` and `qps_mips.m` (MIPS 1.5.2), so that its iterations can be
+checked against MATPOWER's one by one. The optimal power flow's generator costs
+(`powerflow::opf::cost`) follow `opf_setup`, `makeAy`, `pqcost`, `totcost` and `polycost`.
+
 MATPOWER 8.1 runs its newer MP-Core implementation by default, while `powerflow` follows the
 legacy functions named above. The committed DC and Newton reference results come from
 MP-Core; for Newton's method it agrees with the legacy code within 6.4e-12 on case118. Its
@@ -150,14 +157,15 @@ differently from the legacy `pfsoln` in 10 cases
 | `powerflow::case` (`Case::parse`) | The MATPOWER case format, as `caseformat.m` defines it | R. D. Zimmerman and C. E. Murillo-Sánchez, *MATPOWER User's Manual*, Version 8.1, 2025. [doi:10.5281/zenodo.15871661](https://doi.org/10.5281/zenodo.15871661) |
 | `powerflow::ac` (`AcModel::jacobian`, Newton's method) | The power flow equations' derivatives in complex matrix form, `dS/dVa` and `dS/dVm` | R. D. Zimmerman, "AC power flows, generalized OPF costs and their derivatives using complex matrix notation," MATPOWER Technical Note 2, February 2010. [doi:10.5281/zenodo.3237866](https://doi.org/10.5281/zenodo.3237866) |
 | `powerflow::ac` (`AcMethod::FastDecoupledXb`, `FastDecoupledBx`) | Fast-decoupled power flow, XB and BX, as MATPOWER's `fdpf` and `makeB` compute it | B. Stott and O. Alsaç, "Fast decoupled load flow," *IEEE Trans. Power App. Syst.* PAS-93(3):859–869, 1974. |
-| `powerflow::dc`, `powerflow::ac` and `powerflow::islands`, and the reference results their tests compare against | DC power flow as MATPOWER's `rundcpf` computes it, AC power flow as its `runpf` does, PTDF and LODF as its `makePTDF` and `makeLODF` do, and islands and bridges as its `find_islands` and `find_bridges` find them (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
+| `interior_point::mips` (`mips`, `qps_mips`) | MIPS, MATPOWER's primal-dual interior-point solver, as its `mips.m` and `qps_mips.m` implement it (see above) | H. Wang, C. E. Murillo-Sánchez, R. D. Zimmerman and R. J. Thomas, "On computational issues of market-based optimal power flow," *IEEE Trans. Power Syst.* 22(3):1185–1193, 2007. [doi:10.1109/TPWRS.2007.901301](https://doi.org/10.1109/TPWRS.2007.901301) |
+| `powerflow::dc`, `powerflow::ac`, `powerflow::islands` and `powerflow::opf`, and the reference results their tests compare against | DC power flow as MATPOWER's `rundcpf` computes it, AC power flow as its `runpf` does, PTDF and LODF as its `makePTDF` and `makeLODF` do, islands and bridges as its `find_islands` and `find_bridges` find them, and generator costs as its `opf_setup` and `makeAy` prepare them for the optimal power flow (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
 | | | R. D. Zimmerman and C. E. Murillo-Sánchez, MATPOWER, Version 8.1 [software], 2025. <https://matpower.org>, [doi:10.5281/zenodo.15871662](https://doi.org/10.5281/zenodo.15871662) |
 
 ### Planned (see [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md))
 
 | Planned work | Reference |
 |---|---|
-| Optimal power flow by MIPS, MATPOWER's primal-dual interior-point solver | H. Wang, C. E. Murillo-Sánchez, R. D. Zimmerman and R. J. Thomas, "On computational issues of market-based optimal power flow," *IEEE Trans. Power Syst.* 22(3):1185–1193, 2007. [doi:10.1109/TPWRS.2007.901301](https://doi.org/10.1109/TPWRS.2007.901301) |
+| Optimal power flow by MIPS (the solver is implemented; see above) | The MIPS and MATPOWER references above, and MATPOWER Technical Note 2 for the second derivatives |
 | A simpler primal-dual interior-point solver of our own | J. Nocedal and S. J. Wright, *Numerical Optimization*, Springer, 2006. [doi:10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5) |
 | | S. Mehrotra, "On the implementation of a primal-dual interior point method," *SIAM J. Optim.* 2(4):575–601, 1992. [doi:10.1137/0802028](https://doi.org/10.1137/0802028) |
 
