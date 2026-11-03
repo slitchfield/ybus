@@ -103,6 +103,12 @@ pub enum SparseError {
     /// An assembly map was used with a matrix whose shape or stored count differs from the
     /// matrix it was built for.
     PatternMismatch,
+    /// The ordering doesn't apply to this operation, such as a column-only ordering for a
+    /// symmetric factorization.
+    UnsupportedOrdering {
+        /// Why it doesn't apply.
+        reason: &'static str,
+    },
 }
 
 /// Formats a short, lowercase description of the error.
@@ -159,6 +165,9 @@ impl fmt::Display for SparseError {
             }
             SparseError::PatternMismatch => {
                 write!(f, "the assembly map was built for a different pattern")
+            }
+            SparseError::UnsupportedOrdering { reason } => {
+                write!(f, "unsupported ordering: {reason}")
             }
         }
     }

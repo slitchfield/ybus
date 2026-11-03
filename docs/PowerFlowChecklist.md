@@ -940,8 +940,25 @@ PRs.
 
 ### PR B: COLAMD
 
-- [ ] `Ordering::Colamd` for LU, with plain threshold partial pivoting under it, and
+- [x] `Ordering::Colamd` for LU, with plain threshold partial pivoting under it, and
       `SparseError::UnsupportedOrdering` for Cholesky.
+      - **`compressed_matrix/colamd.rs`,** written from the paper: rows as elements, merged into
+        a pivot row when a column is eliminated; approximate scores from `|r \ p|` counts;
+        aggressive absorption; supercolumns found deterministically; dense rows and columns
+        (over `max(16, 10√n)` entries, this crate's AMD rule rather than COLAMD's own defaults)
+        set aside, with dense and empty columns ordered last.
+      - **`ordering(Colamd)`** returns the column permutation, rectangular matrices included.
+        `analyze_lu(Colamd)` records that the diagonal isn't to be preferred, so each pivot is
+        its column's largest; every other ordering keeps the diagonal preference, bit for bit.
+        `analyze_cholesky(Colamd)` is `UnsupportedOrdering`.
+      - **Tests** (`sparse_mat/tests/colamd_test.rs`): valid permutations of square, tall and wide
+        patterns, with empty and dense rows and columns; LU solves, real and complex, and a
+        structurally singular matrix reported. On 8 structurally unsymmetric matrices, the
+        Cholesky factor of `AᵀA` under COLAMD holds 200,181 entries against 199,648 under AMD
+        on the explicitly formed `AᵀA` (+0.3%). With the rows shuffled, COLAMD's LU fills 8.7%
+        less than AMD-on-`A+Aᵀ`'s (212,442 against 232,698) and barely changes from the rows in
+        order; with the rows in order and their dominant diagonal intact, AMD fills less
+        (130,198 against 213,181).
 - [ ] Benchmark COLAMD against AMD on power-flow matrices and synthetic unsymmetric ones.
 
 ## Housekeeping (carried over from the PR #1 review)
