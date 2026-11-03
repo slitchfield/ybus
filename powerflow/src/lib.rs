@@ -5,6 +5,8 @@
 //! - [`dc`]: the DC power flow ([`dc::dc_power_flow`]), as MATPOWER's `rundcpf` computes it.
 //! - [`ac`]: the AC power flow by Newton's method ([`ac::ac_power_flow`]), as MATPOWER's
 //!   `runpf` computes it with its default options.
+//! - [`opf`]: the optimal power flow, as MATPOWER's `runopf` computes it with MIPS; so far,
+//!   the generator costs ([`opf::cost`]).
 //! - [`islands`]: a network's islands and bridges ([`islands::find_islands`],
 //!   [`islands::find_bridges`]), as MATPOWER's `find_islands` and `find_bridges` define them.
 //!
@@ -15,5 +17,6 @@ pub mod ac;
 pub mod case;
 pub mod dc;
 pub mod islands;
+pub mod opf;
 pub mod powerflow_error;
 mod topology;

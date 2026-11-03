@@ -124,9 +124,23 @@ Facts checked when this roadmap was written (2026-11-03):
         objective and multipliers agree within 6.5e-14 relative (the bar is 1e-12), except a
         failed run's diverged multipliers (about 3e24), within 3.3e-7. Each problem also meets
         `t_mips`'s known answers to its precision.
-- [ ] Generator costs in `powerflow`: polynomial (with `opf_setup`'s handling) and
+- [x] Generator costs in `powerflow`: polynomial (with `opf_setup`'s handling) and
       piecewise-linear (with `makeAy`'s constraints), reactive-power cost rows, and the total
       cost.
+      - **`powerflow::opf::cost`:** `GenCost::evaluate` and `total_cost`, as `totcost` and
+        `polycost` compute them (piecewise linear costs extended along their end segments);
+        `OpfCosts`, for the in-service generators: one-segment piecewise linear costs made
+        linear and zero leading coefficients dropped, as `opf_setup` does, then the per-unit
+        quadratic terms (`Qpg`, `cpg`, `kpg`, and the reactive `Qqg`, `cqg`, `kqg`) and
+        `makeAy`'s segment constraints, real power costs first. A DC OPF leaves out the
+        reactive costs. Polynomials above quadratic, and piecewise linear costs with fewer
+        than two points or two at the same output, are refused (`UnsupportedCost`).
+      - **Tests:** hand-computed fixtures, and the OPF form against the direct values at each
+        case's dispatch, within 1e-12, on case14, case30, case118, case30pwl, case_RTS_GMLC,
+        case9Q and case30Q. One cost is non-convex: case_RTS_GMLC's `gencost` row 73
+        (0-based), from rounded data. Its helper variable (the largest of its segment lines)
+        comes out 9.1e-5 $/hr above the interpolated cost, as it would in MATPOWER's
+        formulation.
 
 ### PR 2: OPF references and the DC OPF
 
