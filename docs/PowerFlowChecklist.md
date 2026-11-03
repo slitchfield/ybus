@@ -809,7 +809,13 @@ The studies that solve many times against one factorization of B′. Planned wit
         the same error when islanding. On case14, case30 and case118, every single outage and
         fixed pairs and triples (521 solved, 56 islanding in both) agree within 9.5e-15 relative.
         On case30, every non-bridge single outage agrees with the LODF within 1e-9 MW.
-- [ ] A survey of every case's single outages, recorded in `docs/benchmarks/`.
+- [x] A survey of every case's single outages, recorded in `docs/benchmarks/`.
+      `scripts/benchmark-n1.sh` and the `n1_survey` example, recorded in
+      `docs/benchmarks/dc-contingency-2026-11-02.md`: all 380,629 single outages of the 78 cases
+      (275,897 solved, 104,732 islanding), 48,945 compared with refactoring (every outage up to
+      3,000 buses, about 300 per case above) with no mismatch and within 4.9e-12 relative. The
+      median speedup over refactoring is 10.1× (18.9× from 1,000 buses), 22.5× on
+      case_SyntheticUSA, whose 104,121 outages take 11.3 minutes. Peak memory 456 MiB.
 
 ### PR 4: accuracy and parallel batches
 
