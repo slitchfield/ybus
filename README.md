@@ -11,7 +11,9 @@ The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every 
 formulation is built around.
 
 See [`sparse_mat/README.md`](sparse_mat/README.md) for the matrix library's quick start and
-API overview, and [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for the roadmap.
+API overview, [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for the completed power
+flow roadmap, and [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md) for the next
+one: optimal power flow, interior-point solvers and acceleration.
 
 ## Development
 
@@ -48,8 +50,11 @@ API overview, and [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for
 
 ## Documentation
 
-- [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) is the roadmap toward DC/AC power
-  flow.
+- [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) is the completed roadmap toward
+  DC/AC power flow.
+- [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md) is the roadmap that follows:
+  optimal power flow by a reimplementation of MATPOWER's MIPS, a simpler interior-point solver of
+  our own, and accelerating the power flow and both solvers.
 - [`docs/BaseFunctionalityChecklist.md`](docs/BaseFunctionalityChecklist.md) is the completed
   checklist of `sparse_mat`'s core functionality.
 - [`docs/benchmarks/`](docs/benchmarks/) records performance baselines, such as the DC power
@@ -148,10 +153,13 @@ differently from the legacy `pfsoln` in 10 cases
 | `powerflow::dc`, `powerflow::ac` and `powerflow::islands`, and the reference results their tests compare against | DC power flow as MATPOWER's `rundcpf` computes it, AC power flow as its `runpf` does, PTDF and LODF as its `makePTDF` and `makeLODF` do, and islands and bridges as its `find_islands` and `find_bridges` find them (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
 | | | R. D. Zimmerman and C. E. Murillo-Sánchez, MATPOWER, Version 8.1 [software], 2025. <https://matpower.org>, [doi:10.5281/zenodo.15871662](https://doi.org/10.5281/zenodo.15871662) |
 
-### Planned (see [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md))
+### Planned (see [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md))
 
 | Planned work | Reference |
 |---|---|
+| Optimal power flow by MIPS, MATPOWER's primal-dual interior-point solver | H. Wang, C. E. Murillo-Sánchez, R. D. Zimmerman and R. J. Thomas, "On computational issues of market-based optimal power flow," *IEEE Trans. Power Syst.* 22(3):1185–1193, 2007. [doi:10.1109/TPWRS.2007.901301](https://doi.org/10.1109/TPWRS.2007.901301) |
+| A simpler primal-dual interior-point solver of our own | J. Nocedal and S. J. Wright, *Numerical Optimization*, Springer, 2006. [doi:10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5) |
+| | S. Mehrotra, "On the implementation of a primal-dual interior point method," *SIAM J. Optim.* 2(4):575–601, 1992. [doi:10.1137/0802028](https://doi.org/10.1137/0802028) |
 
 ### Licenses of related software
 
