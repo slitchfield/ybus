@@ -3,7 +3,9 @@
 //! `scripts/benchmark-n1.sh` runs. The script runs this once per case, each in its own process,
 //! so that it can limit time and memory and record peak memory.
 //!
-//! Usage: `n1_survey <case.m>`, or `n1_survey --header`.
+//! Usage: `n1_survey [--parallel] <case.m>`, or `n1_survey --header`. `--parallel` solves the
+//! outages with `DcStudy::par_solve_outages`, on rayon's default thread pool, and needs the
+//! `rayon` feature.
 //!
 //! Prints one CSV line, with the columns in `HEADER`. The outages run in chunks, so the results
 //! of a case's thousands of outages are never all held at once; the whole pass is timed by its
@@ -18,7 +20,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use powerflow::case::Case;
-use powerflow::dc::{dc_power_flow, DcModel, DcSolution, DcSolver};
+use powerflow::dc::{dc_power_flow, DcModel, DcSolution, DcSolver, DcStudy};
 use powerflow::powerflow_error::PowerflowError;
 
 /// `study_ms` is factoring B′ once. `outages` counts the in-service branches, each taken out
@@ -29,10 +31,12 @@ use powerflow::powerflow_error::PowerflowError;
 /// `worst_relative_deviation` is the largest difference in angles, flows or generator outputs
 /// relative to the largest magnitude of that quantity in the refactored result.
 /// `refactor_ms_per_outage` is the median time to build and solve a new model, and `speedup`
-/// its ratio to `woodbury_us_per_outage`.
+/// its ratio to `woodbury_us_per_outage`. `threads` is how many threads solved the outages: 1,
+/// or with `--parallel`, the size of rayon's pool.
 const HEADER: &str = "case,buses,branches,connected_buses,in_service_branches,solver,study_ms,\
                       outages,solved,islanding,woodbury_ms,woodbury_runs,woodbury_us_per_outage,\
-                      compared,mismatches,worst_relative_deviation,refactor_ms_per_outage,speedup";
+                      compared,mismatches,worst_relative_deviation,refactor_ms_per_outage,speedup,\
+                      threads";
 
 /// How long to keep repeating the pass for its median time
 const BUDGET: Duration = Duration::from_secs(1);
@@ -46,13 +50,21 @@ const FULL_COMPARISON_BUSES: usize = 3000;
 const SAMPLE: usize = 300;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let mut args: Vec<String> = env::args().skip(1).collect();
+    let parallel = args.first().is_some_and(|flag| flag == "--parallel");
+    if parallel {
+        if cfg!(not(feature = "rayon")) {
+            eprintln!("--parallel needs the rayon feature");
+            return ExitCode::from(2);
+        }
+        args.remove(0);
+    }
     match args.as_slice() {
         [flag] if flag == "--header" => {
             println!("{HEADER}");
             ExitCode::SUCCESS
         }
-        [case] => match survey(Path::new(case)) {
+        [case] => match survey(Path::new(case), parallel) {
             Ok(line) => {
                 println!("{line}");
                 ExitCode::SUCCESS
@@ -63,13 +75,13 @@ fn main() -> ExitCode {
             }
         },
         _ => {
-            eprintln!("usage: n1_survey <case.m> | --header");
+            eprintln!("usage: n1_survey [--parallel] <case.m> | --header");
             ExitCode::from(2)
         }
     }
 }
 
-fn survey(path: &Path) -> Result<String, String> {
+fn survey(path: &Path, parallel: bool) -> Result<String, String> {
     let name = path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -85,10 +97,12 @@ fn survey(path: &Path) -> Result<String, String> {
         let (mut solved, mut islanding) = (0, 0);
         for chunk in rows.chunks(CHUNK) {
             let sets: Vec<Vec<usize>> = chunk.iter().map(|&row| vec![row]).collect();
-            for result in study
-                .solve_outages(&case, &sets)
-                .map_err(|err| err.to_string())?
-            {
+            let results = if parallel {
+                solve_in_parallel(&study, &case, &sets)
+            } else {
+                study.solve_outages(&case, &sets)
+            };
+            for result in results.map_err(|err| err.to_string())? {
                 match result {
                     Ok(_) => solved += 1,
                     Err(PowerflowError::IslandWithoutReference { .. }) => islanding += 1,
@@ -133,7 +147,7 @@ fn survey(path: &Path) -> Result<String, String> {
     let speedup = refactor.as_secs_f64() * 1e6 / per_outage_us;
     Ok(format!(
         "{name},{},{},{},{},{},{:.3},{},{solved},{islanding},{:.3},{woodbury_runs},{:.3},\
-         {compared},{mismatches},{worst:e},{:.3},{:.1}",
+         {compared},{mismatches},{worst:e},{:.3},{:.1},{}",
         case.bus.len(),
         case.branch.len(),
         model.bus_rows().len(),
@@ -145,7 +159,30 @@ fn survey(path: &Path) -> Result<String, String> {
         per_outage_us,
         milliseconds(refactor),
         speedup,
+        if parallel { threads() } else { 1 },
     ))
+}
+
+type Outcomes = Result<Vec<Result<DcSolution, PowerflowError>>, PowerflowError>;
+
+#[cfg(feature = "rayon")]
+fn solve_in_parallel(study: &DcStudy, case: &Case, sets: &[Vec<usize>]) -> Outcomes {
+    study.par_solve_outages(case, sets)
+}
+
+#[cfg(not(feature = "rayon"))]
+fn solve_in_parallel(_: &DcStudy, _: &Case, _: &[Vec<usize>]) -> Outcomes {
+    unreachable!("main refuses --parallel without the rayon feature")
+}
+
+#[cfg(feature = "rayon")]
+fn threads() -> usize {
+    rayon::current_num_threads()
+}
+
+#[cfg(not(feature = "rayon"))]
+fn threads() -> usize {
+    1
 }
 
 /// The largest difference between two solutions, relative to the largest magnitude of each

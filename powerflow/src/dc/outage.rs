@@ -51,6 +51,37 @@ impl DcStudy<'_> {
         case: &Case,
         outages: &[Vec<usize>],
     ) -> Result<Vec<Result<DcSolution, PowerflowError>>, PowerflowError> {
+        let (pbus, theta, base, position) = self.outage_base(case)?;
+        Ok(outages
+            .iter()
+            .map(|rows| self.outage(case, rows, &pbus, &theta, &base, &position))
+            .collect())
+    }
+
+    /// [`DcStudy::solve_outages`] with the outages solved in parallel (feature `rayon`), after
+    /// one base solve. Each outage is solved by one thread with exactly the sequential
+    /// operations, so the results are bit for bit `solve_outages`'s, in the same order.
+    #[cfg(feature = "rayon")]
+    pub fn par_solve_outages(
+        &self,
+        case: &Case,
+        outages: &[Vec<usize>],
+    ) -> Result<Vec<Result<DcSolution, PowerflowError>>, PowerflowError> {
+        use rayon::prelude::*;
+        let (pbus, theta, base, position) = self.outage_base(case)?;
+        Ok(outages
+            .par_iter()
+            .map(|rows| self.outage(case, rows, &pbus, &theta, &base, &position))
+            .collect())
+    }
+
+    /// The base solve the outages share: the scheduled injections, the base angles (radians),
+    /// the base unknowns, and each internal bus's position among the unknowns.
+    #[allow(clippy::type_complexity)]
+    fn outage_base(
+        &self,
+        case: &Case,
+    ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<Option<usize>>), PowerflowError> {
         let model = self.model;
         model.topology.check_case(case)?;
         let (pbus, mut theta) = self.scheduled(case);
@@ -63,15 +94,11 @@ impl DcStudy<'_> {
             }
             None => vec![],
         };
-        let nb = model.topology.bus_rows.len();
-        let mut position = vec![None; nb];
+        let mut position = vec![None; model.topology.bus_rows.len()];
         for (index, &bus) in self.unknown.iter().enumerate() {
             position[bus] = Some(index);
         }
-        Ok(outages
-            .iter()
-            .map(|rows| self.outage(case, rows, &pbus, &theta, &base, &position))
-            .collect())
+        Ok((pbus, theta, base, position))
     }
 
     /// One outage, given the base solve: the scheduled injections, the base angles (radians)

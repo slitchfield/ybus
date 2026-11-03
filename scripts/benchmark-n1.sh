@@ -15,6 +15,9 @@
 #   YBUS_BENCH_TIMEOUT  the time limit per case, in seconds (default 3600)
 #   YBUS_BENCH_MEMORY   the address-space limit per case, in GiB (default 10)
 #   YBUS_BENCH_CASES    the cases to survey, separated by spaces (default: every case)
+#   YBUS_BENCH_PARALLEL 1 to solve the outages in parallel (DcStudy::par_solve_outages, with
+#                       the rayon feature, on rayon's default pool; RAYON_NUM_THREADS sets its
+#                       size); default 0
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,6 +25,11 @@ NORMALIZED="$("${ROOT}/scripts/normalize-cases.sh")"
 OUT="${1:-${ROOT}/target/n1-survey.csv}"
 TIMEOUT="${YBUS_BENCH_TIMEOUT:-3600}"
 MEMORY_GIB="${YBUS_BENCH_MEMORY:-10}"
+case "${YBUS_BENCH_PARALLEL:-0}" in
+    0) FEATURES=(); FLAGS=() ;;
+    1) FEATURES=(--features rayon); FLAGS=(--parallel) ;;
+    *) echo "error: YBUS_BENCH_PARALLEL must be 0 or 1" >&2; exit 2 ;;
+esac
 
 if [[ ! -x /usr/bin/time ]]; then
     echo "error: the survey needs GNU time at /usr/bin/time (for example: apt install time)" >&2
@@ -35,7 +43,7 @@ else
 fi
 
 cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p powerflow \
-    --example n1_survey
+    --example n1_survey "${FEATURES[@]}"
 SURVEY="${ROOT}/target/release/examples/n1_survey"
 
 HEADER="$("${SURVEY}" --header)"
@@ -49,7 +57,7 @@ for name in "${CASES[@]}"; do
     # exec replaces the shell, so the limits and GNU time's measurement apply to the survey
     if line="$(/usr/bin/time -f %M -o "${LOG}/rss" timeout "${TIMEOUT}" \
         bash -c 'ulimit -v "$1" && exec "${@:2}"' _ "$((MEMORY_GIB * 1024 * 1024))" \
-        "${SURVEY}" "${NORMALIZED}/${name}.m" \
+        "${SURVEY}" "${FLAGS[@]}" "${NORMALIZED}/${name}.m" \
         2> "${LOG}/err")"; then
         status=ok
     else

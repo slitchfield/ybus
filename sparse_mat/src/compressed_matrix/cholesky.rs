@@ -478,6 +478,33 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
     }
 }
 
+#[cfg(feature = "rayon")]
+impl<T: Scalar + ComplexFloat + Send + Sync> Cholesky<T> {
+    /// [`Cholesky::solve_many`] with the right-hand sides solved in parallel (feature `rayon`).
+    /// Each is solved by one thread, with its own scratch vector and exactly the operations
+    /// `solve` uses, so the results are bit for bit `solve_many`'s, in the same order. Returns
+    /// `SparseError::ShapeMismatch` naming the first right-hand side whose length isn't the
+    /// number of rows of `A`, before solving any.
+    pub fn par_solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
+        use rayon::prelude::*;
+        for b in rhs {
+            self.check_rhs(b.len())?;
+        }
+        let n = self.perm.len();
+        Ok(rhs
+            .par_iter()
+            .map_init(
+                || Vec::with_capacity(n),
+                |scratch, b| {
+                    let mut x = b.clone();
+                    self.substitute(&mut x, scratch);
+                    x
+                },
+            )
+            .collect())
+    }
+}
+
 impl<T: Scalar + ComplexFloat> CsrMatrix<T> {
     /// Factors a symmetric (for a complex element type, Hermitian) positive definite matrix as
     /// `P A Pᵀ = L Lᴴ`, ordered by approximate minimum degree: `analyze_cholesky(Ordering::Amd)`

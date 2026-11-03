@@ -819,11 +819,55 @@ The studies that solve many times against one factorization of B′. Planned wit
 
 ### PR 4: accuracy and parallel batches
 
-- [ ] Iterative refinement and a condition estimate (with `Lu::solve_transpose`).
-- [ ] Parallel batch solves over a shared factorization (`rayon`). Check that `Lu` is
+- [x] Iterative refinement and a condition estimate (with `Lu::solve_transpose`).
+      - **`Lu::solve_transpose`:** `Aᵀ x = b` from the same factors (`Aᵀ = Q Uᵀ Lᵀ P`), the plain
+        transpose for complex matrices.
+      - **`solve_refined(a, b, max_steps)`** on `Lu` and `Cholesky`, returning `Refined { x,
+        steps, backward_error }`: fixed-precision refinement (Skeel 1980), keeping the iterate
+        with the smallest componentwise backward error (Oettli and Prager 1964), and stopping at
+        the unit roundoff, when it stops halving, or after `max_steps`.
+      - **`inverse_norm_1_estimate` and `condition_estimate_1`** on `Lu<f64>` and
+        `Cholesky<f64>`: Hager's estimator with Higham's refinements, as LAPACK's `xLACON`,
+        keeping the largest of its lower bounds. Real matrices only, for now: the complex
+        version needs `Aᴴ`, which nothing here uses yet.
+      - **Tests** (`sparse_mat/tests/accuracy_test.rs`): `solve_transpose` against products with
+        `Aᵀ`, real and complex; the estimate never exceeds the exact ‖A⁻¹‖₁ (dense inverse) and
+        equals it on 118 of 120 random SPD and unsymmetric matrices, the rest within a factor of
+        3; refinement takes an LU solve's componentwise backward error from 4.5e-14 to 1.5e-16
+        in two steps, and leaves the Hilbert matrix's (κ₁ ≈ 3.5e13), already below the unit
+        roundoff, alone.
+- [x] Parallel batch solves over a shared factorization (`rayon`). Check that `Lu` is
       `Send + Sync` and that results are deterministic.
-- [ ] The DC survey with B′'s condition and refined backward error, and the N-1 survey in
+      - **`sparse_mat`:** `Lu::par_solve_many` and `Cholesky::par_solve_many` (feature
+        `rayon`). Each right-hand side runs on one thread with its own scratch vector and
+        `solve`'s exact operations, so the results are bit for bit `solve_many`'s, real and
+        complex. `Lu`, `Cholesky` and their symbolic analyses are `Send + Sync` (a test checks
+        it at compile time).
+      - **`powerflow`:** a `rayon` feature (`sparse_mat/rayon` and `rayon`) with
+        `DcStudy::par_solve_outages`, `DcSensitivity::par_ptdf_columns` and
+        `par_lodf_columns`, each sharing its per-item code with the sequential method, so each
+        is bit for bit the same, errors included: `par_lodf_columns` collects every column's
+        result before taking the first error in order, since collecting a parallel iterator
+        into a `Result` stops at an arbitrary one.
+      - **`check.sh`** builds and tests `powerflow/rayon` on its own, as it does each feature.
+      - **Tests:** on case118, every single outage and 38 pairs, and every PTDF and LODF
+        column at a single and a distributed slack, bit for bit against the sequential methods
+        (`powerflow/tests/dc_parallel_test.rs`, `sparse_mat/tests/rayon_test.rs`).
+- [x] The DC survey with B′'s condition and refined backward error, and the N-1 survey in
       parallel.
+      - **DC** (`docs/benchmarks/dc-power-flow-condition-2026-11-02.md`): `dc_survey` gains
+        `condition_estimate`, `refined_backward_error` and `refinement_steps`; every earlier
+        column matches the AMD and LU records on all 78 cases. κ₁ runs from 7.8 to 5.8e8
+        (median 1.5e4; the LU cases' median 4.8e6). Its rank correlation with the backward
+        error is −0.08: condition doesn't explain it, as a backward-stable solve implies, and
+        no case has a gap left (worst 0.78 ε). Refinement takes 0–2 corrections and leaves every
+        case within 0.75 ε, so `DcModel::solve` doesn't use it. `tests/common/accuracy.rs`
+        exposes the DC system it builds (`system`), with `backward_error` unchanged.
+      - **N-1 in parallel** (`docs/benchmarks/dc-contingency-parallel-2026-11-02.md`):
+        `n1_survey --parallel` and `YBUS_BENCH_PARALLEL=1`. The same results as the serial
+        survey on all 78 cases, in 3.5 minutes instead of 21.5, with a median speedup of 11.0×
+        from 1,000 buses on 28 threads; 5.8–5.9× on the two largest cases, where the survey's
+        chunks repeat the serial base solve. Small cases are slower in parallel.
 
 ## Housekeeping (carried over from the PR #1 review)
 

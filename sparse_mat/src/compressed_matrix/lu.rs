@@ -150,6 +150,33 @@ impl SymbolicLu {
     }
 }
 
+#[cfg(feature = "rayon")]
+impl<T: Scalar + ComplexFloat + Send + Sync> Lu<T> {
+    /// [`Lu::solve_many`] with the right-hand sides solved in parallel (feature `rayon`).
+    /// Each is solved by one thread, with its own scratch vector and exactly the operations
+    /// `solve` uses, so the results are bit for bit `solve_many`'s, in the same order. Returns
+    /// `SparseError::ShapeMismatch` naming the first right-hand side whose length isn't the
+    /// number of rows of `A`, before solving any.
+    pub fn par_solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
+        use rayon::prelude::*;
+        for b in rhs {
+            self.check_rhs(b.len())?;
+        }
+        let n = self.row_perm.len();
+        Ok(rhs
+            .par_iter()
+            .map_init(
+                || Vec::with_capacity(n),
+                |scratch, b| {
+                    let mut x = b.clone();
+                    self.substitute(&mut x, scratch);
+                    x
+                },
+            )
+            .collect())
+    }
+}
+
 /// The threshold as `T`'s real type, checked to be in `(0, 1]`.
 fn threshold<T: ComplexFloat>(options: LuOptions) -> T::Real {
     let tau = options.pivot_threshold;
@@ -408,6 +435,39 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
                 x
             })
             .collect())
+    }
+
+    /// Solves `Aᵀ x = b` (the plain transpose, not conjugated, for a complex matrix) with the same
+    /// factors: `Aᵀ = Q Uᵀ Lᵀ P`, so it substitutes forward with `Uᵀ` and back with `Lᵀ`,
+    /// reading their stored columns as rows. Returns `SparseError::ShapeMismatch` unless `b`
+    /// has one entry per row of `A`.
+    pub fn solve_transpose(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
+        self.check_rhs(b.len())?;
+        let n = self.row_perm.len();
+        // Uᵀ y = Qᵀ b: column j of U is row j of Uᵀ, its diagonal stored last
+        let mut y: Vec<T> = self.col_perm.iter().map(|&col| b[col]).collect();
+        for j in 0..n {
+            let diagonal = self.u.ptr[j + 1] - 1;
+            let mut remainder = y[j];
+            for p in self.u.ptr[j]..diagonal {
+                remainder = remainder - self.u.data[p] * y[self.u.idx[p]];
+            }
+            y[j] = remainder / self.u.data[diagonal];
+        }
+        // Lᵀ z = y: column j of L is row j of Lᵀ, its unit diagonal stored first
+        for j in (0..n).rev() {
+            let mut remainder = y[j];
+            for p in self.l.ptr[j] + 1..self.l.ptr[j + 1] {
+                remainder = remainder - self.l.data[p] * y[self.l.idx[p]];
+            }
+            y[j] = remainder;
+        }
+        // P x = z
+        let mut x = vec![T::zero(); n];
+        for (&row, &value) in self.row_perm.iter().zip(&y) {
+            x[row] = value;
+        }
+        Ok(x)
     }
 
     /// Solves `L y = P b` for a sparse `b`, touching only the part of `L` the solve needs: the

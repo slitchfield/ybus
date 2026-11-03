@@ -105,3 +105,97 @@ fn par_products_on_empty_matrices() {
     );
     assert_eq!(a.par_matmul(&a).unwrap().shape(), (0, 0));
 }
+
+/// The factor types can be shared across threads, so one factorization serves parallel solves
+#[test]
+fn factorizations_are_send_and_sync() {
+    fn send_sync<T: Send + Sync>() {}
+    send_sync::<sparse_mat::compressed_matrix::Lu<f64>>();
+    send_sync::<sparse_mat::compressed_matrix::Lu<sparse_mat::Complex<f64>>>();
+    send_sync::<sparse_mat::compressed_matrix::Cholesky<f64>>();
+    send_sync::<sparse_mat::compressed_matrix::Cholesky<sparse_mat::Complex<f64>>>();
+    send_sync::<sparse_mat::compressed_matrix::SymbolicLu>();
+    send_sync::<sparse_mat::compressed_matrix::SymbolicCholesky>();
+}
+
+/// Bit for bit, including the sign of zero
+fn same_bits(a: &[Vec<f64>], b: &[Vec<f64>]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| p.to_bits() == q.to_bits())
+        })
+}
+
+#[test]
+fn par_solve_many_matches_solve_many_bit_for_bit() {
+    // An SPD matrix for Cholesky (a diagonally dominant symmetrization), its LU, and an
+    //   unsymmetric LU with pivoting
+    let n = 300;
+    let base = pseudo_random(n, n, 41, 2);
+    let mut triplets = vec![];
+    for row in 0..n {
+        let (cols, values) = base.outer(row).unwrap();
+        for (&col, &value) in cols.iter().zip(values) {
+            triplets.extend([(row, col, value), (col, row, value)]);
+        }
+        triplets.push((row, row, 40.0 + row as f64 / n as f64));
+    }
+    let spd = CsrMatrix::from_triplets(n, n, triplets).unwrap();
+    let rhs: Vec<Vec<f64>> = (0..64)
+        .map(|k| {
+            (0..n)
+                .map(|i| ((i * 31 + k * 17) % 23) as f64 - 11.0)
+                .collect()
+        })
+        .collect();
+
+    let cholesky = spd.cholesky().unwrap();
+    assert!(same_bits(
+        &cholesky.par_solve_many(&rhs).unwrap(),
+        &cholesky.solve_many(&rhs).unwrap()
+    ));
+    let lu = spd.to_csc().lu().unwrap();
+    assert!(same_bits(
+        &lu.par_solve_many(&rhs).unwrap(),
+        &lu.solve_many(&rhs).unwrap()
+    ));
+    let mut triplets: Vec<(usize, usize, f64)> = pseudo_random(n, n, 43, 2).iter().collect();
+    triplets.extend((0..n).map(|i| (i, i, 0.5)));
+    let unsymmetric = CscMatrix::from_triplets(n, n, triplets).unwrap();
+    let lu = unsymmetric.lu().unwrap();
+    assert!(same_bits(
+        &lu.par_solve_many(&rhs).unwrap(),
+        &lu.solve_many(&rhs).unwrap()
+    ));
+
+    // Complex
+    let complex: CscMatrix<sparse_mat::Complex<f64>> =
+        unsymmetric.map(|v| sparse_mat::Complex::new(v, 0.25 * v));
+    let lu = complex.lu().unwrap();
+    let complex_rhs: Vec<Vec<sparse_mat::Complex<f64>>> = rhs
+        .iter()
+        .map(|b| b.iter().map(|&v| sparse_mat::Complex::new(v, -v)).collect())
+        .collect();
+    let (parallel, sequential) = (
+        lu.par_solve_many(&complex_rhs).unwrap(),
+        lu.solve_many(&complex_rhs).unwrap(),
+    );
+    assert!(parallel
+        .iter()
+        .zip(&sequential)
+        .all(|(x, y)| x
+            .iter()
+            .zip(y)
+            .all(|(p, q)| p.re.to_bits() == q.re.to_bits() && p.im.to_bits() == q.im.to_bits())));
+
+    // The first wrong length is the error, as with solve_many
+    let mut bad = rhs.clone();
+    bad[5].pop();
+    assert_eq!(
+        cholesky.par_solve_many(&bad).unwrap_err(),
+        SparseError::ShapeMismatch {
+            left: (n, n),
+            right: (n - 1, 1)
+        }
+    );
+}

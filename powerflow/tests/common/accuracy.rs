@@ -6,6 +6,7 @@ use std::f64::consts::PI;
 
 use powerflow::case::Case;
 use powerflow::dc::DcModel;
+use sparse_mat::compressed_matrix::CsrMatrix;
 
 /// The normwise backward error of `va_deg` (angles in degrees, one per case bus row) as a
 /// solution of the DC system `model` builds for `case`:
@@ -20,6 +21,33 @@ use powerflow::dc::DcModel;
 ///
 /// 0.0 when every connected bus is a reference bus. NaN if an angle is NaN.
 pub fn backward_error(case: &Case, model: &DcModel, va_deg: &[f64]) -> f64 {
+    let Some((bprime, p, theta)) = system(case, model, va_deg) else {
+        return 0.0;
+    };
+    let b_theta = bprime.mul_vec(&theta).expect("one angle per bus");
+    let residual: Vec<f64> = p.iter().zip(&b_theta).map(|(p, bt)| p - bt).collect();
+
+    let mut row_sums = vec![0.0; p.len()];
+    for (row, _, value) in bprime.iter() {
+        row_sums[row] += value.abs();
+    }
+    let scale = largest_magnitude(&row_sums) * largest_magnitude(&theta) + largest_magnitude(&p);
+    let residual = largest_magnitude(&residual);
+    if residual == 0.0 {
+        0.0
+    } else {
+        residual / scale
+    }
+}
+
+/// The DC system over the PV and PQ buses, built as [`backward_error`] describes: B′, P′ (with
+/// the reference buses' coupling at their angles in `va_deg`) and θ from `va_deg` (radians),
+/// all in the PV-then-PQ order. `None` when every connected bus is a reference bus.
+pub fn system(
+    case: &Case,
+    model: &DcModel,
+    va_deg: &[f64],
+) -> Option<(CsrMatrix<f64>, Vec<f64>, Vec<f64>)> {
     let rows = model.bus_rows();
     let unknown: Vec<usize> = model
         .pv_buses()
@@ -28,7 +56,7 @@ pub fn backward_error(case: &Case, model: &DcModel, va_deg: &[f64]) -> f64 {
         .copied()
         .collect();
     if unknown.is_empty() {
-        return 0.0;
+        return None;
     }
 
     let mut internal = vec![usize::MAX; case.bus.len()];
@@ -69,20 +97,7 @@ pub fn backward_error(case: &Case, model: &DcModel, va_deg: &[f64]) -> f64 {
         .zip(&coupling)
         .map(|(&index, coupling)| pbus[index] - coupling)
         .collect();
-    let b_theta = bprime.mul_vec(&theta).expect("one angle per bus");
-    let residual: Vec<f64> = p.iter().zip(&b_theta).map(|(p, bt)| p - bt).collect();
-
-    let mut row_sums = vec![0.0; unknown.len()];
-    for (row, _, value) in bprime.iter() {
-        row_sums[row] += value.abs();
-    }
-    let scale = largest_magnitude(&row_sums) * largest_magnitude(&theta) + largest_magnitude(&p);
-    let residual = largest_magnitude(&residual);
-    if residual == 0.0 {
-        0.0
-    } else {
-        residual / scale
-    }
+    Some((bprime, p, theta))
 }
 
 /// The largest absolute value, or NaN if any value is NaN, which `f64::max` would skip.

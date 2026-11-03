@@ -27,6 +27,7 @@ use crate::sparse_matrix::{write_dense_grid, SparseMatrix};
 use crate::Scalar;
 
 mod access;
+mod accuracy;
 mod assembly;
 mod blocks;
 mod cholesky;
@@ -41,6 +42,7 @@ mod properties;
 mod serde_impl;
 mod solvers;
 
+pub use accuracy::Refined;
 pub use assembly::AssemblyMap;
 pub use cholesky::{Cholesky, SymbolicCholesky};
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
