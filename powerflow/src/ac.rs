@@ -15,7 +15,7 @@
 use std::f64::consts::PI;
 
 use sparse_mat::compressed_matrix::{
-    AssemblyMap, Csc, CscMatrix, CsrMatrix, Lu, LuOptions, Ordering, RefactorOutcome,
+    AssemblyMap, Csc, CscMatrix, CsrMatrix, Lu, LuOptions, Ordering, RefactorOutcome, SymbolicLu,
 };
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
@@ -429,7 +429,7 @@ impl AcModel {
             ReactiveLimits::Ignore => {
                 let roles = self.topology.roles();
                 let v = self.start(case, &roles);
-                let solved = self.solve_round(case, &roles, v, options)?;
+                let solved = self.solve_round(case, &roles, v, options, None)?;
                 Ok(self.results(case, &roles, &solved))
             }
             ReactiveLimits::AllAtOnce => self.solve_with_limits(case, options, false),
@@ -485,8 +485,19 @@ impl AcModel {
         let mut iterations = 0;
         let mut factorizations = 0;
         let mut v = self.start(case, &roles);
+        // From the second round, Newton's method solves against one superset Jacobian, laid out,
+        //   ordered and analyzed once; the first round solves as a plain solve does, so a run that
+        //   holds nothing gives the plain solve's results exactly
+        let mut superset: Option<SupersetJacobian> = None;
+        let mut round = 0;
         loop {
-            let solved = match self.solve_round(&working, &roles, v.clone(), options) {
+            round += 1;
+            let reuse = if round > 1 && options.method == AcMethod::Newton {
+                Some(superset.get_or_insert_with(|| SupersetJacobian::new(&self.ybus)))
+            } else {
+                None
+            };
+            let solved = match self.solve_round(&working, &roles, v.clone(), options, reuse) {
                 Ok(solved) => solved,
                 Err(PowerflowError::NoConvergence {
                     iterations: round,
@@ -643,18 +654,25 @@ impl AcModel {
     }
 
     /// One power flow solve from the voltages `v`, with the bus `roles` given and `case`'s
-    /// injections (`sbus_pu`), by `options.method`.
+    /// injections (`sbus_pu`), by `options.method`. Newton's method solves against `superset`
+    /// if one is given (a limit loop's later rounds), and otherwise lays out its own Jacobian.
     fn solve_round(
         &self,
         case: &Case,
         roles: &Roles,
         v: Vec<Complex<f64>>,
         options: AcOptions,
+        superset: Option<&mut SupersetJacobian>,
     ) -> Result<Solved, PowerflowError> {
         let unknowns = Unknowns::from(roles);
         let sbus = self.sbus_pu(case);
         match options.method {
-            AcMethod::Newton => self.newton(case, v, &sbus, &unknowns, options),
+            AcMethod::Newton => match superset {
+                Some(superset) => {
+                    self.newton_superset(case, v, &sbus, &unknowns, options, superset)
+                }
+                None => self.newton(case, v, &sbus, &unknowns, options),
+            },
             AcMethod::FastDecoupledXb => {
                 self.fast_decoupled(case, v, &sbus, &unknowns, options, true)
             }
@@ -730,6 +748,107 @@ impl AcModel {
             for (k, &bus) in unknowns.pq.iter().enumerate() {
                 va[bus] += dx[npv + k];
                 vm[bus] += dx[npv + npq + k];
+            }
+            for ((value, &magnitude), &angle) in v.iter_mut().zip(&vm).zip(&va) {
+                *value = Complex::from_polar(magnitude, angle);
+            }
+            for ((value, magnitude), angle) in v.iter().zip(&mut vm).zip(&mut va) {
+                *magnitude = value.norm();
+                *angle = value.arg();
+            }
+            (f, norm_f) = self.mismatch(&v, sbus, unknowns);
+            converged = norm_f < options.tolerance;
+        }
+        if !converged {
+            return Err(PowerflowError::NoConvergence {
+                iterations,
+                mismatch_pu: norm_f,
+            });
+        }
+        Ok(Solved {
+            v,
+            iterations,
+            mismatch_pu: norm_f,
+            full_factorizations,
+        })
+    }
+
+    /// `newtonpf` against a limit loop's superset Jacobian, from the starting voltages `v`: the
+    /// same iteration as [`AcModel::newton`], with the unknowns `unknowns` doesn't hold pinned,
+    /// and the factorization refactored from the previous iteration or round.
+    fn newton_superset(
+        &self,
+        case: &Case,
+        mut v: Vec<Complex<f64>>,
+        sbus: &[Complex<f64>],
+        unknowns: &Unknowns,
+        options: AcOptions,
+        superset: &mut SupersetJacobian,
+    ) -> Result<Solved, PowerflowError> {
+        let topology = &self.topology;
+        let npvpq = unknowns.pv_pq.len();
+        let nodes = 2 * v.len();
+        let mut active = vec![false; nodes];
+        for &bus in &unknowns.pv_pq {
+            active[2 * bus] = true;
+        }
+        for &bus in &unknowns.pq {
+            active[2 * bus + 1] = true;
+        }
+        let mut vm: Vec<f64> = v.iter().map(|value| value.norm()).collect();
+        let mut va: Vec<f64> = v.iter().map(|value| value.arg()).collect();
+        let (mut f, mut norm_f) = self.mismatch(&v, sbus, unknowns);
+        let mut iterations = 0;
+        let mut full_factorizations = 0;
+        let mut converged = norm_f < options.tolerance;
+        while !converged && iterations < options.max_iterations {
+            iterations += 1;
+            superset.refill(&self.ybus, &v, &active);
+            let singular = |node: usize| PowerflowError::SingularNetwork {
+                bus_label: case.bus[topology.bus_rows[node / 2]].bus_label,
+            };
+            let factor = match superset.lu.as_mut() {
+                Some(lu) => match lu.refactor(&superset.jacobian) {
+                    Ok(RefactorOutcome::Reused) => Ok(()),
+                    Ok(RefactorOutcome::Repivoted) => {
+                        full_factorizations += 1;
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                },
+                None => superset
+                    .symbolic
+                    .factor(&superset.jacobian, LuOptions::default())
+                    .map(|factored| {
+                        full_factorizations += 1;
+                        superset.lu = Some(factored);
+                    }),
+            };
+            match factor {
+                Ok(()) => {}
+                Err(SparseError::SingularMatrix { pivot }) => return Err(singular(pivot)),
+                Err(err) => unreachable!("LU of a square Jacobian with a fixed pattern: {err}"),
+            }
+            // The mismatches at their nodes; pinned nodes keep a zero right-hand side
+            let mut rhs = vec![0.0; nodes];
+            for (k, &bus) in unknowns.pv_pq.iter().enumerate() {
+                rhs[2 * bus] = -f[k];
+            }
+            for (k, &bus) in unknowns.pq.iter().enumerate() {
+                rhs[2 * bus + 1] = -f[npvpq + k];
+            }
+            let dx = superset
+                .lu
+                .as_ref()
+                .expect("factored above")
+                .solve(&rhs)
+                .expect("one entry per node");
+
+            for &bus in &unknowns.pv_pq {
+                va[bus] += dx[2 * bus];
+            }
+            for &bus in &unknowns.pq {
+                vm[bus] += dx[2 * bus + 1];
             }
             for ((value, &magnitude), &angle) in v.iter_mut().zip(&vm).zip(&va) {
                 *value = Complex::from_polar(magnitude, angle);
@@ -1202,32 +1321,136 @@ impl JacobianAssembly {
         let shapes_match_message = "v has one entry per bus, matching Ybus";
         let current = ybus.mul_vec(v).expect(shapes_match_message);
         let y = ybus.values();
-        let zero = Complex::new(0.0, 0.0);
         for (value, source) in self.values.iter_mut().zip(&self.sources) {
-            let Source { slot, i, j, part } = *source;
-            let entry = y[slot];
-            let derivative = match part {
-                Part::ReVa | Part::ImVa => {
-                    let inner = if i == j {
-                        current[i] - entry * v[i]
-                    } else {
-                        zero - entry * v[j]
-                    };
-                    (v[i] * Complex::i()) * inner.conj()
-                }
-                Part::ReVm | Part::ImVm => {
-                    let unit_j = v[j] / v[j].norm();
-                    let scaled = v[i] * (entry * unit_j).conj();
-                    if i == j {
-                        scaled + current[i].conj() * unit_j
-                    } else {
-                        scaled
-                    }
-                }
+            *value = source_value(source, y, v, &current);
+        }
+        self.jacobian
+            .refill(&self.map, &self.values)
+            .expect("the map was built for this Jacobian from these sources");
+    }
+}
+
+/// One Jacobian entry's value, from its source: Ybus's values `y`, the voltages `v` and the
+/// currents `I = Ybus V`, by the formulas of [`JacobianAssembly::refill`].
+fn source_value(
+    source: &Source,
+    y: &[Complex<f64>],
+    v: &[Complex<f64>],
+    current: &[Complex<f64>],
+) -> f64 {
+    let zero = Complex::new(0.0, 0.0);
+    let Source { slot, i, j, part } = *source;
+    let entry = y[slot];
+    let derivative = match part {
+        Part::ReVa | Part::ImVa => {
+            let inner = if i == j {
+                current[i] - entry * v[i]
+            } else {
+                zero - entry * v[j]
             };
-            *value = match part {
-                Part::ReVa | Part::ReVm => derivative.re,
-                Part::ImVa | Part::ImVm => derivative.im,
+            (v[i] * Complex::i()) * inner.conj()
+        }
+        Part::ReVm | Part::ImVm => {
+            let unit_j = v[j] / v[j].norm();
+            let scaled = v[i] * (entry * unit_j).conj();
+            if i == j {
+                scaled + current[i].conj() * unit_j
+            } else {
+                scaled
+            }
+        }
+    };
+    match part {
+        Part::ReVa | Part::ReVm => derivative.re,
+        Part::ImVa | Part::ImVm => derivative.im,
+    }
+}
+
+/// One Jacobian for every round of a reactive-limit loop after the first, whose bus roles
+/// change from round to round. It has an angle unknown (node `2i`) and a magnitude unknown
+/// (node `2i + 1`) for every connected bus `i`, joined wherever Ybus has an entry, so every
+/// round's Jacobian is a principal submatrix of it. An unknown a round doesn't solve for (a PV
+/// bus's magnitude, a reference bus's angle and magnitude) is pinned: its row and column are
+/// zero but for a 1 on the diagonal, and its right-hand side is zero, so its update is exactly
+/// zero and the other unknowns solve the round's own system. The pattern never changes, so
+/// the assembly, the ordering and the LU analysis are made once, and each round refactors.
+///
+/// The column ordering is AMD on Ybus's pattern, each bus expanded to its angle and then its
+/// magnitude: the ordering AMD would find on the superset, where each bus's two nodes form a
+/// supervariable, for the cost of ordering Ybus.
+struct SupersetJacobian {
+    jacobian: CscMatrix<f64>,
+    map: AssemblyMap<Csc>,
+    sources: Vec<Source>,
+    /// Each source's row and column node, for pinning
+    nodes: Vec<(usize, usize)>,
+    values: Vec<f64>,
+    symbolic: SymbolicLu,
+    /// The factorization, kept across iterations and rounds
+    lu: Option<Lu<f64>>,
+}
+
+impl SupersetJacobian {
+    fn new(ybus: &CsrMatrix<Complex<f64>>) -> SupersetJacobian {
+        let nb = ybus.shape().0;
+        let mut positions = vec![];
+        let mut sources = vec![];
+        let mut nodes = vec![];
+        for i in 0..nb {
+            let (cols, _) = ybus.outer(i).expect("rows are in range");
+            let start = ybus.pointers()[i];
+            for (offset, &j) in cols.iter().enumerate() {
+                let slot = start + offset;
+                for (row, col, part) in [
+                    (2 * i, 2 * j, Part::ReVa),
+                    (2 * i, 2 * j + 1, Part::ReVm),
+                    (2 * i + 1, 2 * j, Part::ImVa),
+                    (2 * i + 1, 2 * j + 1, Part::ImVm),
+                ] {
+                    positions.push((row, col, 0.0));
+                    sources.push(Source { slot, i, j, part });
+                    nodes.push((row, col));
+                }
+            }
+        }
+        let (jacobian, map) = CscMatrix::from_triplets_mapped(2 * nb, 2 * nb, positions)
+            .expect("superset positions are in range");
+        let order: Vec<usize> = ybus
+            .ordering(Ordering::Amd)
+            .expect("Ybus is square")
+            .iter()
+            .flat_map(|&bus| [2 * bus, 2 * bus + 1])
+            .collect();
+        let symbolic = jacobian
+            .analyze_lu_with_permutation(order)
+            .expect("each bus's two nodes, once each");
+        let values = vec![0.0; sources.len()];
+        SupersetJacobian {
+            jacobian,
+            map,
+            sources,
+            nodes,
+            values,
+            symbolic,
+            lu: None,
+        }
+    }
+
+    /// Refills the values at the voltages `v`, with the nodes not `active` pinned.
+    fn refill(&mut self, ybus: &CsrMatrix<Complex<f64>>, v: &[Complex<f64>], active: &[bool]) {
+        let current = ybus
+            .mul_vec(v)
+            .expect("v has one entry per bus, matching Ybus");
+        let y = ybus.values();
+        for ((value, source), &(row, col)) in
+            self.values.iter_mut().zip(&self.sources).zip(&self.nodes)
+        {
+            *value = if active[row] && active[col] {
+                source_value(source, y, v, &current)
+            } else if row == col {
+                1.0
+            } else {
+                0.0
             };
         }
         self.jacobian
@@ -1353,5 +1576,65 @@ mod tests {
             (3, 3),
             "PV and PQ angles, PQ magnitude"
         );
+    }
+
+    #[test]
+    fn the_superset_restricted_to_a_rounds_unknowns_is_its_jacobian() {
+        // Four buses: reference, two PV and a PQ, with each set of roles a limit loop can
+        //   reach from them: the superset, with the other unknowns pinned and restricted to the
+        //   round's own, must be that round's Jacobian bit for bit
+        let text = "function mpc = t\nmpc.version = '2';\nmpc.baseMVA = 100;\nmpc.bus = [\n\
+            1 3 0 0 0 0 1 1 0 135 1 1.1 0.9;\n2 2 20 5 0 0 1 1 0 135 1 1.1 0.9;\n\
+            3 2 40 15 0 8 1 1 0 135 1 1.1 0.9;\n4 1 30 10 0 0 1 1 0 135 1 1.1 0.9;\n];\n\
+            mpc.gen = [\n1 0 0 100 -100 1.03 100 1 1000 0 0 0 0 0 0 0 0 0 0 0 0;\n\
+            2 30 0 50 -50 1.01 100 1 1000 0 0 0 0 0 0 0 0 0 0 0 0;\n\
+            3 20 0 50 -50 1.02 100 1 1000 0 0 0 0 0 0 0 0 0 0 0 0;\n];\nmpc.branch = [\n\
+            1 2 0.02 0.06 0.03 0 0 0 0 0 1 -360 360;\n2 3 0.03 0.09 0.02 0 0 0 0 0 1 -360 360;\n\
+            3 4 0.01 0.05 0.02 0 0 0 0.98 2 1 -360 360;\n4 1 0.02 0.07 0.01 0 0 0 0 0 1 -360 360;\n];\n";
+        let case = Case::parse(text).unwrap();
+        let model = AcModel::new(&case).unwrap();
+        let v: Vec<Complex<f64>> = (0..4)
+            .map(|k| Complex::from_polar(1.0 - 0.01 * k as f64, -0.04 * k as f64))
+            .collect();
+        let mut superset = SupersetJacobian::new(&model.ybus);
+        for (pv, pq) in [
+            (vec![1, 2], vec![3]),
+            (vec![2], vec![1, 3]),
+            (vec![1], vec![2, 3]),
+            (vec![], vec![1, 2, 3]),
+        ] {
+            let unknowns = Unknowns {
+                pv_pq: pv.iter().chain(&pq).copied().collect(),
+                pv,
+                pq,
+            };
+            let mut own = JacobianAssembly::new(&model.ybus, &unknowns);
+            own.refill(&model.ybus, &v);
+            let mut active = vec![false; 8];
+            let mut order = vec![];
+            for &bus in &unknowns.pv_pq {
+                active[2 * bus] = true;
+                order.push(2 * bus);
+            }
+            for &bus in &unknowns.pq {
+                active[2 * bus + 1] = true;
+                order.push(2 * bus + 1);
+            }
+            superset.refill(&model.ybus, &v, &active);
+            let restricted = superset.jacobian.select(&order, &order).unwrap();
+            assert_eq!(restricted.pointers(), own.jacobian.pointers());
+            assert_eq!(restricted.indices(), own.jacobian.indices());
+            let bits =
+                |m: &CscMatrix<f64>| m.values().iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&restricted), bits(&own.jacobian));
+            // The pinned nodes: zero rows and columns but a unit diagonal
+            for node in (0..8).filter(|&node| !active[node]) {
+                for (row, col, value) in superset.jacobian.iter() {
+                    if row == node || col == node {
+                        assert_eq!(value, if row == col { 1.0 } else { 0.0 });
+                    }
+                }
+            }
+        }
     }
 }

@@ -395,8 +395,8 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
       largest 2.7, and the largest backward error 0.49 ε (6.5 ε before). So the excess followed
       the fill, not the algorithm, and threshold pivoting at 0.1 cost no stability here. Every
       case's backward error is now below 0.8 ε.
-- [ ] Deferred: COLAMD, for LU of a matrix whose pattern is far from symmetric. Nothing in power
-      flow needs it yet.
+- **Deferred, moved to "After Phase 5" (2026-11-03):** COLAMD, for LU of a matrix whose pattern
+  is far from symmetric. Nothing in power flow needs it yet.
 
 ## Phase 4: Complex-capable solvers (migrating what Phase 3 didn't rewrite)
 
@@ -661,10 +661,10 @@ item.
         legacy references stand.
       - **Docs:** the README's status and provenance (`runpf`'s limit loop, and the legacy
         references), and the benchmarks README.
-- [ ] **Follow-up:** reuse the ordering, LU analysis and Jacobian assembly across the rounds of
-      a limit loop. One at a time spends 2,450 s on case_SyntheticUSA over 6,337 rounds of about
-      2.2 iterations, each round repeating that setup, though each moves only one bus from PV to
-      PQ.
+- **Follow-up, moved to "After Phase 5" (2026-11-03):** reuse the ordering, LU analysis and
+  Jacobian assembly across the rounds of a limit loop. One at a time spends 2,450 s on
+  case_SyntheticUSA over 6,337 rounds of about 2.2 iterations, each round repeating that setup,
+  though each moves only one bus from PV to PQ.
 
 ## Phase 5: DC studies
 
@@ -868,6 +868,81 @@ The studies that solve many times against one factorization of B′. Planned wit
         survey on all 78 cases, in 3.5 minutes instead of 21.5, with a median speedup of 11.0×
         from 1,000 buses on 28 threads; 5.8–5.9× on the two largest cases, where the survey's
         chunks repeat the serial base solve. Small cases are slower in parallel.
+
+## After Phase 5: setup reuse across reactive-limit rounds, and COLAMD
+
+The two items left open by the earlier phases, planned with the maintainer (2026-11-03) as two
+PRs.
+
+- [x] **Decide:** whether limit-mode results may change by rounding, COLAMD's scope, and the
+      split.
+      Decided (2026-11-03):
+      - **Rounding changes are allowed** in limit-mode results from a loop's second round on,
+        provided both limit surveys still match MATPOWER on all 78 cases: convergence, iteration
+        counts and held generators exactly, values within 1e-9. Plain Newton (limits ignored)
+        stays bit-identical, and so does a limit run that holds nothing.
+      - **COLAMD:** implement it and benchmark it against AMD on power-flow matrices. AMD stays
+        the default unless COLAMD wins.
+      - **Two PRs:** the setup reuse first, then COLAMD.
+
+### PR A: the limit loop without repeated AMD
+
+- [x] `CscMatrix::analyze_lu_with_permutation`: an LU analysis under a given column ordering.
+      Validated with the existing `check_permutation` (`InvalidPermutation`, and `NotSquare`).
+      Given `analyze_lu(Amd)`'s own permutation it factors bit for bit the same, and any valid
+      permutation factors and solves correctly (`factorization_test.rs`).
+- [x] Measure a round's parts on case2383wp's Jacobian (assembly, AMD analysis, factorization,
+      refactor, refill) with criterion, and decide whether the assembly is worth reusing.
+      - **Measured** (`ac_power_flow` bench, new `jacobian_*` and `superset_ordering`): the
+        assembly with one refill 957 µs, AMD 1,541 µs, a full factorization 1,253 µs, a refactor
+        191 µs, a solve 37 µs, and the superset ordering (AMD on Ybus, expanded) 736 µs.
+      - **A round** of about 2.2 iterations is then roughly 4.3 ms: AMD about 36%, the full
+        factorization 29%, and the assembly about 18% (957 µs less the 180 µs refill inferred in
+        PR #28: an estimate, since the refill isn't public on its own).
+      - **Decided:** the assembly is worth reusing too (over the plan's 10%). One fixed-pattern
+        Jacobian serves every round: a superset with an angle and a magnitude unknown for every
+        bus, where an unknown a round doesn't solve for (a PV bus's magnitude, a reference
+        bus's angle and magnitude) gets an identity row and column and a zero right-hand side,
+        so its update is exactly zero. Its assembly, ordering and LU analysis are made once,
+        and each round's first factorization is a refactor (or, if a pivot fails, a full
+        factorization under the same ordering), instead of an AMD and a fresh factorization.
+        This subsumes the planned restricted ordering, at the cost of stored zeros for the
+        unknowns a round pins.
+- [x] From a limit loop's second round, solve every round against one superset Jacobian
+      (fixed pattern, unknowns a round doesn't solve for pinned), ordered once by AMD on Ybus
+      expanded to each bus's angle then magnitude, with its LU refactored across rounds.
+      - **`SupersetJacobian`** (`ac.rs`): nodes `2i` (angle) and `2i + 1` (magnitude) for every
+        bus, laid out once through an assembly map, ordered by AMD on Ybus expanded, and
+        analyzed with `analyze_lu_with_permutation`. A pinned node's row and column are zero
+        with a unit diagonal, and its right-hand side zero, so its update is exactly zero.
+        `newton_superset` iterates as `newton` does, refactoring the kept LU across iterations
+        and rounds. The entry formula is shared with `JacobianAssembly` (`source_value`), with
+        its operations unchanged.
+      - **The first round** still solves as plain Newton does, so a run that holds nothing is
+        bit-identical to it (checked on case30 in `ac_reference_test.rs`). Fast-decoupled with
+        limits is unchanged.
+      - **Tests:** the superset, pinned and restricted to a round's unknowns, is that round's
+        Jacobian bit for bit, for each set of roles a fixture's loop can reach. The committed
+        `qlim1`/`qlim2` references still take MATPOWER's iteration counts and held generators,
+        within 9.7e-12 (case118 one at a time; 8.1e-12 before).
+      - **First timings,** one at a time: case2383wp 1.42 s → 0.45 s, case_ACTIVSg10k 36.6 s →
+        10.5 s, the refactor never repivoting (two full factorizations instead of 253 and
+        1,245).
+- [x] Rerun both limit surveys against MATPOWER, and record the times before and after.
+      Recorded in `docs/benchmarks/ac-reactive-limits-reuse-2026-11-03.md`. Both modes match
+      the earlier record and MATPOWER on every case (convergence, iterations, held generators),
+      the worst relative difference unchanged at 1.7e-10, and the default Newton survey matches
+      its record. One at a time takes 1,519 s over all cases instead of 4,397 (a median 3.38× on
+      the cases that hold a generator; case_SyntheticUSA 40.8 → 14.5 minutes), all at once
+      4.12 s instead of 6.54 (1.45×); every run takes two or three full factorizations. The
+      smallest cases are slightly slower (0.79–0.93×), and the peak memory rises 4–29% on cases
+      of 9,000 buses or more.
+
+### PR B: COLAMD
+
+- [ ] `Ordering::Colamd` for LU, with plain threshold partial pivoting under it, and
+      `SparseError::UnsupportedOrdering` for Cholesky.
+- [ ] Benchmark COLAMD against AMD on power-flow matrices and synthetic unsymmetric ones.
 
 ## Housekeeping (carried over from the PR #1 review)
 

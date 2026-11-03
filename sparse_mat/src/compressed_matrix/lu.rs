@@ -11,6 +11,7 @@
 use num_complex::ComplexFloat;
 use num_traits::NumCast;
 
+use super::access::check_permutation;
 use super::cholesky::inverse_permutation;
 use super::solvers::reach;
 use super::{CompressedMatrix, CscMatrix, Ordering};
@@ -86,6 +87,29 @@ impl<T: Scalar> CscMatrix<T> {
     pub fn analyze_lu(&self, ordering: Ordering) -> Result<SymbolicLu, SparseError> {
         Ok(SymbolicLu {
             col_perm: self.ordering(ordering)?,
+            a_ptr: self.ptr.clone(),
+            a_idx: self.idx.clone(),
+        })
+    }
+
+    /// [`CscMatrix::analyze_lu`] with a column ordering given rather than computed: column `j`
+    /// of `A Q` is column `col_perm[j]` of `A`, and the factorization prefers pivots on the
+    /// diagonal of `Qᵀ A Q`, as it does under a computed ordering. For a caller that orders many
+    /// related matrices from one ordering, such as the submatrices of a larger pattern. Only
+    /// the pattern is read.
+    ///
+    /// Returns `SparseError::NotSquare` for a non-square matrix, and
+    /// `SparseError::InvalidPermutation` unless `col_perm` is a permutation of its columns.
+    pub fn analyze_lu_with_permutation(
+        &self,
+        col_perm: Vec<usize>,
+    ) -> Result<SymbolicLu, SparseError> {
+        if !self.is_square() {
+            return Err(SparseError::NotSquare { shape: self.shape });
+        }
+        check_permutation(&col_perm, self.shape.1)?;
+        Ok(SymbolicLu {
+            col_perm,
             a_ptr: self.ptr.clone(),
             a_idx: self.idx.clone(),
         })
