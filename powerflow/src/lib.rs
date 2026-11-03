@@ -5,6 +5,8 @@
 //! - [`dc`]: the DC power flow ([`dc::dc_power_flow`]), as MATPOWER's `rundcpf` computes it.
 //! - [`ac`]: the AC power flow by Newton's method ([`ac::ac_power_flow`]), as MATPOWER's
 //!   `runpf` computes it with its default options.
+//! - [`islands`]: a network's islands and bridges ([`islands::find_islands`],
+//!   [`islands::find_bridges`]), as MATPOWER's `find_islands` and `find_bridges` define them.
 //!
 //! Both power flows are validated against MATPOWER's own results; see the roadmap in
 //! `docs/PowerFlowChecklist.md`.
@@ -12,5 +14,6 @@
 pub mod ac;
 pub mod case;
 pub mod dc;
+pub mod islands;
 pub mod powerflow_error;
 mod topology;

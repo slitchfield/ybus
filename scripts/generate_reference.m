@@ -29,7 +29,18 @@
 %                           the same for runpf's fast-decoupled XB and BX methods (pf.alg
 %                           FDXB and FDBX, through the legacy fdpf rather than MP-Core), whose
 %                           iterations are P half-iterations
+%   <case>_islands.csv      bus number and its island from find_islands (1-based, in
+%                           MATPOWER's order, largest first), or 0 for a bus with no in-service
+%                           branch
+%   <case>_bridges.csv      branch rows (1-based, increasing) find_bridges reports as bridges,
+%                           only where it succeeds: it fails on cases with parallel branches
+%                           whose summed rows pass the end of the table, with more buses than
+%                           branches, or deep enough to pass Octave's recursion limit
 % Values are printed with 17 significant digits, enough to round-trip a double exactly.
+%
+% YBUS_REFERENCE_RUNS, if set, chooses which of the runs islands, dcpf, acpf, fdxb, fdbx,
+%   qlim1 and qlim2 to make, separated by commas (default: all), so that new results don't
+%   need the slow ones again. The AC runs follow dcpf only if it's chosen and succeeds.
 
 % Marks this file as a script, so Octave accepts the function definition that follows. Octave
 %   needs a script's functions defined before they are called.
@@ -59,10 +70,40 @@ else
     cases = {'case14', 'case30', 'case118'};
 end
 mpopt = mpoption('verbose', 0, 'out.all', 0);
+chosen = getenv('YBUS_REFERENCE_RUNS');
+if isempty(chosen)
+    chosen = {'islands', 'dcpf', 'acpf', 'fdxb', 'fdbx', 'qlim1', 'qlim2'};
+else
+    chosen = strsplit(chosen, ',');
+end
+wanted = @(run) any(strcmp(run, chosen));
 
 failed = {};
 for k = 1:numel(cases)
     name = cases{k};
+
+    % Islands and bridges, which need no solve
+    if wanted('islands')
+        mpc = loadcase(name);
+        [groups, ~] = find_islands(mpc);
+        island = zeros(size(mpc.bus, 1), 1);
+        for g = 1:numel(groups)
+            island(groups{g}) = g;
+        end
+        write_csv(fullfile(out_dir, [name '_islands.csv']), 'bus,island', '%d,%d', ...
+            [mpc.bus(:, BUS_I), island]);
+        try
+            [~, bridges] = find_bridges(mpc);
+            write_csv(fullfile(out_dir, [name '_bridges.csv']), 'row', '%d', ...
+                sort(vertcat(bridges{:})));
+        catch err
+            fprintf(2, '%s: find_bridges failed: %s\n', name, err.message);
+        end
+    end
+    if ~wanted('dcpf')
+        continue;
+    end
+
     try
         [result, success] = rundcpf(name, mpopt);
     catch err
@@ -98,6 +139,9 @@ for k = 1:numel(cases)
     for run = {{'acpf', 'NR', 0, 0}, {'fdxb', 'FDXB', 1, 0}, {'fdbx', 'FDBX', 1, 0}, ...
                {'qlim1', 'NR', 1, 1}, {'qlim2', 'NR', 1, 2}}
         [prefix, alg, legacy, qlim] = deal(run{1}{1}, run{1}{2}, run{1}{3}, run{1}{4});
+        if ~wanted(prefix)
+            continue;
+        end
         try
             [result, success] = runpf(name, mpoption(mpopt, 'pf.alg', alg, ...
                 'exp.use_legacy_core', legacy, 'pf.enforce_q_lims', qlim));

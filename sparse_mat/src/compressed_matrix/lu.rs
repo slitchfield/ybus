@@ -11,8 +11,11 @@
 use num_complex::ComplexFloat;
 use num_traits::NumCast;
 
+use super::cholesky::inverse_permutation;
+use super::solvers::reach;
 use super::{CompressedMatrix, CscMatrix, Ordering};
 use crate::sparse_error::SparseError;
+use crate::sparse_matrix::SparseVector;
 use crate::Scalar;
 
 /// Options for an LU factorization.
@@ -68,6 +71,8 @@ pub struct Lu<T: Scalar = f64> {
     l: CscMatrix<T>,
     u: CscMatrix<T>,
     row_perm: Vec<usize>,
+    /// Row `i` of `A` is row `row_perm_inverse[i]` of `P A Q`
+    row_perm_inverse: Vec<usize>,
     col_perm: Vec<usize>,
     options: LuOptions,
     a_ptr: Vec<usize>,
@@ -289,6 +294,7 @@ fn gilbert_peierls<T: Scalar + ComplexFloat>(
     Ok(Lu {
         l: CompressedMatrix::from_parts_unchecked((n, n), l_ptr, l_idx, l_val),
         u: CompressedMatrix::from_parts_unchecked((n, n), u_ptr, u_idx, u_val),
+        row_perm_inverse: inverse_permutation(&row_perm),
         row_perm,
         col_perm: q.to_vec(),
         options,
@@ -404,6 +410,65 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
             .collect())
     }
 
+    /// Solves `L y = P b` for a sparse `b`, touching only the part of `L` the solve needs: the
+    /// entries of `y` that can be nonzero are those reachable from `b`'s entries in the graph
+    /// of `L` (Gilbert 1994), and only those are computed. `y`'s indices are positions in the
+    /// factor's row ordering (row `i` of `P A Q`), not rows of `A`.
+    ///
+    /// The values are bit for bit those of `solve`'s forward substitution, which subtracts by
+    /// columns of `L` in the same order, apart from the sign of a zero: the columns skipped
+    /// here would only subtract zeros. Stored entries may be zero. Returns
+    /// `SparseError::ShapeMismatch` unless `b` has one entry per row of `A`.
+    pub fn solve_lower_sparse(&self, b: &SparseVector<T>) -> Result<SparseVector<T>, SparseError> {
+        self.check_rhs(b.len())?;
+        let (pattern, y) = self.forward_sparse(b);
+        let values = pattern.iter().map(|&i| y[i]).collect();
+        Ok(SparseVector {
+            len: b.len(),
+            indices: pattern,
+            values,
+        })
+    }
+
+    /// Solves `A x = b` for a sparse `b`: the forward substitution touches only the part of `L`
+    /// that [`Lu::solve_lower_sparse`] does, and the back substitution is `solve`'s, since `x`
+    /// is generally dense. The result is bit for bit `solve`'s, apart from the sign of a zero.
+    /// Returns
+    /// `SparseError::ShapeMismatch` unless `b` has one entry per row of `A`.
+    pub fn solve_sparse(&self, b: &SparseVector<T>) -> Result<Vec<T>, SparseError> {
+        self.check_rhs(b.len())?;
+        let (_, mut y) = self.forward_sparse(b);
+        self.back_substitute(&mut y);
+        let mut x = vec![T::zero(); y.len()];
+        for (&col, &value) in self.col_perm.iter().zip(y.iter()) {
+            x[col] = value;
+        }
+        Ok(x)
+    }
+
+    /// The reach of `b` (already checked) in increasing order, and `L⁻¹ P b` as a dense vector
+    /// that is zero outside it. `L` has a unit diagonal, stored first in each column.
+    fn forward_sparse(&self, b: &SparseVector<T>) -> (Vec<usize>, Vec<T>) {
+        let n = self.row_perm.len();
+        let pattern = reach(
+            n,
+            &self.l.ptr,
+            &self.l.idx,
+            b.indices().iter().map(|&row| self.row_perm_inverse[row]),
+        );
+        let mut y = vec![T::zero(); n];
+        for (row, value) in b.iter() {
+            y[self.row_perm_inverse[row]] = value;
+        }
+        for &j in &pattern {
+            let y_j = y[j];
+            for p in self.l.ptr[j] + 1..self.l.ptr[j + 1] {
+                y[self.l.idx[p]] = y[self.l.idx[p]] - self.l.data[p] * y_j;
+            }
+        }
+        (pattern, y)
+    }
+
     fn check_rhs(&self, len: usize) -> Result<(), SparseError> {
         let n = self.row_perm.len();
         if len == n {
@@ -430,16 +495,22 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
                 y[self.l.idx[p]] = y[self.l.idx[p]] - self.l.data[p] * y_j;
             }
         }
-        for j in (0..n).rev() {
+        self.back_substitute(y);
+        for (&col, &value) in self.col_perm.iter().zip(y.iter()) {
+            x[col] = value;
+        }
+    }
+
+    /// Overwrites `y` with `U⁻¹ y`: back substitution with `U` by columns, its diagonal stored
+    /// last.
+    fn back_substitute(&self, y: &mut [T]) {
+        for j in (0..y.len()).rev() {
             let diagonal = self.u.ptr[j + 1] - 1;
             y[j] = y[j] / self.u.data[diagonal];
             let y_j = y[j];
             for p in self.u.ptr[j]..diagonal {
                 y[self.u.idx[p]] = y[self.u.idx[p]] - self.u.data[p] * y_j;
             }
-        }
-        for (&col, &value) in self.col_perm.iter().zip(y.iter()) {
-            x[col] = value;
         }
     }
 

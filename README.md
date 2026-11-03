@@ -4,8 +4,8 @@ Sparse linear algebra and power flow for Rust. A Cargo workspace with two crates
 
 | Crate | Status | Contents |
 |---|---|---|
-| [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM), sparse Cholesky and LU (complex too, with refactoring), conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
-| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. |
+| [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM), sparse Cholesky and LU (complex too, with refactoring and sparse right-hand sides), conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
+| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. It also lists a network's islands and bridges, as MATPOWER does. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
 formulation is built around.
@@ -84,7 +84,10 @@ documentation and with reference to its BSD-licensed source code (`ext2int`, `bu
 `makeBdc`, `dcpf` and `runpf`), to match its handling of every case, including isolated
 buses, out-of-service elements and phase shifters. Its AC power flow (`powerflow::ac`) was
 written the same way, with reference to the source of `makeYbus`, `newtonpf`, `makeB`, `fdpf`
-and `pfsoln` as well, and to `runpf`'s loop for enforcing reactive limits. Two of its pieces come from MATPOWER's published formulas instead, since
+and `pfsoln` as well, and to `runpf`'s loop for enforcing reactive limits. Its island and
+bridge listing (`powerflow::islands`) follows `find_islands`, `connected_components` and
+`find_bridges`, except that parallel branches count as separate edges, which MATPOWER's
+`find_bridges` mishandles. Two of its pieces come from MATPOWER's published formulas instead, since
 their source wasn't consulted: the bus injections (what `makeSbus` computes, as the User's
 Manual defines them) and the Newton Jacobian's derivatives (what `dSbus_dV` computes, from
 Technical Note 2, cited below). Both power flows are reimplementations in Rust, not
@@ -110,6 +113,7 @@ differently from the legacy `pfsoln` in 10 cases
 | `lu`, `analyze_lu`, `SymbolicLu::factor` | Left-looking sparse LU: a depth-first search for each column's reach, then a sparse triangular solve, with threshold partial pivoting | J. R. Gilbert and T. Peierls, "Sparse partial pivoting in time proportional to arithmetic operations," *SIAM J. Sci. Stat. Comput.* 9(5):862–874, 1988. [doi:10.1137/0909058](https://doi.org/10.1137/0909058) |
 | | | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 6. |
 | `Lu::refactor` | Refactoring with the previous pivot sequence and factor patterns, checking each reused pivot | T. A. Davis and E. Palamadai Natarajan, "Algorithm 907: KLU, a direct sparse solver for circuit simulation problems," *ACM Trans. Math. Softw.* 37(3), article 36, 2010. [doi:10.1145/1824801.1824814](https://doi.org/10.1145/1824801.1824814) |
+| `Cholesky::solve_lower_sparse`, `Lu::solve_lower_sparse`, `solve_sparse` | Sparse right-hand sides: the forward solve computes only the reach of the right-hand side's entries in the factor's graph | J. R. Gilbert, "Predicting structure in sparse matrix computations," *SIAM J. Matrix Anal. Appl.* 15(1):62–79, 1994. [doi:10.1137/S0895479887139455](https://doi.org/10.1137/S0895479887139455) |
 | `cholesky`, `analyze_cholesky` | Up-looking (row-by-row) sparse Cholesky, with symbolic analysis by the elimination tree and row subtrees | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 4. |
 | | | J. W. H. Liu, "The role of elimination trees in sparse factorization," *SIAM J. Matrix Anal. Appl.* 11(1):134–172, 1990. |
 | `conjugate_gradient` | Conjugate gradient | M. R. Hestenes and E. Stiefel, "Methods of conjugate gradients for solving linear systems," *J. Res. Natl. Bur. Stand.* 49(6):409–436, 1952. [doi:10.6028/jres.049.044](https://doi.org/10.6028/jres.049.044) |
@@ -123,10 +127,11 @@ differently from the legacy `pfsoln` in 10 cases
 | Matrix Market I/O | Coordinate exchange format | R. F. Boisvert, R. Pozo and K. A. Remington, "The Matrix Market Exchange Formats: Initial Design," NISTIR 5935, NIST, 1996. [doi:10.6028/NIST.IR.5935](https://doi.org/10.6028/NIST.IR.5935) |
 | `powerflow`'s tests and `dc_survey` example (`tests/common/accuracy.rs`) | Normwise backward error, η = ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) | J. L. Rigal and J. Gaches, "On the compatibility of a given solution with the data of a linear system," *J. ACM* 14(3):543–548, 1967. |
 | | | N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed., SIAM, 2002, ch. 7. [doi:10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027) |
+| `powerflow::islands` (`find_bridges`) | Bridges by depth-first search, iteratively, with parallel branches as separate edges | R. E. Tarjan, "A note on finding the bridges of a graph," *Inf. Process. Lett.* 2(6):160–161, 1974. [doi:10.1016/0020-0190(74)90003-9](https://doi.org/10.1016/0020-0190(74)90003-9) |
 | `powerflow::case` (`Case::parse`) | The MATPOWER case format, as `caseformat.m` defines it | R. D. Zimmerman and C. E. Murillo-Sánchez, *MATPOWER User's Manual*, Version 8.1, 2025. [doi:10.5281/zenodo.15871661](https://doi.org/10.5281/zenodo.15871661) |
 | `powerflow::ac` (`AcModel::jacobian`, Newton's method) | The power flow equations' derivatives in complex matrix form, `dS/dVa` and `dS/dVm` | R. D. Zimmerman, "AC power flows, generalized OPF costs and their derivatives using complex matrix notation," MATPOWER Technical Note 2, February 2010. [doi:10.5281/zenodo.3237866](https://doi.org/10.5281/zenodo.3237866) |
 | `powerflow::ac` (`AcMethod::FastDecoupledXb`, `FastDecoupledBx`) | Fast-decoupled power flow, XB and BX, as MATPOWER's `fdpf` and `makeB` compute it | B. Stott and O. Alsaç, "Fast decoupled load flow," *IEEE Trans. Power App. Syst.* PAS-93(3):859–869, 1974. |
-| `powerflow::dc` and `powerflow::ac`, and the reference results their tests compare against | DC power flow as MATPOWER's `rundcpf` computes it, and AC power flow as its `runpf` does (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
+| `powerflow::dc`, `powerflow::ac` and `powerflow::islands`, and the reference results their tests compare against | DC power flow as MATPOWER's `rundcpf` computes it, AC power flow as its `runpf` does, and islands and bridges as its `find_islands` and `find_bridges` find them (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
 | | | R. D. Zimmerman and C. E. Murillo-Sánchez, MATPOWER, Version 8.1 [software], 2025. <https://matpower.org>, [doi:10.5281/zenodo.15871662](https://doi.org/10.5281/zenodo.15871662) |
 
 ### Planned (see [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md))

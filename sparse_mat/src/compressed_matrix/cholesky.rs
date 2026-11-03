@@ -9,8 +9,10 @@ use num_complex::ComplexFloat;
 use num_traits::{Float, NumCast};
 
 use super::properties::magnitude_squared;
+use super::solvers::reach;
 use super::{CompressedMatrix, CsrMatrix, Ordering};
 use crate::sparse_error::SparseError;
+use crate::sparse_matrix::SparseVector;
 use crate::Scalar;
 
 /// The symbolic analysis of a symmetric matrix's pattern for an ordered Cholesky factorization
@@ -270,6 +272,7 @@ impl SymbolicCholesky {
             ),
             l_adjoint: CompressedMatrix::from_parts_unchecked((n, n), lt_ptr, lt_idx, lt_values),
             perm: self.perm.clone(),
+            perm_inverse: inverse_permutation(&self.perm),
         })
     }
 }
@@ -286,6 +289,17 @@ pub struct Cholesky<T: Scalar = f64> {
     l: CsrMatrix<T>,
     l_adjoint: CsrMatrix<T>,
     perm: Vec<usize>,
+    /// Row `i` of `A` is row `perm_inverse[i]` of `P A Pᵀ`
+    perm_inverse: Vec<usize>,
+}
+
+/// The inverse of a permutation: `inverse[perm[i]] = i`.
+pub(crate) fn inverse_permutation(perm: &[usize]) -> Vec<usize> {
+    let mut inverse = vec![0; perm.len()];
+    for (new, &old) in perm.iter().enumerate() {
+        inverse[old] = new;
+    }
+    inverse
 }
 
 impl<T: Scalar + ComplexFloat> Cholesky<T> {
@@ -340,6 +354,70 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
             .collect())
     }
 
+    /// Solves `L y = P b` for a sparse `b`, touching only the part of `L` the solve needs: the
+    /// entries of `y` that can be nonzero are those reachable from `b`'s entries in the graph
+    /// of `L` (Gilbert 1994), and only those are computed. `y`'s indices are positions in the
+    /// factor's ordering (row `i` of `P A Pᵀ`), not rows of `A`.
+    ///
+    /// `‖y‖²` is `bᴴ A⁻¹ b` (`bᵀ A⁻¹ b` for a real matrix), a quadratic form that needs no
+    /// back substitution. The values agree with `solve`'s forward substitution to within rounding,
+    /// not bit for bit, since this subtracts by columns of `L` rather than by rows. Stored
+    /// entries may be zero. Returns `SparseError::ShapeMismatch` unless `b` has one entry per
+    /// row of `A`.
+    pub fn solve_lower_sparse(&self, b: &SparseVector<T>) -> Result<SparseVector<T>, SparseError> {
+        self.check_rhs(b.len())?;
+        let (pattern, y) = self.forward_sparse(b);
+        let values = pattern.iter().map(|&i| y[i]).collect();
+        Ok(SparseVector {
+            len: b.len(),
+            indices: pattern,
+            values,
+        })
+    }
+
+    /// Solves `A x = b` for a sparse `b`: the forward substitution touches only the part of `L`
+    /// that [`Cholesky::solve_lower_sparse`] does, and the back substitution is `solve`'s, since
+    /// `x` is generally dense. The result agrees with `solve`'s to within rounding. Returns
+    /// `SparseError::ShapeMismatch` unless `b` has one entry per row of `A`.
+    pub fn solve_sparse(&self, b: &SparseVector<T>) -> Result<Vec<T>, SparseError> {
+        self.check_rhs(b.len())?;
+        let (_, mut y) = self.forward_sparse(b);
+        self.back_substitute(&mut y);
+        let mut x = vec![T::zero(); y.len()];
+        for (&row, &value) in self.perm.iter().zip(y.iter()) {
+            x[row] = value;
+        }
+        Ok(x)
+    }
+
+    /// The reach of `b` (already checked) in increasing order, and `L⁻¹ P b` as a dense vector
+    /// that is zero outside it. Column `j` of `L` is row `j` of `Lᴴ`, conjugated, with the
+    /// (real) diagonal first.
+    fn forward_sparse(&self, b: &SparseVector<T>) -> (Vec<usize>, Vec<T>) {
+        let lt = &self.l_adjoint;
+        let n = self.perm.len();
+        let pattern = reach(
+            n,
+            &lt.ptr,
+            &lt.idx,
+            b.indices().iter().map(|&row| self.perm_inverse[row]),
+        );
+        let mut y = vec![T::zero(); n];
+        for (row, value) in b.iter() {
+            y[self.perm_inverse[row]] = value;
+        }
+        for &j in &pattern {
+            let diagonal = lt.ptr[j];
+            y[j] = y[j] / lt.data[diagonal];
+            let y_j = y[j];
+            for p in diagonal + 1..lt.ptr[j + 1] {
+                let i = lt.idx[p];
+                y[i] = y[i] - lt.data[p].conj() * y_j;
+            }
+        }
+        (pattern, y)
+    }
+
     fn check_rhs(&self, len: usize) -> Result<(), SparseError> {
         if len == self.perm.len() {
             Ok(())
@@ -359,7 +437,7 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
         scratch.clear();
         scratch.extend(self.perm.iter().map(|&row| x[row]));
         let y = scratch.as_mut_slice();
-        let (l, lt) = (&self.l, &self.l_adjoint);
+        let l = &self.l;
         for i in 0..y.len() {
             let mut remainder = y[i];
             let mut diagonal = T::one();
@@ -374,6 +452,16 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
             }
             y[i] = remainder / diagonal;
         }
+        self.back_substitute(y);
+        for (&row, &value) in self.perm.iter().zip(y.iter()) {
+            x[row] = value;
+        }
+    }
+
+    /// Overwrites `y` with `L⁻ᴴ y`: back substitution with `Lᴴ` by rows, in the order
+    /// `solve_upper_triangular` uses.
+    fn back_substitute(&self, y: &mut [T]) {
+        let lt = &self.l_adjoint;
         for i in (0..y.len()).rev() {
             let mut remainder = y[i];
             let mut diagonal = T::one();
@@ -386,9 +474,6 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
                 }
             }
             y[i] = remainder / diagonal;
-        }
-        for (&row, &value) in self.perm.iter().zip(y.iter()) {
-            x[row] = value;
         }
     }
 }
