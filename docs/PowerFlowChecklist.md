@@ -651,8 +651,14 @@ item.
         leaves them out; nothing else changed, and the committed files are identical.
         `generate_reference.m` also writes each run's summary last, so that it marks a complete
         run.
-      - **Not done:** comparing MP-Core with legacy one at a time over all cases. A machine
-        restart interrupted it, and it needs many hours on the largest cases.
+      - **MP-Core against legacy one at a time** (rerun 2026-11-02, after a machine restart
+        interrupted the first attempt): of 78 cases, both converge on 69 (53 within 1e-9, the
+        worst case2868rte by 0.040 MW, two differing by one iteration), neither on 4, only
+        legacy on case6470rte, and on the four largest MP-Core runs out of memory under Octave.
+        The cause is a leak: its math model stores a closure over itself, a reference cycle
+        Octave never frees, and one at a time rebuilds the models every round (0.34 GB to
+        11.3 GB in 207 s on case_ACTIVSg10k). Recorded in the reactive-limits record; the
+        legacy references stand.
       - **Docs:** the README's status and provenance (`runpf`'s limit loop, and the legacy
         references), and the benchmarks README.
 - [ ] **Follow-up:** reuse the ordering, LU analysis and Jacobian assembly across the rounds of

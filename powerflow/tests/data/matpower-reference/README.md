@@ -11,8 +11,9 @@ Newton results come from it, and agree with the legacy `newtonpf` within 6.4e-12
 fast-decoupled results come from the legacy `fdpf` (`exp.use_legacy_core`), which `powerflow`
 follows: MP-Core's fast-decoupled results differ from it by up to 2.3e-7 (case14, FDXB) at the
 same iteration counts. The reactive-limit results also come from the legacy code: on these
-three cases the two agree within 5.1e-12, but over all of MATPOWER's cases MP-Core's differ (by
-up to 71 MW on case_SyntheticUSA, and in convergence on case6470rte).
+three cases the two agree within 5.1e-12, but over all of MATPOWER's cases MP-Core's differ (all
+at once by up to 71 MW on case_SyntheticUSA, and in convergence on case6470rte; one at a time by
+up to 0.040 MW, and on the four largest cases MP-Core runs out of memory under Octave).
 
 These files are **generated**. Don't edit them by hand; regenerate them with
 `scripts/generate-reference.sh`, which fetches MATPOWER (`scripts/fetch-matpower.sh`) and runs

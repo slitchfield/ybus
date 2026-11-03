@@ -99,8 +99,9 @@ legacy functions named above. The committed DC and Newton reference results come
 MP-Core; for Newton's method it agrees with the legacy code within 6.4e-12 on case118. Its
 fast-decoupled results differ from the legacy `fdpf`'s by up to 2.3e-7, so the fast-decoupled
 reference results come from `fdpf`. With reactive limits enforced, MP-Core differs from the
-legacy `runpf` over all cases (by up to 71 MW), so those reference results come from the legacy
-code too (see
+legacy `runpf` over all cases in both modes (by up to 71 MW), and one at a time it runs out of
+memory on the largest cases under Octave, so those reference results come from the legacy code
+too (see
 [the reference results' README](powerflow/tests/data/matpower-reference/README.md)). Across all
 MATPOWER cases, MP-Core's Newton post-processing also shares generator reactive output
 differently from the legacy `pfsoln` in 10 cases
