@@ -4,6 +4,11 @@
 //! once; inside a Newton solve the layout is made once per solve and only the refill repeats,
 //! so the solve's time is the better measure of the Jacobian's cost.
 //!
+//! The `jacobian_*` benchmarks time the other parts of a round of a reactive-limit loop, on the
+//! Jacobian at the solution: the AMD analysis of its pattern, a full factorization under it, a
+//! refactor reusing its pivots, and a solve. `superset_ordering` is the ordering a loop can
+//! compute once instead: AMD on Ybus, each bus expanded to its angle and then its magnitude.
+//!
 //! Run with `cargo bench -p powerflow --bench ac_power_flow`. Like `dc_power_flow`, it's skipped
 //! without the fetched case unless `YBUS_REQUIRE_CASES=1`, and `cargo test --all-targets` runs
 //! each benchmark once, as a test.
@@ -17,6 +22,7 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Criterion};
 use powerflow::ac::{AcMethod, AcModel, AcOptions};
 use powerflow::case::Case;
+use sparse_mat::compressed_matrix::{LuOptions, Ordering};
 use sparse_mat::Complex;
 
 const CASE: &str = "case2383wp";
@@ -50,6 +56,37 @@ fn ac_power_flow(c: &mut Criterion) {
         });
     }
     group.bench_function("jacobian", |b| b.iter(|| model.jacobian(black_box(&v))));
+
+    let jacobian = model.jacobian(&v);
+    group.bench_function("jacobian_amd", |b| {
+        b.iter(|| black_box(&jacobian).analyze_lu(Ordering::Amd).unwrap())
+    });
+    let symbolic = jacobian.analyze_lu(Ordering::Amd).unwrap();
+    group.bench_function("jacobian_factor", |b| {
+        b.iter(|| {
+            symbolic
+                .factor(black_box(&jacobian), LuOptions::default())
+                .unwrap()
+        })
+    });
+    let mut lu = symbolic.factor(&jacobian, LuOptions::default()).unwrap();
+    group.bench_function("jacobian_refactor", |b| {
+        b.iter(|| lu.refactor(black_box(&jacobian)).unwrap())
+    });
+    let rhs: Vec<f64> = (0..jacobian.shape().0).map(|i| (i as f64).sin()).collect();
+    group.bench_function("jacobian_solve", |b| {
+        b.iter(|| lu.solve(black_box(&rhs)).unwrap())
+    });
+    group.bench_function("superset_ordering", |b| {
+        b.iter(|| {
+            let buses = black_box(model.ybus()).ordering(Ordering::Amd).unwrap();
+            let expanded: Vec<usize> = buses
+                .iter()
+                .flat_map(|&bus| [2 * bus, 2 * bus + 1])
+                .collect();
+            expanded
+        })
+    });
     group.finish();
 }
 

@@ -891,11 +891,26 @@ PRs.
       Validated with the existing `check_permutation` (`InvalidPermutation`, and `NotSquare`).
       Given `analyze_lu(Amd)`'s own permutation it factors bit for bit the same, and any valid
       permutation factors and solves correctly (`factorization_test.rs`).
-- [ ] Measure a round's parts on case2383wp's Jacobian (assembly, AMD analysis, factorization,
+- [x] Measure a round's parts on case2383wp's Jacobian (assembly, AMD analysis, factorization,
       refactor, refill) with criterion, and decide whether the assembly is worth reusing.
-- [ ] From a limit loop's second round, order each round's Jacobian by one superset ordering
-      (AMD on Ybus, each bus expanded to its angle then its magnitude), restricted to the
-      round's columns, instead of an AMD per round.
+      - **Measured** (`ac_power_flow` bench, new `jacobian_*` and `superset_ordering`): the
+        assembly with one refill 957 µs, AMD 1,541 µs, a full factorization 1,253 µs, a refactor
+        191 µs, a solve 37 µs, and the superset ordering (AMD on Ybus, expanded) 736 µs.
+      - **A round** of about 2.2 iterations is then roughly 4.3 ms: AMD about 36%, the full
+        factorization 29%, and the assembly about 18% (957 µs less the 180 µs refill inferred in
+        PR #28: an estimate, since the refill isn't public on its own).
+      - **Decided:** the assembly is worth reusing too (over the plan's 10%). One fixed-pattern
+        Jacobian serves every round: a superset with an angle and a magnitude unknown for every
+        bus, where an unknown a round doesn't solve for (a PV bus's magnitude, a reference
+        bus's angle and magnitude) gets an identity row and column and a zero right-hand side,
+        so its update is exactly zero. Its assembly, ordering and LU analysis are made once,
+        and each round's first factorization is a refactor (or, if a pivot fails, a full
+        factorization under the same ordering), instead of an AMD and a fresh factorization.
+        This subsumes the planned restricted ordering, at the cost of stored zeros for the
+        unknowns a round pins.
+- [ ] From a limit loop's second round, solve every round against one superset Jacobian
+      (fixed pattern, unknowns a round doesn't solve for pinned), ordered once by AMD on Ybus
+      expanded to each bus's angle then magnitude, with its LU refactored across rounds.
 - [ ] Rerun both limit surveys against MATPOWER, and record the times before and after.
 
 ### PR B: COLAMD
