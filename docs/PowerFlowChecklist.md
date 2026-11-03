@@ -787,8 +787,28 @@ The studies that solve many times against one factorization of B′. Planned wit
 
 ### PR 3: outages without refactoring
 
-- [ ] Rank-k updates (Woodbury) for N-1 and N-k outages without refactoring. Test against a full
+- [x] Rank-k updates (Woodbury) for N-1 and N-k outages without refactoring. Test against a full
       refactorization, and against LODF for single outages.
+      - **API:** `DcStudy::solve_outage(case, rows)` and `solve_outages(case, sets)`, which share
+        the base solve. The result is a `DcSolution`, with the outaged branches' flows zero.
+        Errors: `RowOutOfRange`, `BranchOutOfService` (a branch not in the model), and
+        `IslandWithoutReference`, checked from the graph first, as a new model would. An island
+        that keeps its own reference bus is solved.
+      - **The update:** `θ′ = x + Y W⁻¹ Cᵀ x`, with `Y = B′⁻¹ C` (one sparse-RHS solve per outaged
+        branch) and `W = D⁻¹ − Cᵀ Y` (k×k, factored with `Lu`). The right-hand side's change
+        (an outaged phase shifter's injection, a branch's coupling to a reference bus) is a
+        combination of the `c_k`, so `x` is the base solution plus a combination of `Y`'s
+        columns: a single outage costs one sparse-RHS solve.
+      - **Changed from the plan:** `W` comes from `Y`, which the correction needs anyway, rather
+        than from forward-solve-only quadratic forms, which would need a second solve for the
+        correction. `DcStudy::solve` was split into helpers shared with the outages, with its
+        operations unchanged: a DC survey rerun matches the records on all 78 cases.
+      - **Validation:** every set of up to three branches of a fixture ring (with a phase
+        shifter, a tap, a parallel pair and a pendant bridge), on the Cholesky and LU paths and
+        with two references, matches refactoring: within 1e-9 relative when solved, and with
+        the same error when islanding. On case14, case30 and case118, every single outage and
+        fixed pairs and triples (521 solved, 56 islanding in both) agree within 9.5e-15 relative.
+        On case30, every non-bridge single outage agrees with the LODF within 1e-9 MW.
 - [ ] A survey of every case's single outages, recorded in `docs/benchmarks/`.
 
 ### PR 4: accuracy and parallel batches

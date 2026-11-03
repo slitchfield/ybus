@@ -27,6 +27,7 @@ use crate::case::{BusType, Case};
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Topology;
 
+mod outage;
 mod sensitivity;
 pub use sensitivity::{DcSensitivity, PtdfSlack};
 
@@ -286,6 +287,19 @@ impl DcModel {
         })
     }
 
+    /// Internal branch `k`'s susceptance `b = 1 / (x · tap)`, as Bf stores it at the from end.
+    /// A branch from a bus to itself stamps b and −b in one place, so it reads 0 there, which
+    /// is harmless: its angle difference is zero.
+    pub(crate) fn susceptance(&self, k: usize) -> f64 {
+        let (from, _) = self.topology.ends[k];
+        let position = self
+            .bf
+            .position(k, from)
+            .expect("in range")
+            .expect("Bf stores each branch's from end");
+        self.bf.values()[position]
+    }
+
     /// Factors Bbus over the internal buses `unknown` (rows and columns in that order), by
     /// Cholesky under `ordering`, or by LU if that isn't positive definite. Returns
     /// `PowerflowError::SingularNetwork`, naming a bus, if it's singular.
@@ -384,12 +398,20 @@ impl DcStudy<'_> {
     /// the model's case, and `SingularNetwork` if B′ is so nearly singular that some angle is
     /// non-finite or above 1e5 radians, which MATPOWER's `dcpf` treats as failure.
     pub fn solve(&self, case: &Case) -> Result<DcSolution, PowerflowError> {
-        let model = self.model;
-        model.topology.check_case(case)?;
-        let base_mva = model.base_mva;
-        let to_radians = PI / 180.0;
+        self.model.topology.check_case(case)?;
+        let (pbus, mut theta) = self.scheduled(case);
+        if let Some(factor) = &self.factor {
+            let solved = factor.solve(&self.rhs(&pbus, &theta));
+            self.place(case, &mut theta, &solved)?;
+        }
+        Ok(self.finish(case, &theta, &pbus, &[]))
+    }
 
-        // makeSbus's real part, less the phase-shifter injections and shunt conductance
+    /// makeSbus's real part at each connected bus, less the phase-shifter injections and shunt
+    /// conductance (p.u.), and each connected bus's angle from the case (radians).
+    fn scheduled(&self, case: &Case) -> (Vec<f64>, Vec<f64>) {
+        let model = self.model;
+        let base_mva = model.base_mva;
         let mut pbus: Vec<f64> = model
             .topology
             .bus_rows
@@ -408,54 +430,67 @@ impl DcStudy<'_> {
         {
             pbus[bus] += case.generator[row].pg_mw / base_mva;
         }
-        let mut theta: Vec<f64> = model
+        let theta = model
             .topology
             .bus_rows
             .iter()
-            .map(|&row| case.bus[row].va_deg * to_radians)
+            .map(|&row| case.bus[row].va_deg * (PI / 180.0))
             .collect();
+        (pbus, theta)
+    }
 
-        // dcpf: θ[pv, pq] = B[pv, pq; pv, pq] \ (P[pv, pq] − B[pv, pq; ref] · θ[ref])
-        let unknown = &self.unknown;
-        if let Some(factor) = &self.factor {
-            let b_ref = model
-                .bbus
-                .select(unknown, &model.topology.ref_buses)
-                .expect("indices in range");
-            let theta_ref: Vec<f64> = model
-                .topology
-                .ref_buses
-                .iter()
-                .map(|&bus| theta[bus])
-                .collect();
-            let coupling = b_ref
-                .mul_vec(&theta_ref)
-                .expect("one angle per reference bus");
-            let rhs: Vec<f64> = unknown
-                .iter()
-                .zip(&coupling)
-                .map(|(&bus, coupling)| pbus[bus] - coupling)
-                .collect();
-            let solved = factor.solve(&rhs);
-            // A nearly singular B′ can factor with a tiny pivot and give huge or non-finite
-            //   angles instead of an error; MATPOWER's dcpf treats |θ| > 1e5 as failure.
-            if let Some(position) = solved.iter().position(|t| !t.is_finite() || t.abs() > 1e5) {
-                return Err(PowerflowError::SingularNetwork {
-                    bus_label: case.bus[model.topology.bus_rows[unknown[position]]].bus_label,
-                });
-            }
-            for (&bus, value) in unknown.iter().zip(solved) {
-                theta[bus] = value;
-            }
+    /// dcpf's right-hand side over the unknowns: `P[pv, pq] − B[pv, pq; ref] · θ[ref]`.
+    fn rhs(&self, pbus: &[f64], theta: &[f64]) -> Vec<f64> {
+        let model = self.model;
+        let b_ref = model
+            .bbus
+            .select(&self.unknown, &model.topology.ref_buses)
+            .expect("indices in range");
+        let theta_ref: Vec<f64> = model
+            .topology
+            .ref_buses
+            .iter()
+            .map(|&bus| theta[bus])
+            .collect();
+        let coupling = b_ref
+            .mul_vec(&theta_ref)
+            .expect("one angle per reference bus");
+        self.unknown
+            .iter()
+            .zip(&coupling)
+            .map(|(&bus, coupling)| pbus[bus] - coupling)
+            .collect()
+    }
+
+    /// Writes the solved unknowns into `theta`. A nearly singular B′ can factor with a tiny
+    /// pivot and give huge or non-finite angles instead of an error; MATPOWER's dcpf treats
+    /// |θ| > 1e5 as failure, `PowerflowError::SingularNetwork` here.
+    fn place(&self, case: &Case, theta: &mut [f64], solved: &[f64]) -> Result<(), PowerflowError> {
+        if let Some(position) = solved.iter().position(|t| !t.is_finite() || t.abs() > 1e5) {
+            let row = self.model.topology.bus_rows[self.unknown[position]];
+            return Err(PowerflowError::SingularNetwork {
+                bus_label: case.bus[row].bus_label,
+            });
         }
+        for (&bus, &value) in self.unknown.iter().zip(solved) {
+            theta[bus] = value;
+        }
+        Ok(())
+    }
 
+    /// The solution from the connected buses' angles (radians) and scheduled injections, with
+    /// the internal branches `outaged` taken out: their flows are zero, and they carry nothing
+    /// into the reference buses' injections.
+    fn finish(&self, case: &Case, theta: &[f64], pbus: &[f64], outaged: &[usize]) -> DcSolution {
+        let model = self.model;
+        let base_mva = model.base_mva;
         let mut va_deg: Vec<f64> = case.bus.iter().map(|bus| bus.va_deg).collect();
-        for (&row, angle) in model.topology.bus_rows.iter().zip(&theta) {
-            va_deg[row] = angle / to_radians;
+        for (&row, angle) in model.topology.bus_rows.iter().zip(theta) {
+            va_deg[row] = angle / (PI / 180.0);
         }
 
         let mut pf_mw = vec![0.0; case.branch.len()];
-        let bf_theta = model.bf.mul_vec(&theta).expect("one angle per bus");
+        let bf_theta = model.bf.mul_vec(theta).expect("one angle per bus");
         for ((&row, flow), pfinj) in model
             .topology
             .branch_rows
@@ -465,6 +500,14 @@ impl DcStudy<'_> {
         {
             pf_mw[row] = (flow + pfinj) * base_mva;
         }
+        let mut injection = model.bbus.mul_vec(theta).expect("one angle per bus");
+        for &k in outaged {
+            pf_mw[model.topology.branch_rows[k]] = 0.0;
+            let (from, to) = model.topology.ends[k];
+            let flow = model.susceptance(k) * (theta[from] - theta[to]);
+            injection[from] -= flow;
+            injection[to] += flow;
+        }
 
         // The slack: the first in-service generator at each reference bus takes up the
         //   difference between the bus's solved injection and its scheduled one
@@ -472,7 +515,6 @@ impl DcStudy<'_> {
         for &row in &model.topology.gen_rows {
             pg_mw[row] = case.generator[row].pg_mw;
         }
-        let injection = model.bbus.mul_vec(&theta).expect("one angle per bus");
         for &bus in &model.topology.ref_buses {
             let first = model
                 .topology
@@ -483,12 +525,12 @@ impl DcStudy<'_> {
             pg_mw[model.topology.gen_rows[first]] += (injection[bus] - pbus[bus]) * base_mva;
         }
 
-        Ok(DcSolution {
+        DcSolution {
             va_deg,
             pf_mw,
             pg_mw,
             solver: self.solver(),
-        })
+        }
     }
 }
 

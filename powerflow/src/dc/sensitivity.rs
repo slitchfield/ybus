@@ -432,17 +432,8 @@ impl DcSensitivity<'_> {
         flows
     }
 
-    /// Internal branch `k`'s susceptance `b = 1 / (x · tap)`, as Bf stores it at the from end.
-    /// A branch from a bus to itself stamps b and −b in one place, so it reads 0 there, which
-    /// is harmless: its angle difference is zero.
+    /// Internal branch `k`'s susceptance, as the model stores it.
     pub(super) fn susceptance(&self, k: usize) -> f64 {
-        let (from, _) = self.model.topology.ends[k];
-        let position = self
-            .model
-            .bf
-            .position(k, from)
-            .expect("in range")
-            .expect("Bf stores each branch's from end");
-        self.model.bf.values()[position]
+        self.model.susceptance(k)
     }
 }

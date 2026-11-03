@@ -132,6 +132,9 @@ differently from the legacy `pfsoln` in 10 cases
 | `powerflow::islands` (`find_bridges`) | Bridges by depth-first search, iteratively, with parallel branches as separate edges | R. E. Tarjan, "A note on finding the bridges of a graph," *Inf. Process. Lett.* 2(6):160–161, 1974. [doi:10.1016/0020-0190(74)90003-9](https://doi.org/10.1016/0020-0190(74)90003-9) |
 | `powerflow::dc` (`DcSensitivity`: `ptdf_*`, `lodf_columns`, `lodf`) | Power transfer and line outage distribution factors, from transfer solves against B′ | A. J. Wood, B. F. Wollenberg and G. B. Sheblé, *Power Generation, Operation, and Control*, 3rd ed., Wiley, 2014, ch. 7 and app. 7B. |
 | | | T. Güler, G. Gross and M. Liu, "Generalized line outage distribution factors," *IEEE Trans. Power Syst.* 22(2):879–881, 2007. [doi:10.1109/TPWRS.2006.888950](https://doi.org/10.1109/TPWRS.2006.888950) |
+| `powerflow::dc` (`DcStudy::solve_outage`, `solve_outages`) | Outages by rank-k updates of B′'s kept factorization, the Sherman–Morrison–Woodbury identity | J. Sherman and W. J. Morrison, "Adjustment of an inverse matrix corresponding to a change in one element of a given matrix," *Ann. Math. Statist.* 21(1):124–127, 1950. [doi:10.1214/aoms/1177729893](https://doi.org/10.1214/aoms/1177729893) |
+| | | M. A. Woodbury, "Inverting modified matrices," Memorandum Report 42, Statistical Research Group, Princeton University, 1950. |
+| | | W. W. Hager, "Updating the inverse of a matrix," *SIAM Rev.* 31(2):221–239, 1989. [doi:10.1137/1031049](https://doi.org/10.1137/1031049) |
 | `powerflow::case` (`Case::parse`) | The MATPOWER case format, as `caseformat.m` defines it | R. D. Zimmerman and C. E. Murillo-Sánchez, *MATPOWER User's Manual*, Version 8.1, 2025. [doi:10.5281/zenodo.15871661](https://doi.org/10.5281/zenodo.15871661) |
 | `powerflow::ac` (`AcModel::jacobian`, Newton's method) | The power flow equations' derivatives in complex matrix form, `dS/dVa` and `dS/dVm` | R. D. Zimmerman, "AC power flows, generalized OPF costs and their derivatives using complex matrix notation," MATPOWER Technical Note 2, February 2010. [doi:10.5281/zenodo.3237866](https://doi.org/10.5281/zenodo.3237866) |
 | `powerflow::ac` (`AcMethod::FastDecoupledXb`, `FastDecoupledBx`) | Fast-decoupled power flow, XB and BX, as MATPOWER's `fdpf` and `makeB` compute it | B. Stott and O. Alsaç, "Fast decoupled load flow," *IEEE Trans. Power App. Syst.* PAS-93(3):859–869, 1974. |
@@ -143,8 +146,6 @@ differently from the legacy `pfsoln` in 10 cases
 | Planned work | Reference |
 |---|---|
 | COLAMD ordering (deferred: only needed for patterns far from symmetric) | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "A column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):353–376, 2004. |
-| Low-rank updates for contingencies (Phase 5) | J. Sherman and W. J. Morrison, "Adjustment of an inverse matrix corresponding to a change in one element of a given matrix," *Ann. Math. Statist.* 21(1):124–127, 1950. [doi:10.1214/aoms/1177729893](https://doi.org/10.1214/aoms/1177729893) |
-| | M. A. Woodbury, "Inverting modified matrices," Memorandum Report 42, Statistical Research Group, Princeton University, 1950. |
 
 ### Licenses of related software
 
