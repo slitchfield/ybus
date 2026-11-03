@@ -44,6 +44,9 @@ impl Default for LuOptions {
 #[derive(Clone, Debug)]
 pub struct SymbolicLu {
     col_perm: Vec<usize>,
+    /// Whether to keep a large enough diagonal entry as the pivot: true under a symmetric
+    /// ordering, false under a column-only one (COLAMD), whose diagonal means nothing
+    prefer_diagonal: bool,
     a_ptr: Vec<usize>,
     a_idx: Vec<usize>,
 }
@@ -76,6 +79,8 @@ pub struct Lu<T: Scalar = f64> {
     row_perm_inverse: Vec<usize>,
     col_perm: Vec<usize>,
     options: LuOptions,
+    /// As in `SymbolicLu`, for a fresh factorization in `refactor`
+    prefer_diagonal: bool,
     a_ptr: Vec<usize>,
     a_idx: Vec<usize>,
 }
@@ -84,9 +89,17 @@ impl<T: Scalar> CscMatrix<T> {
     /// Analyzes this matrix's pattern for an LU factorization whose columns, and preferred
     /// pivots, follow `ordering` applied to the pattern of `A + Aᵀ`. Only the pattern is read.
     /// Returns `SparseError::NotSquare` for a non-square matrix.
+    ///
+    /// Under `Ordering::Colamd`, which orders columns from the pattern of `A` itself, there is
+    /// no meaningful diagonal to prefer, so each column's pivot is its largest candidate:
+    /// plain partial pivoting, with the threshold unused.
     pub fn analyze_lu(&self, ordering: Ordering) -> Result<SymbolicLu, SparseError> {
+        if ordering == Ordering::Colamd && !self.is_square() {
+            return Err(SparseError::NotSquare { shape: self.shape });
+        }
         Ok(SymbolicLu {
             col_perm: self.ordering(ordering)?,
+            prefer_diagonal: ordering != Ordering::Colamd,
             a_ptr: self.ptr.clone(),
             a_idx: self.idx.clone(),
         })
@@ -110,6 +123,7 @@ impl<T: Scalar> CscMatrix<T> {
         check_permutation(&col_perm, self.shape.1)?;
         Ok(SymbolicLu {
             col_perm,
+            prefer_diagonal: true,
             a_ptr: self.ptr.clone(),
             a_idx: self.idx.clone(),
         })
@@ -170,7 +184,7 @@ impl SymbolicLu {
         if matrix.shape != (n, n) || matrix.ptr != self.a_ptr || matrix.idx != self.a_idx {
             return Err(SparseError::PatternMismatch);
         }
-        gilbert_peierls(matrix, &self.col_perm, options)
+        gilbert_peierls(matrix, &self.col_perm, options, self.prefer_diagonal)
     }
 }
 
@@ -226,6 +240,7 @@ fn gilbert_peierls<T: Scalar + ComplexFloat>(
     a: &CscMatrix<T>,
     q: &[usize],
     options: LuOptions,
+    prefer_diagonal: bool,
 ) -> Result<Lu<T>, SparseError> {
     let tau = threshold::<T>(options);
     let n = q.len();
@@ -312,7 +327,11 @@ fn gilbert_peierls<T: Scalar + ComplexFloat>(
             return Err(SparseError::SingularMatrix { pivot: col });
         };
         // Prefer the diagonal of the ordered matrix while it's large enough
-        if pinv[col].is_none() && visited[col] == k && x[col].abs() >= tau * largest {
+        if prefer_diagonal
+            && pinv[col].is_none()
+            && visited[col] == k
+            && x[col].abs() >= tau * largest
+        {
             pivot_row = col;
         }
         let pivot = x[pivot_row];
@@ -349,6 +368,7 @@ fn gilbert_peierls<T: Scalar + ComplexFloat>(
         row_perm,
         col_perm: q.to_vec(),
         options,
+        prefer_diagonal,
         a_ptr: a.ptr.clone(),
         a_idx: a.idx.clone(),
     })
@@ -648,7 +668,8 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
                 .fold(pivot.abs(), |a, b| if b > a { b } else { a });
             if pivot == T::zero() || pivot.abs() < tau * largest {
                 // Too small to reuse: factor afresh, leaving self as it was if that fails
-                *self = gilbert_peierls(matrix, &self.col_perm, self.options)?;
+                *self =
+                    gilbert_peierls(matrix, &self.col_perm, self.options, self.prefer_diagonal)?;
                 return Ok(RefactorOutcome::Repivoted);
             }
             u_val[diagonal] = pivot;

@@ -4,7 +4,7 @@ Sparse linear algebra and power flow for Rust. A Cargo workspace with two crates
 
 | Crate | Status | Contents |
 |---|---|---|
-| [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM), sparse Cholesky and LU (complex too, with refactoring, sparse right-hand sides and transposed solves), iterative refinement and condition estimates, conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
+| [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM, COLAMD), sparse Cholesky and LU (complex too, with refactoring, sparse right-hand sides and transposed solves), iterative refinement and condition estimates, conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
 | [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. It also lists a network's islands and bridges, computes PTDF and LODF from a kept factorization of B′, as MATPOWER does, and solves branch outages by rank-k updates of that factorization, matching a refactored solve, optionally in parallel (`rayon`). |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
@@ -131,6 +131,8 @@ differently from the legacy `pfsoln` in 10 cases
 | | | A. George and J. W. H. Liu, *Computer Solution of Large Sparse Positive Definite Systems*, Prentice-Hall, 1981. |
 | `Ordering::Amd` | Approximate minimum degree on the quotient graph, with aggressive absorption and supervariables | P. R. Amestoy, T. A. Davis and I. S. Duff, "An approximate minimum degree ordering algorithm," *SIAM J. Matrix Anal. Appl.* 17(4):886–905, 1996. [doi:10.1137/S0895479894278952](https://doi.org/10.1137/S0895479894278952) |
 | | | T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006, ch. 7. |
+| `Ordering::Colamd` | Column approximate minimum degree: a column ordering for LU from the row–column structure, with row elements, approximate scores, aggressive absorption and supercolumns | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "A column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):353–376, 2004. [doi:10.1145/1024074.1024079](https://doi.org/10.1145/1024074.1024079) |
+| | | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "Algorithm 836: COLAMD, a column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):377–380, 2004. [doi:10.1145/1024074.1024080](https://doi.org/10.1145/1024074.1024080) |
 | Matrix Market I/O | Coordinate exchange format | R. F. Boisvert, R. Pozo and K. A. Remington, "The Matrix Market Exchange Formats: Initial Design," NISTIR 5935, NIST, 1996. [doi:10.6028/NIST.IR.5935](https://doi.org/10.6028/NIST.IR.5935) |
 | `powerflow`'s tests and `dc_survey` example (`tests/common/accuracy.rs`) | Normwise backward error, η = ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) | J. L. Rigal and J. Gaches, "On the compatibility of a given solution with the data of a linear system," *J. ACM* 14(3):543–548, 1967. |
 | | | N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed., SIAM, 2002, ch. 7. [doi:10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027) |
@@ -150,7 +152,6 @@ differently from the legacy `pfsoln` in 10 cases
 
 | Planned work | Reference |
 |---|---|
-| COLAMD ordering (deferred: only needed for patterns far from symmetric) | T. A. Davis, J. R. Gilbert, S. I. Larimore and E. G. Ng, "A column approximate minimum degree ordering algorithm," *ACM Trans. Math. Softw.* 30(3):353–376, 2004. |
 
 ### Licenses of related software
 

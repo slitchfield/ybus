@@ -31,6 +31,7 @@ mod accuracy;
 mod assembly;
 mod blocks;
 mod cholesky;
+mod colamd;
 mod lu;
 mod ops;
 mod ordering;

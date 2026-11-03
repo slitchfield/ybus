@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use super::colamd::column_approximate_minimum_degree;
 use super::{CompressedMatrix, Orientation};
 use crate::sparse_error::SparseError;
 use crate::Scalar;
@@ -25,15 +26,31 @@ pub enum Ordering {
     /// degree in the graph of what remains, which keeps the factor's fill-in small. Nodes with
     /// many more neighbours than the rest (dense rows) are ordered last.
     Amd,
+    /// Column approximate minimum degree (COLAMD): a column ordering for LU of a matrix whose
+    /// pattern needn't be symmetric, chosen from the row–column structure of `A` itself rather
+    /// than `A + Aᵀ`, so that `A Q`'s factors stay sparse under any row pivoting. It orders
+    /// columns only, so it applies to LU ([`CscMatrix::analyze_lu`](super::CscMatrix::analyze_lu)),
+    /// which then pivots without preferring the diagonal, and to rectangular matrices, but not
+    /// to Cholesky.
+    Colamd,
 }
 
 impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
     /// The permutation `ordering` chooses for this matrix, in the convention of
     /// `permute_symmetric`. It depends only on the pattern of `A + Aᵀ`, so it is the same in
-    /// either orientation and whatever the values.
+    /// either orientation and whatever the values. `Ordering::Colamd` is the exception: it
+    /// orders the columns only (column `k` of `A Q` is column `perm[k]` of `A`), from the
+    /// pattern of `A` itself, and accepts a rectangular matrix.
     ///
-    /// Returns `SparseError::NotSquare` for a non-square matrix.
+    /// Returns `SparseError::NotSquare` for a non-square matrix, except under COLAMD.
     pub fn ordering(&self, ordering: Ordering) -> Result<Vec<usize>, SparseError> {
+        if ordering == Ordering::Colamd {
+            return Ok(column_approximate_minimum_degree(
+                self.shape.0,
+                self.shape.1,
+                self.iter().map(|(row, col, _)| (row, col)),
+            ));
+        }
         if !self.is_square() {
             return Err(SparseError::NotSquare { shape: self.shape });
         }
@@ -41,6 +58,7 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
             Ordering::Natural => (0..self.shape.0).collect(),
             Ordering::Rcm => reverse_cuthill_mckee(&Adjacency::of(self)),
             Ordering::Amd => approximate_minimum_degree(&Adjacency::of(self)),
+            Ordering::Colamd => unreachable!("handled above"),
         })
     }
 }

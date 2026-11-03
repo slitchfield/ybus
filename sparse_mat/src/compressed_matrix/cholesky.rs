@@ -42,8 +42,14 @@ impl<T: Scalar> CsrMatrix<T> {
     ///
     /// Only the pattern is read, symmetrized as `A + Aᵀ`, so the matrix needn't be symmetric
     /// yet; `SymbolicCholesky::factor` checks that. Costs O(nnz(L) log) after the ordering.
-    /// Returns `SparseError::NotSquare` for a non-square matrix.
+    /// Returns `SparseError::NotSquare` for a non-square matrix, and
+    /// `SparseError::UnsupportedOrdering` for `Ordering::Colamd`, which orders columns only.
     pub fn analyze_cholesky(&self, ordering: Ordering) -> Result<SymbolicCholesky, SparseError> {
+        if ordering == Ordering::Colamd {
+            return Err(SparseError::UnsupportedOrdering {
+                reason: "COLAMD orders columns only, which doesn't apply to Cholesky",
+            });
+        }
         let perm = self.ordering(ordering)?;
         let n = perm.len();
         let mut inverse = vec![0; n];
