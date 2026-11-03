@@ -98,12 +98,41 @@ thousands of rounds, as in MATPOWER:
 
 ## MP-Core against legacy
 
-With limits all at once, MP-Core and the legacy code were compared on every case MATPOWER solves:
+**All at once:** MP-Core and the legacy code were compared on every case MATPOWER solves:
 
 - They agree within 5.1e-12 on case14, case30 and case118, the committed cases.
 - Over all cases they differ, by up to 71 MW on case_SyntheticUSA. case6470rte converges only in
   legacy, and case_ACTIVSg10k takes 17 iterations in MP-Core against 16.
 
-By the rule agreed for this work, the references therefore come from the legacy code. The same
-comparison one at a time was started but not finished: a restart of the machine interrupted it,
-and it would take many hours, running MATPOWER twice on each of the largest cases.
+By the rule agreed for this work, the references therefore come from the legacy code.
+
+**One at a time** (rerun 2026-11-02, after a machine restart interrupted the first attempt):
+each case ran once in MP-Core and once in legacy, under single-threaded BLAS, an address-space
+limit and a 5-hour timeout per run.
+
+| Outcome | Cases |
+|---|--:|
+| Both converge | 69 |
+| Neither converges (case4gs, case9target, case16am, case118zh) | 4 |
+| Only legacy converges (case6470rte) | 1 |
+| Legacy converges, MP-Core runs out of memory (case_ACTIVSg10k, case_ACTIVSg25k, case_ACTIVSg70k, case_SyntheticUSA) | 4 |
+
+- **Where both converge:** the final bus types agree in all 69. 53 agree within 1e-9. Of the
+  other 16, two take different iteration counts (case2848rte 184 in MP-Core against 183 in
+  legacy, case3012wp 482 against 481), and case2868rte differs most, by 0.040 MW/MVAr in flows
+  and generator outputs and 0.0054° in angles. The rest are within 8.4e-9. case14, case30 and
+  case118 agree within 5.1e-12, at the same iteration counts.
+- **The four largest cases run MP-Core out of memory under Octave.** Legacy converged on each,
+  with the iteration counts above (2,612 to 14,225), in 98 s to 92 minutes. MP-Core failed on
+  each within about 3.5 minutes at a 12 GiB limit, and its resident memory on case_ACTIVSg10k
+  rose steadily from 0.34 GB to 11.3 GB in 207 s, while legacy's stayed near 0.3 GB.
+- **The cause is a leak, not the problem's size.** MP-Core's math model stores a closure that
+  captures the model itself (`add_node_balance_constraints` in `math_model_pf_acps.m`), a
+  reference cycle among handle objects, which Octave's reference counting never frees. One
+  plain `runpf` call leaks 2.7 MB on case_ACTIVSg2000, against nothing for legacy, and one at a
+  time rebuilds the models every round. Without the memory limit it would exhaust this
+  machine's 16 GB, so these four can't be compared here. As of 2026-11-02 the leak isn't
+  reported in MATPOWER's issues, pull requests, discussions or change log.
+
+So in both modes MP-Core's results with limits differ from legacy's, and one at a time it can't
+run the largest cases under Octave: the legacy references stand.
