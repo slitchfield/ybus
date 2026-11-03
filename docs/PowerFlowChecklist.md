@@ -395,8 +395,8 @@ backward error below 0.8 ε. COLAMD stays deferred, below.
       largest 2.7, and the largest backward error 0.49 ε (6.5 ε before). So the excess followed
       the fill, not the algorithm, and threshold pivoting at 0.1 cost no stability here. Every
       case's backward error is now below 0.8 ε.
-- [ ] Deferred: COLAMD, for LU of a matrix whose pattern is far from symmetric. Nothing in power
-      flow needs it yet.
+- **Deferred, moved to "After Phase 5" (2026-11-03):** COLAMD, for LU of a matrix whose pattern
+  is far from symmetric. Nothing in power flow needs it yet.
 
 ## Phase 4: Complex-capable solvers (migrating what Phase 3 didn't rewrite)
 
@@ -661,10 +661,10 @@ item.
         legacy references stand.
       - **Docs:** the README's status and provenance (`runpf`'s limit loop, and the legacy
         references), and the benchmarks README.
-- [ ] **Follow-up:** reuse the ordering, LU analysis and Jacobian assembly across the rounds of
-      a limit loop. One at a time spends 2,450 s on case_SyntheticUSA over 6,337 rounds of about
-      2.2 iterations, each round repeating that setup, though each moves only one bus from PV to
-      PQ.
+- **Follow-up, moved to "After Phase 5" (2026-11-03):** reuse the ordering, LU analysis and
+  Jacobian assembly across the rounds of a limit loop. One at a time spends 2,450 s on
+  case_SyntheticUSA over 6,337 rounds of about 2.2 iterations, each round repeating that setup,
+  though each moves only one bus from PV to PQ.
 
 ## Phase 5: DC studies
 
@@ -868,6 +868,38 @@ The studies that solve many times against one factorization of B′. Planned wit
         survey on all 78 cases, in 3.5 minutes instead of 21.5, with a median speedup of 11.0×
         from 1,000 buses on 28 threads; 5.8–5.9× on the two largest cases, where the survey's
         chunks repeat the serial base solve. Small cases are slower in parallel.
+
+## After Phase 5: setup reuse across reactive-limit rounds, and COLAMD
+
+The two items left open by the earlier phases, planned with the maintainer (2026-11-03) as two
+PRs.
+
+- [x] **Decide:** whether limit-mode results may change by rounding, COLAMD's scope, and the
+      split.
+      Decided (2026-11-03):
+      - **Rounding changes are allowed** in limit-mode results from a loop's second round on,
+        provided both limit surveys still match MATPOWER on all 78 cases: convergence, iteration
+        counts and held generators exactly, values within 1e-9. Plain Newton (limits ignored)
+        stays bit-identical, and so does a limit run that holds nothing.
+      - **COLAMD:** implement it and benchmark it against AMD on power-flow matrices. AMD stays
+        the default unless COLAMD wins.
+      - **Two PRs:** the setup reuse first, then COLAMD.
+
+### PR A: the limit loop without repeated AMD
+
+- [ ] `CscMatrix::analyze_lu_with_permutation`: an LU analysis under a given column ordering.
+- [ ] Measure a round's parts on case2383wp's Jacobian (assembly, AMD analysis, factorization,
+      refactor, refill) with criterion, and decide whether the assembly is worth reusing.
+- [ ] From a limit loop's second round, order each round's Jacobian by one superset ordering
+      (AMD on Ybus, each bus expanded to its angle then its magnitude), restricted to the
+      round's columns, instead of an AMD per round.
+- [ ] Rerun both limit surveys against MATPOWER, and record the times before and after.
+
+### PR B: COLAMD
+
+- [ ] `Ordering::Colamd` for LU, with plain threshold partial pivoting under it, and
+      `SparseError::UnsupportedOrdering` for Cholesky.
+- [ ] Benchmark COLAMD against AMD on power-flow matrices and synthetic unsymmetric ones.
 
 ## Housekeeping (carried over from the PR #1 review)
 
