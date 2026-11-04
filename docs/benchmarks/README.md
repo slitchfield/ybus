@@ -15,6 +15,7 @@ change. Each record names the code, the machine and the method it used.
 | [`dc-contingency-2026-11-02.md`](dc-contingency-2026-11-02.md) | Every single-branch outage of every case by rank-1 updates of B′'s kept factorization (Phase 5), against refactoring. |
 | [`colamd-2026-11-03.md`](colamd-2026-11-03.md) | COLAMD against AMD on every case's Jacobian and B′: AMD fills less on every case, so it stays the default. |
 | [`ac-reactive-limits-reuse-2026-11-03.md`](ac-reactive-limits-reuse-2026-11-03.md) | The reactive-limit survey with a limit loop's later rounds solving against one superset Jacobian: the same results as MATPOWER, one at a time 2.9× faster in all. |
+| [`opf-2026-11-04.md`](opf-2026-11-04.md) | The DC and AC optimal power flows on every case with costs, solved by MIPS (phase O1), against MATPOWER's MP-Core and legacy implementations: outcomes, iterations, agreement and time against MATPOWER. |
 | [`ac-reactive-limits-2026-11-01.md`](ac-reactive-limits-2026-11-01.md) | Newton's method on every case with generator reactive limits enforced, all at once and one at a time, against MATPOWER's legacy `runpf`, including the held generators. |
 
 ## Measuring
@@ -34,6 +35,9 @@ change. Each record names the code, the machine and the method it used.
   each case alone with the `n1_survey` example, by rank-k updates of B′'s kept factorization,
   and compares a sample with refactoring (every outage up to 3,000 buses, about 300 above).
   `YBUS_BENCH_PARALLEL=1` solves them in parallel (`rayon`).
+- **The optimal power flow:** `scripts/benchmark-opf.sh [<output.csv>]` runs the `opf_survey`
+  example on each case with costs, the model chosen by `YBUS_BENCH_MODEL` (`dc` or `ac`), and
+  compares it with MATPOWER's MP-Core and legacy results, generating any that are missing.
 - **Orderings:** `scripts/benchmark-ordering.sh [<output.csv>]` factors each case's Jacobian and
   B′ under AMD and COLAMD with the `ordering_survey` example.
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example

@@ -260,9 +260,30 @@ with legacy results generated locally to explain differences.
 
 ### PR 4: the OPF survey
 
-- [ ] The OPF survey over every case with costs, DC and AC: an `opf_survey` example and
+- [x] The OPF survey over every case with costs, DC and AC: an `opf_survey` example and
       `scripts/benchmark-opf.sh`, rechecking MP-Core against the legacy code, recorded in
       `docs/benchmarks/`, with the bars set from it.
+      - **Recorded** in [`docs/benchmarks/opf-2026-11-04.md`](benchmarks/opf-2026-11-04.md). The
+        survey reproduces the local tests:
+        - **Outcomes:** the same as MATPOWER's on 72 of 73 DC cases and all 73 AC.
+        - **Iteration counts:** MATPOWER's on 56 of 57 and 45 of 46 converged runs.
+        - **Agreement:** objectives within 7.5e-12 and 1.1e-11, and `LAM_P` within 4.5e-11 and
+          2.4e-7, outside the explained cases. The bars stay as PR 2 and PR 3 set them from the
+          same measurements.
+      - **MP-Core against legacy:** the two agree on every outcome and on every converged run's
+        iteration count, with objectives within 3.9e-13 (DC) and 6.8e-12 (AC, outside
+        case8387pegase). They differ on the degenerate dispatch (86 MW on case8387pegase, DC) as
+        `powerflow` does, and fail after different numbers of iterations on 7 AC runs that fail
+        in both. So the MP-Core references stand, and no case needs the legacy rule.
+      - **Time against MATPOWER under Octave:** far faster on small cases (Octave's fixed costs),
+        and close on large ones (0.64–1.27 times MATPOWER's time for AC). On the three largest
+        cases, which fail in both, 1.4–2.9 times, since each iteration analyzes and factors the KKT
+        system afresh: a baseline for phase O4.
+      - **Generation:** `generate_reference.m` gains `dcopf_legacy` and `opf_legacy` runs and
+        local timing files (not committed, since the time varies), so the recheck is
+        reproducible.
+
+**Phase O1 is complete** (PRs #38–#40 and this one, 2026-11-04).
 
 ## Phase O2: accelerating the power flow
 
