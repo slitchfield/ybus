@@ -101,9 +101,11 @@ Manual defines them) and the Newton Jacobian's derivatives (what `dSbus_dV` comp
 Technical Note 2, cited below). Both power flows are reimplementations in Rust, not
 translations, and the module documentation names the MATPOWER functions each step follows.
 
-`interior_point`'s MIPS (`interior_point::mips`) was written the same way, with reference to
-the source of MATPOWER's `mips.m` and `qps_mips.m` (MIPS 1.5.2), so that its iterations can be
-checked against MATPOWER's one by one. The optimal power flow's generator costs
+`interior_point`'s MIPS (`interior_point::mips`) is different: it is ported step for step from
+MATPOWER's `mips.m` and `qps_mips.m` (MIPS 1.5.2), so that its iterations can be checked
+against MATPOWER's one by one, and so it is derived from them and carries MIPS's BSD notice, as
+do its tests and the script that records MIPS's results on the same problems
+([`LICENSE-MIPS`](LICENSE-MIPS) lists the files). The optimal power flow's generator costs
 (`powerflow::opf::cost`) follow `opf_setup`, `makeAy`, `pqcost`, `totcost` and `polycost`.
 
 MATPOWER 8.1 runs its newer MP-Core implementation by default, while `powerflow` follows the
@@ -183,6 +185,8 @@ The current terms of the most relevant implementations:
   that license, so this repository doesn't include them: `scripts/fetch-matpower.sh` downloads
   them. Results computed from the public-source cases (case14, case30, case118) are committed,
   with each case's origin credited in
-  [their README](powerflow/tests/data/matpower-reference/README.md).
+  [their README](powerflow/tests/data/matpower-reference/README.md). MIPS, MATPOWER's solver,
+  is under the same BSD 3-clause license; `interior_point::mips` is ported from it, so it and
+  the files that restate MIPS's tests keep MIPS's notice ([`LICENSE-MIPS`](LICENSE-MIPS)).
 
 Before relying on these, check them against each project's current `LICENSE` file.

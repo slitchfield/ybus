@@ -64,14 +64,18 @@ None of this guarantees the absence of errors. Please report any you find.
 ## Attribution of sources
 
 Considerable care went into attributing the ideas this code is built on:
-- **No copied code:** the sparse matrix algorithms were implemented from published
-  descriptions in papers and textbooks, and no source code from other libraries was knowingly
-  copied or ported. The DC and AC power flows, the DC sensitivities (PTDF and LODF), and the
-  island and bridge listing, MIPS and the optimal power flow's generator costs, are the exception: they reproduce MATPOWER's results, and were written with reference to MATPOWER's
-  BSD-licensed source code as well as
-  its documentation and technical notes. They are reimplementations in Rust, not translations;
-  the README's [References](README.md#references) section names the MATPOWER files consulted,
-  and the parts written from published formulas instead.
+- **Copied and ported code, marked:** the sparse matrix algorithms were implemented from
+  published descriptions in papers and textbooks, and no source code from other libraries was
+  knowingly copied or ported. The DC and AC power flows, the DC sensitivities (PTDF and LODF),
+  the island and bridge listing, and the optimal power flow's generator costs reproduce
+  MATPOWER's results, and were written with reference to MATPOWER's BSD-licensed source code as
+  well as its documentation and technical notes. They are reimplementations in Rust, not
+  translations; the README's [References](README.md#references) section names the MATPOWER
+  files consulted, and the parts written from published formulas instead. MIPS is the
+  exception: `interior_point::mips` is ported step for step from MIPS's `mips.m` and
+  `qps_mips.m`, and `scripts/generate_mips_reference.m` copies the problem functions of MIPS's
+  tests. Those files, and the Rust tests that restate the same problems, carry MIPS's copyright
+  notice, and [`LICENSE-MIPS`](LICENSE-MIPS) holds its BSD license.
 - **References:** the [References](README.md#references) section of the README lists the
   publication behind each implemented algorithm, and behind each planned one.
 - **Checked citations:** each citation's details (authors, venue, pages, DOI) were checked against
@@ -110,8 +114,11 @@ licensing follows current best practices for AI-assisted software development:
 
 - **A standard permissive license:** the same dual license as Rust itself and most of its
   ecosystem, applied to the whole repository, including AI-assisted portions.
-- **No third-party code:** no source code from other projects is included, so there are no
-  inherited license obligations to track.
+- **Third-party code, under its own notice:** the only source code from another project is
+  derived from MIPS (see above), under its 3-clause BSD license, which asks that its copyright
+  notice, conditions and disclaimer stay with the code. [`LICENSE-MIPS`](LICENSE-MIPS) reproduces
+  them and lists the files, and each of those files names it. The license permits this use and
+  is compatible with the repository's own.
 - **Third-party test data:** MATPOWER's case files are not included; a script downloads them
   for testing. The repository does include power flow results that MATPOWER computed from three
   public test cases (DC, and AC by Newton's method and fast-decoupled), as expected values for

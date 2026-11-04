@@ -9,6 +9,13 @@
 %   space-separated numbers (empty when MIPS returns none).
 %
 % Usage: octave generate_mips_reference.m <matpower-dir>
+%
+% The problem functions below (f2 to f7, gh5 to gh7 and hess5 to hess7) are copied from MIPS's
+%   t_mips.m, with comments and blank lines removed, and the problems solved after them are
+%   those of t_mips.m and t_qps_mips.m:
+%   Copyright (c) 2010-2024, Power Systems Engineering Research Center (PSERC)
+%   by Ray Zimmerman, PSERC Cornell
+%   Covered by the 3-clause BSD License; see LICENSE-MIPS at the repository's root.
 
 1;
 
@@ -30,7 +37,7 @@ function report(name, sc, x, f, eflag, output, lam)
     printf('%s,%d,%s\n', name, sc, strjoin(fields, '|'));
 end
 
-% The problems of t_mips.m: objective, constraints and Hessians
+% The problems of t_mips.m: objective, constraints and Hessians (copied; see the notice above)
 function [f, df, d2f] = f2(x)
     a = 100;
     f = a*(x(2)-x(1)^2)^2+(1-x(1))^2;

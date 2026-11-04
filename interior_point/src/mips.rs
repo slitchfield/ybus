@@ -1,7 +1,12 @@
+// Derived from MIPS's mips.m and qps_mips.m (MIPS 1.5.2):
+//   Copyright (c) 2009-2024, Power Systems Engineering Research Center (PSERC)
+//   by Ray Zimmerman, PSERC Cornell
+//   Covered by the 3-clause BSD License; see LICENSE-MIPS at the repository's root.
+
 //! MIPS, the MATPOWER Interior Point Solver: a primal-dual interior-point method for nonlinear
-//! programs, reimplemented from MATPOWER's BSD-licensed `mips.m` (MIPS 1.5.x, in MATPOWER 8.1)
-//! so that its iterations, results and multipliers match MATPOWER's (Wang, Murillo-Sánchez,
-//! Zimmerman and Thomas, 2007).
+//! programs, ported step for step from MATPOWER's BSD-licensed `mips.m` and `qps_mips.m`
+//! (MIPS 1.5.2, in MATPOWER 8.1) so that its iterations, results and multipliers match
+//! MATPOWER's (Wang, Murillo-Sánchez, Zimmerman and Thomas, 2007).
 
 use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering};
 

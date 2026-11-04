@@ -3,6 +3,18 @@
 //   count, and the solution, objective and multipliers close to MATPOWER's, whose results
 //   scripts/generate-mips-reference.sh records in tests/data/mips_reference.txt; and each
 //   problem's known answer to the precision t_mips checks it.
+//
+// The problems, starting points and expected answers are MIPS's, from t_mips.m and
+//   t_qps_mips.m, restated in Rust:
+//   Copyright (c) 2010-2024, Power Systems Engineering Research Center (PSERC)
+//   by Ray Zimmerman, PSERC Cornell
+//   Covered by the 3-clause BSD License; see LICENSE-MIPS at the repository's root.
+// Two of them are classics: Rosenbrock's function (H. H. Rosenbrock, "An automatic method for
+//   finding the greatest or least value of a function," The Computer Journal 3(3):175-184,
+//   1960, doi:10.1093/comjnl/3.3.175), through MATLAB's bandem.m, and problem 71 of W. Hock
+//   and K. Schittkowski, Test Examples for Nonlinear Programming Codes, Lecture Notes in
+//   Economics and Mathematical Systems 187, Springer, 1981, doi:10.1007/978-3-642-48320-2.
+//   t_mips.m cites the sources of the others.
 
 use std::collections::HashMap;
 
