@@ -1,0 +1,49 @@
+MIPS license notice
+===================
+
+Parts of this repository are derived from MIPS, the MATPOWER Interior Point Solver
+(https://github.com/MATPOWER/mips), version 1.5.2 as distributed with MATPOWER 8.1, and are
+redistributed under MIPS's 3-clause BSD license, reproduced below:
+
+- interior_point/src/mips.rs: a step-for-step port of mips.m and qps_mips.m
+  (Copyright (c) 2009-2024 and 2010-2024, PSERC)
+- interior_point/tests/mips_test.rs: the test problems, starting points and expected answers of
+  t_mips.m and t_qps_mips.m, restated in Rust (Copyright (c) 2010-2024, PSERC)
+- scripts/generate_mips_reference.m: the problem functions of t_mips.m, copied, and the problems
+  of t_mips.m and t_qps_mips.m (Copyright (c) 2010-2024, PSERC)
+
+The rest of each file, and the rest of the repository, is under the repository's own license
+(MIT or Apache-2.0, at your option). Neither PSERC nor MIPS's contributors endorse this project.
+
+--------------------------------------------------------------------------------
+
+Copyright (c) 1996-2025, Power Systems Engineering Research Center (PSERC)
+and individual contributors (see AUTHORS file for details).
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

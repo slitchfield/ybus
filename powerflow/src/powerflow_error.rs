@@ -157,6 +157,14 @@ pub enum PowerflowError {
         /// The largest real or reactive power mismatch after the last one (p.u.).
         mismatch_pu: f64,
     },
+    /// A generator cost the optimal power flow can't use: a polynomial above quadratic, or a
+    /// piecewise linear cost with fewer than two points or two points at the same output.
+    UnsupportedCost {
+        /// The 0-based `gencost` row (rows past the generators' count are reactive costs).
+        row: usize,
+        /// What is wrong with it.
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for PowerflowError {
@@ -259,6 +267,9 @@ impl fmt::Display for PowerflowError {
                 "the AC power flow didn't converge in {iterations} iterations (largest mismatch \
                  {mismatch_pu:e} p.u.)"
             ),
+            PowerflowError::UnsupportedCost { row, reason } => {
+                write!(f, "gencost row {row} can't be used: {reason}")
+            }
         }
     }
 }
