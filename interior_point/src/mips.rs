@@ -3,6 +3,12 @@
 //! so that its iterations, results and multipliers match MATPOWER's (Wang, Murillo-Sánchez,
 //! Zimmerman and Thomas, 2007).
 
+use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering};
+
+use crate::interior_point_error::InteriorPointError;
+use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
+use crate::vector::{dot, norm_inf};
+
 /// MIPS's options, with its defaults.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -143,93 +149,6 @@ impl MipsSolution {
     }
 }
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering};
-
-use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
-
-/// Why MIPS couldn't start.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum MipsError {
-    /// An option is out of its range, as `mips.m` checks (`xi` in `[0.5, 1)`, `sigma` in
-    /// `(0, 1]`).
-    InvalidOption {
-        /// The option's name
-        name: &'static str,
-    },
-    /// An input's length or shape doesn't match the number of variables or the linear
-    /// constraints.
-    Dimension {
-        /// Which input
-        what: &'static str,
-    },
-    /// A linear program (no objective Hessian) has no constraints or bounds, which
-    /// `qps_mips` refuses.
-    UnboundedLinearProgram,
-}
-
-impl std::fmt::Display for MipsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MipsError::InvalidOption { name } => write!(f, "MIPS option {name} is out of range"),
-            MipsError::Dimension { what } => write!(f, "{what} has the wrong dimension"),
-            MipsError::UnboundedLinearProgram => {
-                write!(
-                    f,
-                    "a linear program must include constraints or variable bounds"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for MipsError {}
-
-/// A sparse row: (column, value) pairs.
-type Row = Vec<(usize, f64)>;
-
-/// `A x` for rows given as (column, value) pairs.
-fn rows_times(rows: &[Row], x: &[f64]) -> Vec<f64> {
-    rows.iter()
-        .map(|row| row.iter().map(|&(j, v)| v * x[j]).sum())
-        .collect()
-}
-
-/// The ∞-norm of a vector, 0 for an empty one (MATLAB's `norm([], Inf)`).
-fn norm_inf(v: &[f64]) -> f64 {
-    v.iter().fold(0.0_f64, |m, &x| {
-        if x.is_nan() || x.abs() > m {
-            x.abs()
-        } else {
-            m
-        }
-    })
-}
-
-fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b).map(|(a, b)| a * b).sum()
-}
-
-/// The rows of a CSR matrix as (column, value) pairs.
-fn csr_rows(m: &CsrMatrix<f64>) -> Vec<Row> {
-    (0..m.shape().0)
-        .map(|r| {
-            let (cols, values) = m.outer(r).expect("row in range");
-            cols.iter().copied().zip(values.iter().copied()).collect()
-        })
-        .collect()
-}
-
-/// A matrix with the given rows, `n` columns.
-fn rows_matrix(rows: &[Row], n: usize) -> CsrMatrix<f64> {
-    let triplets: Vec<(usize, usize, f64)> = rows
-        .iter()
-        .enumerate()
-        .flat_map(|(r, row)| row.iter().map(move |&(c, v)| (r, c, v)))
-        .collect();
-    CsrMatrix::from_triplets(rows.len(), n, triplets).expect("indices in range")
-}
-
 /// The objective, constraints and Jacobians at a point: MIPS's `f`, `df`, `h`, `g`, and the
 /// Jacobians as rows (`dh'` and `dg'` in MIPS), nonlinear ones first.
 struct Evaluation {
@@ -247,56 +166,59 @@ struct Setup<'a, P: Problem> {
     problem: &'a P,
     nx: usize,
     cost_mult: f64,
-    ae: Vec<Row>,
+    ae: CsrMatrix<f64>,
     be: Vec<f64>,
-    ai: Vec<Row>,
+    ai: CsrMatrix<f64>,
     bi: Vec<f64>,
     neqnln: usize,
     niqnln: usize,
 }
 
 impl<P: Problem> Setup<'_, P> {
-    /// `f` (times `cost_mult`), `df`, and the constraints at `x`; the Jacobians only if `full`.
+    /// Evaluates the problem at `x` as `mips.m` does at each new point:
+    ///
+    /// - `f` and `df`: the objective and its gradient, both times `cost_mult`. MIPS scales the
+    ///   objective, so the multipliers it finds are scaled too, and divides `cost_mult` back out
+    ///   of `f` and the multipliers when it finishes.
+    /// - `h`: the nonlinear inequalities' values `h(x)`, then the linear ones' `Ai x − bi`; `g`
+    ///   likewise, `g(x)` then `Ae x − be`. The nonlinear constraints come first, so the first
+    ///   `niqnln` (or `neqnln`) multipliers are theirs.
+    /// - `jh` and `jg`: the Jacobians with rows in the same order, `[∂h/∂x; Ai]` and
+    ///   `[∂g/∂x; Ae]` (MIPS's `dh` and `dg`, transposed). Only if `full`: step control's line
+    ///   search needs only the values (`mips.m` calls `gh_fcn` there with two outputs), so
+    ///   otherwise they're left empty, `0 × nx`, rather than assembled.
     fn evaluate(&self, x: &[f64], full: bool) -> Evaluation {
         let (f, df) = self.problem.objective(x);
         let f = f * self.cost_mult;
         let df: Vec<f64> = df.iter().map(|d| d * self.cost_mult).collect();
-        let mut h = vec![];
-        let mut g = vec![];
-        let mut jh_rows: Vec<Row> = vec![];
-        let mut jg_rows: Vec<Row> = vec![];
-        if self.problem.has_nonlinear_constraints() {
-            let c = self.problem.constraints(x);
-            h.extend_from_slice(&c.h);
-            g.extend_from_slice(&c.g);
-            if full {
-                jh_rows.extend(csr_rows(&c.dh));
-                jg_rows.extend(csr_rows(&c.dg));
+        let nonlinear = self
+            .problem
+            .has_nonlinear_constraints()
+            .then(|| self.problem.constraints(x));
+        let mut h = nonlinear.as_ref().map_or(vec![], |c| c.h.clone());
+        let mut g = nonlinear.as_ref().map_or(vec![], |c| c.g.clone());
+        let ai_x = self.ai.mul_vec(x).expect("Ai has nx columns");
+        h.extend(ai_x.iter().zip(&self.bi).map(|(ax, b)| ax - b));
+        let ae_x = self.ae.mul_vec(x).expect("Ae has nx columns");
+        g.extend(ae_x.iter().zip(&self.be).map(|(ax, b)| ax - b));
+        let (jh, jg) = match (&nonlinear, full) {
+            (_, false) => {
+                let empty = || CsrMatrix::from_triplets(0, self.nx, vec![]).expect("0 × nx");
+                (empty(), empty())
             }
-        }
-        h.extend(
-            rows_times(&self.ai, x)
-                .iter()
-                .zip(&self.bi)
-                .map(|(ax, b)| ax - b),
-        );
-        g.extend(
-            rows_times(&self.ae, x)
-                .iter()
-                .zip(&self.be)
-                .map(|(ax, b)| ax - b),
-        );
-        if full {
-            jh_rows.extend(self.ai.iter().cloned());
-            jg_rows.extend(self.ae.iter().cloned());
-        }
+            (Some(c), true) => (
+                CsrMatrix::vstack([&c.dh, &self.ai]).expect("∂h/∂x has nx columns"),
+                CsrMatrix::vstack([&c.dg, &self.ae]).expect("∂g/∂x has nx columns"),
+            ),
+            (None, true) => (self.ai.clone(), self.ae.clone()),
+        };
         Evaluation {
             f,
             df,
             h,
             g,
-            jh: rows_matrix(&jh_rows, self.nx),
-            jg: rows_matrix(&jg_rows, self.nx),
+            jh,
+            jg,
         }
     }
 }
@@ -347,8 +269,8 @@ fn lagrangian_gradient(e: &Evaluation, lam: &[f64], mu: &[f64]) -> Vec<f64> {
 ///   fall below their tolerances, and fails numerically on a NaN or too long a step, a step
 ///   length below `alpha_min`, or `γ` outside `[ε, 1/ε]`.
 ///
-/// Returns `MipsError::InvalidOption` for `xi` outside `[0.5, 1)` or `sigma` outside `(0, 1]`,
-/// and `MipsError::Dimension` for inputs of the wrong length.
+/// Returns `InteriorPointError::InvalidOption` for `xi` outside `[0.5, 1)` or `sigma` outside `(0, 1]`,
+/// and `InteriorPointError::Dimension` for inputs of the wrong length.
 // MATLAB's `gamma < eps || gamma > 1/eps`, which a NaN γ fails, unlike `!range.contains`
 #[allow(clippy::manual_range_contains)]
 pub fn mips<P: Problem>(
@@ -356,30 +278,25 @@ pub fn mips<P: Problem>(
     x0: &[f64],
     constraints: &Constraints,
     options: &MipsOptions,
-) -> Result<MipsSolution, MipsError> {
+) -> Result<MipsSolution, InteriorPointError> {
     let opt = options;
     if opt.xi >= 1.0 || opt.xi < 0.5 {
-        return Err(MipsError::InvalidOption { name: "xi" });
+        return Err(InteriorPointError::InvalidOption { name: "xi" });
     }
     if opt.sigma > 1.0 || opt.sigma <= 0.0 {
-        return Err(MipsError::InvalidOption { name: "sigma" });
+        return Err(InteriorPointError::InvalidOption { name: "sigma" });
     }
     let nx = x0.len();
     if problem.dimension() != nx {
-        return Err(MipsError::Dimension { what: "x0" });
+        return Err(InteriorPointError::Dimension { what: "x0" });
     }
 
     // The linear constraints: none if A is absent, or if every bound is infinite
-    let mut a_rows: Vec<Row> = match &constraints.a {
-        Some(a) => {
-            if a.shape().1 != nx {
-                return Err(MipsError::Dimension { what: "A" });
-            }
-            csr_rows(a)
-        }
-        None => vec![],
-    };
-    let na0 = a_rows.len();
+    let mut a = constraints.a.as_ref();
+    if a.is_some_and(|a| a.shape().1 != nx) {
+        return Err(InteriorPointError::Dimension { what: "A" });
+    }
+    let na0 = a.map_or(0, |a| a.shape().0);
     let mut l = constraints
         .l
         .clone()
@@ -389,7 +306,7 @@ pub fn mips<P: Problem>(
         .clone()
         .unwrap_or_else(|| vec![f64::INFINITY; na0]);
     if l.len() != na0 || u.len() != na0 {
-        return Err(MipsError::Dimension { what: "l or u" });
+        return Err(InteriorPointError::Dimension { what: "l or u" });
     }
     let l_free = constraints
         .l
@@ -399,12 +316,12 @@ pub fn mips<P: Problem>(
         .u
         .as_ref()
         .is_none_or(|u| u.iter().all(|&v| v == f64::INFINITY));
-    if a_rows.is_empty() || (l_free && u_free) {
-        a_rows.clear();
+    if na0 == 0 || (l_free && u_free) {
+        a = None;
         l.clear();
         u.clear();
     }
-    let na = a_rows.len();
+    let na = l.len();
     let xmin = constraints
         .xmin
         .clone()
@@ -414,18 +331,16 @@ pub fn mips<P: Problem>(
         .clone()
         .unwrap_or_else(|| vec![f64::INFINITY; nx]);
     if xmin.len() != nx || xmax.len() != nx {
-        return Err(MipsError::Dimension {
+        return Err(InteriorPointError::Dimension {
             what: "xmin or xmax",
         });
     }
 
     // AA = [I; A], ll = [xmin; l], uu = [xmax; u], split into equalities and inequalities
-    let aa = |r: usize| -> Row {
-        if r < nx {
-            vec![(r, 1.0)]
-        } else {
-            a_rows[r - nx].clone()
-        }
+    let identity = CsrMatrix::<f64>::identity(nx);
+    let aa = match a {
+        Some(a) => CsrMatrix::vstack([&identity, a]).expect("A has nx columns"),
+        None => identity,
     };
     let ll: Vec<f64> = xmin.iter().chain(&l).copied().collect();
     let uu: Vec<f64> = xmax.iter().chain(&u).copied().collect();
@@ -445,13 +360,13 @@ pub fn mips<P: Problem>(
     let ibx: Vec<usize> = all
         .filter(|&r| (uu[r] - ll[r]).abs() > f64::EPSILON && uu[r] < 1e10 && ll[r] > -1e10)
         .collect();
-    let negate = |row: Row| -> Row { row.into_iter().map(|(c, v)| (c, -v)).collect() };
-    let ae: Vec<Row> = ieq.iter().map(|&r| aa(r)).collect();
+    // Ae = AA(ieq, :) and Ai = [AA(ilt, :); -AA(igt, :); AA(ibx, :); -AA(ibx, :)]
+    let columns: Vec<usize> = (0..nx).collect();
+    let rows = |rows: &[usize]| aa.select(rows, &columns).expect("rows of AA");
+    let ae = rows(&ieq);
     let be: Vec<f64> = ieq.iter().map(|&r| uu[r]).collect();
-    let mut ai: Vec<Row> = ilt.iter().map(|&r| aa(r)).collect();
-    ai.extend(igt.iter().map(|&r| negate(aa(r))));
-    ai.extend(ibx.iter().map(|&r| aa(r)));
-    ai.extend(ibx.iter().map(|&r| negate(aa(r))));
+    let ai = CsrMatrix::vstack([rows(&ilt), -rows(&igt), rows(&ibx), -rows(&ibx)])
+        .expect("all nx columns");
     let mut bi: Vec<f64> = ilt.iter().map(|&r| uu[r]).collect();
     bi.extend(igt.iter().map(|&r| -ll[r]));
     bi.extend(ibx.iter().map(|&r| uu[r]));
@@ -753,25 +668,25 @@ pub fn mips<P: Problem>(
 /// MIPS for a quadratic or linear program, as MATPOWER's `qps_mips`: minimizes
 /// `½ xᵀ H x + cᵀ x` subject to `constraints`, from `x0` (zeros if absent).
 ///
-/// Returns `MipsError::UnboundedLinearProgram` for a linear program with no constraints or
+/// Returns `InteriorPointError::UnboundedLinearProgram` for a linear program with no constraints or
 /// bounds, and the errors of [`mips`].
 pub fn qps_mips(
     qp: &QuadraticProblem,
     constraints: &Constraints,
     x0: Option<&[f64]>,
     options: &MipsOptions,
-) -> Result<MipsSolution, MipsError> {
+) -> Result<MipsSolution, InteriorPointError> {
     let nx = qp.c.len();
     if qp.h.is_none()
         && constraints.a.as_ref().is_none_or(|a| a.shape().0 == 0)
         && constraints.xmin.is_none()
         && constraints.xmax.is_none()
     {
-        return Err(MipsError::UnboundedLinearProgram);
+        return Err(InteriorPointError::UnboundedLinearProgram);
     }
     if let Some(h) = &qp.h {
         if h.shape() != (nx, nx) {
-            return Err(MipsError::Dimension { what: "H" });
+            return Err(InteriorPointError::Dimension { what: "H" });
         }
     }
     let zeros = vec![0.0; nx];

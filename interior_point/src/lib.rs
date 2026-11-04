@@ -7,8 +7,11 @@
 //!   linear constraints and bounds.
 //! - [`mips`]: MIPS, the MATPOWER Interior Point Solver, reimplemented step for step from
 //!   MATPOWER's `mips.m`, so that its iterations and results can be checked against MATPOWER's.
+//! - [`interior_point_error`]: why a solver couldn't start.
 //!
 //! The linear algebra is [`sparse_mat`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
 
+pub mod interior_point_error;
 pub mod mips;
 pub mod problem;
+mod vector;
