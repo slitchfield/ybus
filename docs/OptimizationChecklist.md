@@ -206,14 +206,62 @@ Facts checked when this roadmap was written (2026-11-03):
         iteration counts aren't compared. On case3120sp `powerflow` converges at 148 iterations
         where MATPOWER fails at 150.
 
-### PR 3: the AC OPF and the survey
+### PR 3: the AC OPF
 
-- [ ] The AC OPF: `[Va, Vm, Pg, Qg, y]` with the power balance and flow limits (and their first
+Split from the survey (now PR 4) with the maintainer on 2026-11-04. The references stay MP-Core's,
+with legacy results generated locally to explain differences.
+
+- [x] The AC OPF: `[Va, Vm, Pg, Qg, y]` with the power balance and flow limits (and their first
       and second derivatives), angle limits, dispatchable loads and the piecewise-linear rows,
       from `nlpopf_solver`'s starting point, against `runopf`.
-- [ ] The OPF survey over every case with costs, DC and AC, rechecking MP-Core against the
-      legacy code, recorded in `docs/benchmarks/`, with the bar tightened to the measured
-      agreement. Then the docs.
+      - **Derivatives** (`opf::derivatives`, crate-private), in Technical Note 2's complex matrix
+        notation. Every quantity is `[C V] conj(Y V)`, so one formula gives the first
+        derivatives, and one Hessian of the bilinear form `Vᵀ M conj(V)` gives the second
+        derivatives of the bus injections and both ends' flows. The squared apparent power adds
+        `2 Re(dSᴴ [μ] dS)`. Tested against central finite differences at 1e-8 relative (a
+        planted sign error fails them), for symmetry, and against the Newton Jacobian at 1e-12.
+      - **`opf::ac`:** `ac_opf` follows `opf_setup`'s AC model for MIPS (`legacy_formulation`
+        0):
+        - REF angles fixed; `Pmis` and `Qmis`; `Sf` and `St` as squared apparent power on the
+          limited branches; `makeAvl`, `makeAang` and `makeAy` rows, in that order
+        - the cost's constant terms inside MIPS's objective, as `nlp_costfcn` puts them
+        - MIPS's options for the AC OPF (`feastol` 5e-6, `cost_mult` 1e-4) and
+          `nlpopf_solver`'s start
+        - the results and multipliers mapped back as `nlpopf_solver` and `opf` map them,
+          including `MU_SF = 2 μ RATE_A/baseMVA`
+        - PQ capability curves, and dispatchable loads `makeAvl` rejects, are refused
+          (`UnsupportedGenerator`)
+      - **Shared with the DC OPF and the power flow:** `makeYbus`'s stamping (`Admittances`),
+        and the OPF's reference buses, starting point and linear rows.
+      - **Fixtures:** every solution must balance power at each bus from its reported flows,
+        respect every limit, satisfy complementarity (multiplier × slack ≈ 0), price power at
+        each generator's marginal cost, and cost what `totcost` says. Cases cover a binding
+        apparent-power limit, binding voltage limits, reactive costs, a dispatchable load at its
+        power factor, and the refusals.
+      - **Committed references:** MATPOWER's iteration counts (11, 15 and 14), every quantity
+        within 5.4e-9 (case30's voltage-limit multipliers; the bar is 1e-8), and objectives
+        within 1.1e-15.
+      - **Every local case with costs (73)** (`YBUS_ACOPF_CASES`). Every case finishes, the
+        largest in 678 s (`case_SyntheticUSA`):
+        - **Outcome:** matches on all 73 (MATPOWER converges on 46, fails on 27).
+        - **Iteration counts:** match on all 46 converged runs but case8387pegase, at 82 to 80.
+          Its optimum isn't unique: MATPOWER's legacy code differs from MP-Core there by as much
+          (246 MVAr of reactive dispatch, objective 9.3e-7).
+        - **Objectives and bus prices:** objectives within 1.1e-11 relative, `LAM_P` within 2.4e-7
+          and `LAM_Q` within 9.4e-5 (the bars: 1e-10, 1e-6 and 2e-4).
+        - **Individual bound multipliers aren't compared locally.** Where near-zero-impedance
+          branches lock neighbouring buses at a voltage limit, the split of the limit's price
+          between their multipliers is ill-determined. On case3012wp `mu_vmax` differs by up to
+          0.43, at neighbouring buses whose differences cancel (99% of their magnitude), and
+          `LAM_Q` shifts by 1.16e-4 over the region, with the objective within 1.3e-12. MATPOWER's
+          two implementations differ less there (5e-7 in `LAM_Q`), since they share Octave's
+          backslash for the KKT solve.
+
+### PR 4: the OPF survey
+
+- [ ] The OPF survey over every case with costs, DC and AC: an `opf_survey` example and
+      `scripts/benchmark-opf.sh`, rechecking MP-Core against the legacy code, recorded in
+      `docs/benchmarks/`, with the bars set from it.
 
 ## Phase O2: accelerating the power flow
 
