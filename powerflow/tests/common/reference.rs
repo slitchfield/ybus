@@ -330,20 +330,21 @@ pub struct DcOpfReference {
     pub default_solver: String,
 }
 
-/// Reads `<case>_dcopf_bus.csv`, `_gen.csv`, `_branch.csv` and `_summary.csv` from `dir`.
-pub fn read_dcopf(dir: &Path, case: &str) -> Result<DcOpfReference, String> {
-    let bus = table(dir, case, "dcopf", "bus", "bus,va_deg,lam_p")?;
+/// Reads `<case>_<run>_bus.csv`, `_gen.csv`, `_branch.csv` and `_summary.csv` from `dir`, for
+/// `run` `dcopf` (MP-Core) or `dcopf_legacy` (the legacy implementation).
+pub fn read_dcopf(dir: &Path, case: &str, run: &str) -> Result<DcOpfReference, String> {
+    let bus = table(dir, case, run, "bus", "bus,va_deg,lam_p")?;
     let gen = table(
         dir,
         case,
-        "dcopf",
+        run,
         "gen",
         "row,bus,status,pg_mw,mu_pmin,mu_pmax",
     )?;
     let branch = table(
         dir,
         case,
-        "dcopf",
+        run,
         "branch",
         "row,from,to,status,pf_mw,mu_sf,mu_st,mu_angmin,mu_angmax",
     )?;
@@ -351,7 +352,7 @@ pub fn read_dcopf(dir: &Path, case: &str) -> Result<DcOpfReference, String> {
     let summary = summary(
         dir,
         case,
-        "dcopf",
+        run,
         "objective,iterations,success,singular,default_objective,default_solver",
     )?;
     Ok(DcOpfReference {
@@ -468,31 +469,32 @@ pub struct AcOpfReference {
     pub singular: bool,
 }
 
-/// Reads `<case>_opf_bus.csv`, `_gen.csv`, `_branch.csv` and `_summary.csv` from `dir`.
-pub fn read_acopf(dir: &Path, case: &str) -> Result<AcOpfReference, String> {
+/// Reads `<case>_<run>_bus.csv`, `_gen.csv`, `_branch.csv` and `_summary.csv` from `dir`, for
+/// `run` `opf` (MP-Core) or `opf_legacy` (the legacy implementation).
+pub fn read_acopf(dir: &Path, case: &str, run: &str) -> Result<AcOpfReference, String> {
     let bus = table(
         dir,
         case,
-        "opf",
+        run,
         "bus",
         "bus,vm_pu,va_deg,lam_p,lam_q,mu_vmin,mu_vmax",
     )?;
     let gen = table(
         dir,
         case,
-        "opf",
+        run,
         "gen",
         "row,bus,status,pg_mw,qg_mvar,mu_pmin,mu_pmax,mu_qmin,mu_qmax",
     )?;
     let branch = table(
         dir,
         case,
-        "opf",
+        run,
         "branch",
         "row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar,mu_sf,mu_st,mu_angmin,mu_angmax",
     )?;
     let column = |rows: &[Vec<f64>], k: usize| rows.iter().map(|row| row[k]).collect();
-    let summary = summary(dir, case, "opf", "objective,iterations,success,singular")?;
+    let summary = summary(dir, case, run, "objective,iterations,success,singular")?;
     Ok(AcOpfReference {
         vm_pu: column(&bus, 1),
         va_deg: column(&bus, 2),
@@ -566,4 +568,33 @@ pub fn acopf_deviation(
         (solution.objective - reference.objective).abs() / reference.objective.abs().max(1.0);
     deviations.push(("objective (relative)", objective));
     deviations
+}
+
+/// MATPOWER's elapsed time for a run (s), from `<case>_<run>_time.csv`, which only local results
+/// have.
+pub fn read_time(dir: &Path, case: &str, run: &str) -> Result<f64, String> {
+    let rows = table(dir, case, run, "time", "et_s")?;
+    match rows.as_slice() {
+        [row] => Ok(row[0]),
+        _ => Err(format!("{case}_{run}_time.csv: expected one line")),
+    }
+}
+
+/// The largest `|a − e| / max(|e|, 1)`, or NaN if any is NaN or the lengths differ: a difference
+/// relative to the expected value's magnitude.
+pub fn relative_difference(actual: &[f64], expected: &[f64]) -> f64 {
+    if actual.len() != expected.len() {
+        return f64::NAN;
+    }
+    actual
+        .iter()
+        .zip(expected)
+        .map(|(a, e)| (a - e).abs() / e.abs().max(1.0))
+        .fold(0.0, |largest, d| {
+            if d.is_nan() || d > largest {
+                d
+            } else {
+                largest
+            }
+        })
 }

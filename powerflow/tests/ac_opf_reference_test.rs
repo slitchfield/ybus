@@ -6,7 +6,7 @@ mod common;
 
 use std::path::Path;
 
-use common::reference::{acopf_deviation, committed_dir, read_acopf};
+use common::reference::{acopf_deviation, committed_dir, read_acopf, relative_difference};
 use powerflow::case::Case;
 use powerflow::opf::ac::ac_opf;
 
@@ -26,7 +26,7 @@ fn committed_cases_match_runopf() {
             continue;
         };
         let case = Case::from_path(&path).unwrap();
-        let reference = read_acopf(&committed_dir(), name).unwrap();
+        let reference = read_acopf(&committed_dir(), name, "opf").unwrap();
         let solution = ac_opf(&case).unwrap();
         assert_eq!(
             (solution.iterations, solution.converged()),
@@ -66,28 +66,10 @@ const LOCAL_LAM_Q: f64 = 2e-4;
 /// The objective's bar where MATPOWER's run took Octave's least-squares fallback
 const FALLBACK_OBJECTIVE: f64 = 1e-6;
 
-/// The largest `|a − e| / max(|e|, 1)`, or NaN if any is NaN or the lengths differ.
-fn relative(actual: &[f64], expected: &[f64]) -> f64 {
-    if actual.len() != expected.len() {
-        return f64::NAN;
-    }
-    actual
-        .iter()
-        .zip(expected)
-        .map(|(a, e)| (a - e).abs() / e.abs().max(1.0))
-        .fold(0.0, |largest, d| {
-            if d.is_nan() || d > largest {
-                d
-            } else {
-                largest
-            }
-        })
-}
-
 /// Compares one local case, returning what differs.
 fn check_local(name: &str, case_path: &Path, reference_dir: &Path) -> Vec<String> {
     let case = Case::from_path(case_path).unwrap();
-    let reference = read_acopf(reference_dir, name).unwrap();
+    let reference = read_acopf(reference_dir, name, "opf").unwrap();
     let solution = match ac_opf(&case) {
         Ok(solution) => solution,
         Err(err) => return vec![format!("{name}: {err}")],
@@ -127,12 +109,12 @@ fn check_local(name: &str, case_path: &Path, reference_dir: &Path) -> Vec<String
     if !reference.singular {
         checks.push((
             "lam_p",
-            relative(&solution.lam_p, &reference.lam_p),
+            relative_difference(&solution.lam_p, &reference.lam_p),
             LOCAL_LAM_P,
         ));
         checks.push((
             "lam_q",
-            relative(&solution.lam_q, &reference.lam_q),
+            relative_difference(&solution.lam_q, &reference.lam_q),
             LOCAL_LAM_Q,
         ));
     }

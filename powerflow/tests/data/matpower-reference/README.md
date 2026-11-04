@@ -60,6 +60,8 @@ For each case:
 | `<case>_opf_gen.csv` | `row`, `bus`, `status`, `pg_mw`, `qg_mvar`, `mu_pmin`, `mu_pmax`, `mu_qmin`, `mu_qmax` |
 | `<case>_opf_branch.csv` | `row`, `from`, `to`, `status`, `pf_mw`, `qf_mvar`, `pt_mw`, `qt_mvar`, `mu_sf`, `mu_st` (multipliers of the apparent power limits, $/MVA), `mu_angmin`, `mu_angmax` |
 | `<case>_opf_summary.csv`, `<case>_opf_history.csv` | As for the DC runs, without the default-solver columns |
+| `<case>_dcopf_legacy_*.csv`, `<case>_opf_legacy_*.csv` | Not committed: the same two runs through MATPOWER's legacy implementation (`exp.use_legacy_core`), generated locally when `YBUS_REFERENCE_RUNS` names `dcopf_legacy` or `opf_legacy`, to compare MP-Core with the legacy code |
+| `<case>_<run>_time.csv` | Not committed: `et_s`, MATPOWER's elapsed time for an OPF run (s), generated with local results only, since it varies from run to run |
 | `<case>_qlim1_limited.csv`, `<case>_qlim2_limited.csv` | `row`: the generators held at a reactive limit (1-based rows, increasing), found as those in service at a bus `runpf` made PQ, at exactly one of their limits, since `runpf` doesn't report them. A generator with equal limits is left out when one with unequal limits at its bus is held: it sits at its limits whenever its bus is PQ |
 
 Values have 17 significant digits, so they parse back to the exact doubles MATPOWER computed.

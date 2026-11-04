@@ -20,7 +20,7 @@ const OBJECTIVE: f64 = 1e-12;
 
 fn check(name: &str, case_path: &Path, reference_dir: &Path) {
     let case = Case::from_path(case_path).unwrap();
-    let reference = read_dcopf(reference_dir, name).unwrap();
+    let reference = read_dcopf(reference_dir, name, "dcopf").unwrap();
     let solution = dc_opf(&case).unwrap();
     assert_eq!(
         (solution.iterations, solution.converged()),
@@ -78,7 +78,7 @@ const FALLBACK_OBJECTIVE: f64 = 1e-6;
 /// Compares one local case, returning what differs.
 fn check_local(name: &str, case_path: &Path, reference_dir: &Path) -> Vec<String> {
     let case = Case::from_path(case_path).unwrap();
-    let reference = read_dcopf(reference_dir, name).unwrap();
+    let reference = read_dcopf(reference_dir, name, "dcopf").unwrap();
     let solution = dc_opf(&case).unwrap();
     let mut problems = vec![];
     if solution.converged() != reference.success {
