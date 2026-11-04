@@ -144,8 +144,22 @@ Facts checked when this roadmap was written (2026-11-03):
 
 ### PR 2: OPF references and the DC OPF
 
-- [ ] OPF reference results: `dcopf` (MIPS forced) and `opf` runs in `generate_reference.m`,
+- [x] OPF reference results: `dcopf` (MIPS forced) and `opf` runs in `generate_reference.m`,
       committed for case14, case30 and case118 and generated locally for every case with costs.
+      - **Runs:** `rundcopf` with `opf.dc.solver = 'MIPS'`, and `runopf` with its defaults
+        (MIPS). Each records bus, generator and branch results with their prices and
+        multipliers, a summary (objective, MIPS's iterations, success, and for DC the default
+        solver's objective and name), and MIPS's per-iteration history. A run where MIPS fails
+        is still recorded.
+      - **Committed:** case14, case30 and case118, 30 files, 152 KB (33 KB compressed).
+        Regenerating them gives byte-for-byte the same files. All six runs converge: DC in 10, 9
+        and 11 iterations, AC in 11, 15 and 14.
+      - **Provenance:** case14's and case118's costs were added by MATPOWER's authors, with no
+        stated source (the IEEE format has none). case30's come from Ferrero et al. The
+        reference README says so.
+      - **Running under `ulimit -v`:** Octave hung at no CPU in `rundcopf` under an
+        address-space limit until BLAS was made single-threaded. `generate-reference.sh` now
+        sets `OPENBLAS_NUM_THREADS=1` and `OMP_NUM_THREADS=1` unless they're already set.
 - [ ] The DC OPF: `[Va, Pg, y]` with the power balance, flow limits, angle limits and the
       piecewise-linear rows, solved through the quadratic-program wrapper, against `rundcopf`.
 
