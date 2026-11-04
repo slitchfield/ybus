@@ -20,6 +20,11 @@ change. Each record names the code, the machine and the method it used.
 
 ## Measuring
 
+- **Profiling:** `--profile profiling` builds the release profile with debug line tables
+  (`Cargo.toml`), so a sampling profiler names functions and lines in the same optimized code
+  the surveys time, for example `cargo build --profile profiling -p powerflow --example
+  ac_survey`, then a profiler on `target/profiling/examples/ac_survey`.
+
 - **One case, repeatably:** `cargo bench -p powerflow --bench dc_power_flow` runs the criterion
   benchmarks in `powerflow/benches/dc_power_flow.rs`, which time parsing, the model and the
   solve on case2383wp. Criterion compares each run with the previous one on the same machine.

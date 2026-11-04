@@ -12,3 +12,9 @@ repository = "https://github.com/slitchfield/ybus"
 # Oldest supported Rust, checked by the MSRV job in .github/workflows/rust.yml. Raised by
 #   `<uN>::is_multiple_of` (1.87).
 rust-version = "1.87"
+
+# The release build with debug line tables, for sampling profilers (samply, Nsight Systems) to
+#   name functions and lines without changing the optimized code: `--profile profiling`
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
