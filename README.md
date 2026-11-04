@@ -57,6 +57,9 @@ one: optimal power flow, interior-point solvers and acceleration.
 - [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md) is the roadmap that follows:
   optimal power flow by a reimplementation of MATPOWER's MIPS, a simpler interior-point solver of
   our own, and accelerating the power flow and both solvers.
+- [`docs/LongTermGoals.md`](docs/LongTermGoals.md) records the goals beyond these roadmaps, with
+  coarse plans: foreign function interfaces to C, Python and Julia, benchmarks against other
+  power flow libraries, security-constrained OPF, and reading ARPA-E's SC-ACOPF data.
 - [`docs/BaseFunctionalityChecklist.md`](docs/BaseFunctionalityChecklist.md) is the completed
   checklist of `sparse_mat`'s core functionality.
 - [`docs/benchmarks/`](docs/benchmarks/) records performance baselines, such as the DC power
