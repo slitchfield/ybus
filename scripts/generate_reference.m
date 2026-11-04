@@ -70,6 +70,12 @@
 %                           with voltage magnitudes (p.u.), reactive power and its price LAM_Q,
 %                           the multipliers of the voltage magnitude and reactive power limits,
 %                           and flows at both ends; the summary has no default-solver columns
+%   <case>_dcopf_legacy_*.csv, <case>_opf_legacy_*.csv
+%                           the same two runs through MATPOWER's legacy implementation
+%                           (exp.use_legacy_core), only when chosen by name, for local
+%                           comparisons of MP-Core with the legacy code
+%   <case>_<run>_time.csv   for local results only, et_s: MATPOWER's elapsed time for the run (s),
+%                           which varies from run to run, so it isn't in the committed results
 % The OPF runs use MATPOWER's defaults (MP-Core), which agree with the legacy code on OPF.
 %   Their results are written even when MIPS fails, since parity includes its failures.
 %   Under Octave, a KKT system singular to machine precision makes the backslash in MIPS warn
@@ -79,8 +85,9 @@
 % Values are printed with 17 significant digits, enough to round-trip a double exactly.
 %
 % YBUS_REFERENCE_RUNS, if set, chooses which of the runs islands, ptdf, dcpf, acpf, fdxb,
-%   fdbx, qlim1, qlim2, dcopf and opf to make, separated by commas (default: all), so that new results don't
-%   need the slow ones again. The AC runs follow dcpf only if it's chosen and succeeds.
+%   fdbx, qlim1, qlim2, dcopf, opf, dcopf_legacy and opf_legacy to make, separated by commas
+%   (default: all but the legacy OPF runs), so that new results don't need the slow ones again.
+%   The AC runs follow dcpf only if it's chosen and succeeds.
 
 % Marks this file as a script, so Octave accepts the function definition that follows. Octave
 %   needs a script's functions defined before they are called.
@@ -115,7 +122,8 @@ end
 addpath(genpath(matpower_dir));
 define_constants;
 
-if numel(args) > 2
+local = numel(args) > 2;
+if local
     cases = args(3:end);
     % Local results: PTDF and LODF for every case named
     ptdf_cases = cases;
@@ -226,17 +234,20 @@ for k = 1:numel(cases)
     end
 
     % The optimal power flows: DC with MIPS forced, then AC with MATPOWER's default, MIPS
-    for run = {{'dcopf', true}, {'opf', false}}
-        [prefix, dc] = deal(run{1}{1}, run{1}{2});
+    %   (and, chosen by name, both again through MATPOWER's legacy implementation)
+    for run = {{'dcopf', true, 0}, {'opf', false, 0}, {'dcopf_legacy', true, 1}, ...
+               {'opf_legacy', false, 1}}
+        [prefix, dc, legacy] = deal(run{1}{1}, run{1}{2}, run{1}{3});
+        opf_opt = mpoption(mpopt, 'exp.use_legacy_core', legacy);
         if ~wanted(prefix)
             continue;
         end
         lastwarn('');
         try
             if dc
-                [result, success] = rundcopf(name, mpoption(mpopt, 'opf.dc.solver', 'MIPS'));
+                [result, success] = rundcopf(name, mpoption(opf_opt, 'opf.dc.solver', 'MIPS'));
             else
-                [result, success] = runopf(name, mpopt);
+                [result, success] = runopf(name, opf_opt);
             end
         catch err
             fprintf(2, '%s (%s): %s\n', name, prefix, err.message);
@@ -257,26 +268,26 @@ for k = 1:numel(cases)
         end
         rows = (1:size(result.branch, 1))';
         if dc
-            write_csv(fullfile(out_dir, [name '_dcopf_bus.csv']), 'bus,va_deg,lam_p', ...
+            write_csv(fullfile(out_dir, [name '_' prefix '_bus.csv']), 'bus,va_deg,lam_p', ...
                 '%d,%.17g,%.17g', result.bus(:, [BUS_I, VA, LAM_P]));
-            write_csv(fullfile(out_dir, [name '_dcopf_gen.csv']), ...
+            write_csv(fullfile(out_dir, [name '_' prefix '_gen.csv']), ...
                 'row,bus,status,pg_mw,mu_pmin,mu_pmax', '%d,%d,%d,%.17g,%.17g,%.17g', ...
                 [(1:size(result.gen, 1))', result.gen(:, [GEN_BUS, GEN_STATUS, PG, MU_PMIN, MU_PMAX])]);
-            write_csv(fullfile(out_dir, [name '_dcopf_branch.csv']), ...
+            write_csv(fullfile(out_dir, [name '_' prefix '_branch.csv']), ...
                 'row,from,to,status,pf_mw,mu_sf,mu_st,mu_angmin,mu_angmax', ...
                 '%d,%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g', ...
                 [rows, result.branch(:, [F_BUS, T_BUS, BR_STATUS, PF, MU_SF, MU_ST, MU_ANGMIN, MU_ANGMAX])]);
         else
-            write_csv(fullfile(out_dir, [name '_opf_bus.csv']), ...
+            write_csv(fullfile(out_dir, [name '_' prefix '_bus.csv']), ...
                 'bus,vm_pu,va_deg,lam_p,lam_q,mu_vmin,mu_vmax', ...
                 '%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g', ...
                 result.bus(:, [BUS_I, VM, VA, LAM_P, LAM_Q, MU_VMIN, MU_VMAX]));
-            write_csv(fullfile(out_dir, [name '_opf_gen.csv']), ...
+            write_csv(fullfile(out_dir, [name '_' prefix '_gen.csv']), ...
                 'row,bus,status,pg_mw,qg_mvar,mu_pmin,mu_pmax,mu_qmin,mu_qmax', ...
                 '%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g', ...
                 [(1:size(result.gen, 1))', result.gen(:, [GEN_BUS, GEN_STATUS, PG, QG, ...
                     MU_PMIN, MU_PMAX, MU_QMIN, MU_QMAX])]);
-            write_csv(fullfile(out_dir, [name '_opf_branch.csv']), ...
+            write_csv(fullfile(out_dir, [name '_' prefix '_branch.csv']), ...
                 'row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar,mu_sf,mu_st,mu_angmin,mu_angmax', ...
                 '%d,%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g', ...
                 [rows, result.branch(:, [F_BUS, T_BUS, BR_STATUS, PF, QF, PT, QT, MU_SF, ...
@@ -297,12 +308,17 @@ for k = 1:numel(cases)
         end
         write_csv(fullfile(out_dir, [name '_' prefix '_history.csv']), ...
             ['iteration,' strjoin(fields, ',')], ['%d' repmat(',%.17g', 1, 9)], history);
+        % MATPOWER's elapsed time, for local results only: it varies from run to run, and the
+        %   committed results must regenerate unchanged
+        if local
+            write_csv(fullfile(out_dir, [name '_' prefix '_time.csv']), 'et_s', '%.17g', result.et);
+        end
         % The summary last, so that its presence marks a complete run
         fid = fopen(fullfile(out_dir, [name '_' prefix '_summary.csv']), 'w');
         if dc
             % The default solver's optimum, as a check: GLPK when the costs are linear
             try
-                default = rundcopf(name, mpopt);
+                default = rundcopf(name, opf_opt);
                 [default_f, default_alg] = deal(default.f, default.raw.output.alg);
                 if ~default.success
                     default_f = NaN;
