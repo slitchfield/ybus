@@ -165,6 +165,14 @@ pub enum PowerflowError {
         /// What is wrong with it.
         reason: &'static str,
     },
+    /// A generator the AC optimal power flow can't use: one with a PQ capability curve, or a
+    /// dispatchable load whose reactive limits or output MATPOWER's `makeAvl` rejects.
+    UnsupportedGenerator {
+        /// The 0-based case generator row.
+        row: usize,
+        /// What is wrong with it.
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for PowerflowError {
@@ -269,6 +277,9 @@ impl fmt::Display for PowerflowError {
             ),
             PowerflowError::UnsupportedCost { row, reason } => {
                 write!(f, "gencost row {row} can't be used: {reason}")
+            }
+            PowerflowError::UnsupportedGenerator { row, reason } => {
+                write!(f, "generator row {row} can't be used: {reason}")
             }
         }
     }

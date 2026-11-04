@@ -27,9 +27,10 @@ use interior_point::mips::{qps_mips, MipsOptions, MipsSolution, MipsStatus};
 use interior_point::problem::{Constraints, QuadraticProblem};
 use sparse_mat::compressed_matrix::CsrMatrix;
 
-use crate::case::{BusType, Case};
+use crate::case::Case;
 use crate::dc::Bdc;
-use crate::opf::cost::{CostVariable, OpfCosts};
+use crate::opf::cost::OpfCosts;
+use crate::opf::{helper_start, per_degree, reference_buses, starting_point, LinearRows};
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Network;
 
@@ -128,12 +129,7 @@ pub fn dc_opf_with_options(
     let nb = network.bus_rows.len();
     let ng = network.gen_rows.len();
     let base = case.base_mva;
-    let refs: Vec<usize> = (0..nb)
-        .filter(|&i| case.bus[network.bus_rows[i]].bus_type == BusType::Ref)
-        .collect();
-    if refs.is_empty() {
-        return Err(PowerflowError::NoReferenceBus);
-    }
+    let refs = reference_buses(case, &network)?;
     let costs = OpfCosts::new(case, &network.gen_rows, false)?;
     let ny = costs.piecewise.len();
     let Bdc {
@@ -159,17 +155,18 @@ pub fn dc_opf_with_options(
     }
 
     // The linear constraints, block by block: Pmis, Pf, ang, ycon
-    let mut triplets: Vec<(usize, usize, f64)> = vec![];
-    let (mut l, mut u) = (vec![], vec![]);
-    triplets.extend(bbus.iter().map(|(i, j, b)| (i, va + j, b)));
+    let mut rows = LinearRows::default();
+    let mut generators_at: Vec<Vec<usize>> = vec![vec![]; nb];
     for (k, &bus) in network.gen_buses.iter().enumerate() {
-        triplets.push((bus, pg + k, -1.0));
+        generators_at[bus].push(k);
     }
     for (i, &row) in network.bus_rows.iter().enumerate() {
         let bus = &case.bus[row];
         let mismatch = -(bus.pd_mw + bus.gs_mw) / base - pbusinj_pu[i];
-        l.push(mismatch);
-        u.push(mismatch);
+        let (cols, values) = bbus.outer(i).expect("an internal bus");
+        let angles = cols.iter().zip(values).map(|(&j, &b)| (va + j, b));
+        let outputs = generators_at[i].iter().map(|&k| (pg + k, -1.0));
+        rows.push(angles.chain(outputs), mismatch, mismatch);
     }
     let limited: Vec<usize> = (0..network.branch_rows.len())
         .filter(|&k| {
@@ -178,33 +175,18 @@ pub fn dc_opf_with_options(
         })
         .collect();
     for &k in &limited {
-        let row = l.len();
         let (cols, values) = bf.outer(k).expect("an internal branch");
-        triplets.extend(cols.iter().zip(values).map(|(&j, &b)| (row, va + j, b)));
         let rate = case.branch[network.branch_rows[k]].rate_a_mva / base;
-        l.push(-(rate + pfinj_pu[k]));
-        u.push(rate - pfinj_pu[k]);
+        rows.push(
+            cols.iter().zip(values).map(|(&j, &b)| (va + j, b)),
+            -(rate + pfinj_pu[k]),
+            rate - pfinj_pu[k],
+        );
     }
-    let angle_limited = angle_limits(case, &network.branch_rows);
-    for &(k, lower, upper) in &angle_limited {
-        let row = l.len();
-        let (from, to) = network.ends[k];
-        triplets.extend([(row, va + from, 1.0), (row, va + to, -1.0)]);
-        l.push(lower);
-        u.push(upper);
-    }
-    for (j, cost) in costs.piecewise.iter().enumerate() {
-        let CostVariable::Active(k) = cost.variable else {
-            unreachable!("a DC OPF has no reactive costs")
-        };
-        for (&m, &b) in cost.slopes.iter().zip(&cost.bounds) {
-            let row = l.len();
-            triplets.extend([(row, pg + k, m), (row, y + j, -1.0)]);
-            l.push(f64::NEG_INFINITY);
-            u.push(b);
-        }
-    }
-    let a = CsrMatrix::from_triplets(l.len(), nx, triplets).expect("indices in range");
+    let first_angle_row = rows.len();
+    let angle_limited = rows.angle_limits(case, &network, va);
+    rows.piecewise(&costs, pg, None, y);
+    let (a, l, u) = rows.finish(nx);
 
     // The objective, without the constant terms
     let quadratic: Vec<(usize, usize, f64)> = costs
@@ -221,29 +203,11 @@ pub fn dc_opf_with_options(
     c[pg..pg + ng].copy_from_slice(&costs.active.linear);
     c[y..].fill(1.0);
 
-    // dcopf_solver's starting point: midway between the bounds (infinite ones replaced by
-    //   ±1e10), or 1 inside a one-sided bound; every angle at the first reference bus's; and
-    //   each y at the largest piecewise linear cost's last value, plus 10%
-    let mut x0: Vec<f64> = xmin
-        .iter()
-        .zip(&xmax)
-        .map(
-            |(&lo, &hi)| match (lo == f64::NEG_INFINITY, hi == f64::INFINITY) {
-                (true, false) => hi - 1.0,
-                (false, true) => lo + 1.0,
-                (true, true) => 0.0,
-                (false, false) => (lo + hi) / 2.0,
-            },
-        )
-        .collect();
+    // dcopf_solver's starting point, with every angle at the first reference bus's
+    let mut x0 = starting_point(&xmin, &xmax);
     x0[va..pg].fill(xmin[va + refs[0]]);
-    if let Some(largest) = costs
-        .piecewise
-        .iter()
-        .map(|cost| cost.last_cost)
-        .reduce(f64::max)
-    {
-        x0[y..].fill(largest + 0.1 * largest.abs());
+    if let Some(start) = helper_start(&costs) {
+        x0[y..].fill(start);
     }
 
     let constraints = Constraints {
@@ -290,11 +254,10 @@ pub fn dc_opf_with_options(
         mu_sf[row] = multipliers.mu_u[nb + n] / base;
         mu_st[row] = multipliers.mu_l[nb + n] / base;
     }
-    let first_angle_row = nb + limited.len();
-    for (n, &(k, _, _)) in angle_limited.iter().enumerate() {
+    for (n, &k) in angle_limited.iter().enumerate() {
         let row = network.branch_rows[k];
-        mu_angmin[row] = multipliers.mu_l[first_angle_row + n] * PI / 180.0;
-        mu_angmax[row] = multipliers.mu_u[first_angle_row + n] * PI / 180.0;
+        mu_angmin[row] = per_degree(multipliers.mu_l[first_angle_row + n]);
+        mu_angmax[row] = per_degree(multipliers.mu_u[first_angle_row + n]);
     }
     let constant: f64 = costs.active.constant.iter().sum();
 

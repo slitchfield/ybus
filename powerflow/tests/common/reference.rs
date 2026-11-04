@@ -432,3 +432,138 @@ pub fn dcopf_deviation(
     deviations.push(("objective (relative)", objective));
     deviations
 }
+
+/// One case's `runopf` results (AC, MIPS), each table in the case's row order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcOpfReference {
+    /// Per bus: voltage magnitude (p.u.) and angle (degrees), real and reactive power prices,
+    /// and the multipliers of the voltage magnitude limits.
+    pub vm_pu: Vec<f64>,
+    pub va_deg: Vec<f64>,
+    pub lam_p: Vec<f64>,
+    pub lam_q: Vec<f64>,
+    pub mu_vmin: Vec<f64>,
+    pub mu_vmax: Vec<f64>,
+    /// Per generator: real and reactive output, and the multipliers of their limits.
+    pub pg_mw: Vec<f64>,
+    pub qg_mvar: Vec<f64>,
+    pub mu_pmin: Vec<f64>,
+    pub mu_pmax: Vec<f64>,
+    pub mu_qmin: Vec<f64>,
+    pub mu_qmax: Vec<f64>,
+    /// Per branch: flows at both ends, and the multipliers of the flow and angle limits.
+    pub pf_mw: Vec<f64>,
+    pub qf_mvar: Vec<f64>,
+    pub pt_mw: Vec<f64>,
+    pub qt_mvar: Vec<f64>,
+    pub mu_sf: Vec<f64>,
+    pub mu_st: Vec<f64>,
+    pub mu_angmin: Vec<f64>,
+    pub mu_angmax: Vec<f64>,
+    /// The objective ($/hr), MIPS's iterations, whether it converged, and whether Octave's
+    /// least-squares fallback was taken.
+    pub objective: f64,
+    pub iterations: usize,
+    pub success: bool,
+    pub singular: bool,
+}
+
+/// Reads `<case>_opf_bus.csv`, `_gen.csv`, `_branch.csv` and `_summary.csv` from `dir`.
+pub fn read_acopf(dir: &Path, case: &str) -> Result<AcOpfReference, String> {
+    let bus = table(
+        dir,
+        case,
+        "opf",
+        "bus",
+        "bus,vm_pu,va_deg,lam_p,lam_q,mu_vmin,mu_vmax",
+    )?;
+    let gen = table(
+        dir,
+        case,
+        "opf",
+        "gen",
+        "row,bus,status,pg_mw,qg_mvar,mu_pmin,mu_pmax,mu_qmin,mu_qmax",
+    )?;
+    let branch = table(
+        dir,
+        case,
+        "opf",
+        "branch",
+        "row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar,mu_sf,mu_st,mu_angmin,mu_angmax",
+    )?;
+    let column = |rows: &[Vec<f64>], k: usize| rows.iter().map(|row| row[k]).collect();
+    let summary = summary(dir, case, "opf", "objective,iterations,success,singular")?;
+    Ok(AcOpfReference {
+        vm_pu: column(&bus, 1),
+        va_deg: column(&bus, 2),
+        lam_p: column(&bus, 3),
+        lam_q: column(&bus, 4),
+        mu_vmin: column(&bus, 5),
+        mu_vmax: column(&bus, 6),
+        pg_mw: column(&gen, 2),
+        qg_mvar: column(&gen, 3),
+        mu_pmin: column(&gen, 4),
+        mu_pmax: column(&gen, 5),
+        mu_qmin: column(&gen, 6),
+        mu_qmax: column(&gen, 7),
+        pf_mw: column(&branch, 3),
+        qf_mvar: column(&branch, 4),
+        pt_mw: column(&branch, 5),
+        qt_mvar: column(&branch, 6),
+        mu_sf: column(&branch, 7),
+        mu_st: column(&branch, 8),
+        mu_angmin: column(&branch, 9),
+        mu_angmax: column(&branch, 10),
+        objective: parse_field(&summary, 0)?,
+        iterations: parse_field::<usize>(&summary, 1)?,
+        success: parse_field::<u8>(&summary, 2)? == 1,
+        singular: parse_field::<u8>(&summary, 3)? == 1,
+    })
+}
+
+/// The largest absolute difference in each of an AC OPF's quantities from `runopf`'s, by name,
+/// and in the objective relative to its magnitude (at least 1).
+pub fn acopf_deviation(
+    solution: &powerflow::opf::ac::AcOpfSolution,
+    reference: &AcOpfReference,
+) -> Vec<(&'static str, f64)> {
+    let s = solution;
+    let r = reference;
+    let pairs: [(&'static str, &[f64], &[f64]); 20] = [
+        ("vm_pu", &s.vm_pu, &r.vm_pu),
+        ("va_deg", &s.va_deg, &r.va_deg),
+        ("lam_p", &s.lam_p, &r.lam_p),
+        ("lam_q", &s.lam_q, &r.lam_q),
+        ("mu_vmin", &s.mu_vmin, &r.mu_vmin),
+        ("mu_vmax", &s.mu_vmax, &r.mu_vmax),
+        ("pg_mw", &s.pg_mw, &r.pg_mw),
+        ("qg_mvar", &s.qg_mvar, &r.qg_mvar),
+        ("mu_pmin", &s.mu_pmin, &r.mu_pmin),
+        ("mu_pmax", &s.mu_pmax, &r.mu_pmax),
+        ("mu_qmin", &s.mu_qmin, &r.mu_qmin),
+        ("mu_qmax", &s.mu_qmax, &r.mu_qmax),
+        ("pf_mw", &s.pf_mw, &r.pf_mw),
+        ("qf_mvar", &s.qf_mvar, &r.qf_mvar),
+        ("pt_mw", &s.pt_mw, &r.pt_mw),
+        ("qt_mvar", &s.qt_mvar, &r.qt_mvar),
+        ("mu_sf", &s.mu_sf, &r.mu_sf),
+        ("mu_st", &s.mu_st, &r.mu_st),
+        ("mu_angmin", &s.mu_angmin, &r.mu_angmin),
+        ("mu_angmax", &s.mu_angmax, &r.mu_angmax),
+    ];
+    let mut deviations: Vec<(&'static str, f64)> = pairs
+        .iter()
+        .map(|&(name, actual, expected)| {
+            let difference = if actual.len() == expected.len() {
+                largest_difference(actual, expected.iter().copied())
+            } else {
+                f64::NAN
+            };
+            (name, difference)
+        })
+        .collect();
+    let objective =
+        (solution.objective - reference.objective).abs() / reference.objective.abs().max(1.0);
+    deviations.push(("objective (relative)", objective));
+    deviations
+}
