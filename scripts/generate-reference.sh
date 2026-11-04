@@ -29,4 +29,9 @@ if [[ $# -gt 0 ]]; then
 fi
 mkdir -p "${OUT}"
 
+# Single-threaded BLAS: under an address-space limit (ulimit -v), as local runs over every case
+#   use, multithreaded OpenBLAS hangs Octave at no CPU (rundcopf on case14 under 4 GB, MATPOWER
+#   8.1, Octave 8.4.0); single-threaded, the same call takes a fraction of a second
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}" OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+
 octave --no-gui --quiet "${ROOT}/scripts/generate_reference.m" "${MATPOWER}" "${OUT}" "$@"

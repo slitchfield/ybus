@@ -67,7 +67,7 @@ Considerable care went into attributing the ideas this code is built on:
 - **Copied and ported code, marked:** the sparse matrix algorithms were implemented from
   published descriptions in papers and textbooks, and no source code from other libraries was
   knowingly copied or ported. The DC and AC power flows, the DC sensitivities (PTDF and LODF),
-  the island and bridge listing, and the optimal power flow's generator costs reproduce
+  the island and bridge listing, and the optimal power flow's generator costs and DC model reproduce
   MATPOWER's results, and were written with reference to MATPOWER's BSD-licensed source code as
   well as its documentation and technical notes. They are reimplementations in Rust, not
   translations; the README's [References](README.md#references) section names the MATPOWER

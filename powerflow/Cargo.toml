@@ -16,6 +16,7 @@ rayon = ["sparse_mat/rayon", "dep:rayon"]
 
 [dependencies]
 sparse_mat = { path = "../sparse_mat" }
+interior_point = { path = "../interior_point" }
 rayon = { version = "1", optional = true }
 
 [dev-dependencies]

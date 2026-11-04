@@ -50,10 +50,36 @@
 %                           only where it succeeds: it fails on cases with parallel branches
 %                           whose summed rows pass the end of the table, with more buses than
 %                           branches, or deep enough to pass Octave's recursion limit
+%   <case>_dcopf_bus.csv    the DC optimal power flow (rundcopf, with opf.dc.solver MIPS forced,
+%                           so that MIPS's failures are recorded too): bus number, voltage angle
+%                           (degrees) and real power price LAM_P ($/MWh)
+%   <case>_dcopf_gen.csv    generator row, bus, status, real power output (MW), and the
+%                           multipliers of its lower and upper real power limits ($/MWh)
+%   <case>_dcopf_branch.csv branch row, from and to bus, status, real power flow at the from end
+%                           (MW), the multipliers of its flow limit at the from and to ends
+%                           ($/MWh), and of its angle difference limits ($/degree)
+%   <case>_dcopf_summary.csv
+%                           the objective ($/hr), MIPS's iterations, whether it succeeded,
+%                           whether Octave found a KKT system singular (see below), and the
+%                           objective and solver of rundcopf with its default solver (GLPK for
+%                           linear costs), as a check of the optimum
+%   <case>_dcopf_history.csv
+%                           MIPS's termination measures, barrier parameter, step size, objective
+%                           and step lengths at the start and after each iteration
+%   <case>_opf_*.csv        the same for the AC optimal power flow (runopf, MIPS by default),
+%                           with voltage magnitudes (p.u.), reactive power and its price LAM_Q,
+%                           the multipliers of the voltage magnitude and reactive power limits,
+%                           and flows at both ends; the summary has no default-solver columns
+% The OPF runs use MATPOWER's defaults (MP-Core), which agree with the legacy code on OPF.
+%   Their results are written even when MIPS fails, since parity includes its failures.
+%   Under Octave, a KKT system singular to machine precision makes the backslash in MIPS warn
+%   and return a least-squares solution by QR rather than the LU solution, with which MIPS
+%   continues where an exact solve (as MATLAB's, or powerflow's) would stop it on too long a
+%   step; the summary's singular column records that it happened.
 % Values are printed with 17 significant digits, enough to round-trip a double exactly.
 %
 % YBUS_REFERENCE_RUNS, if set, chooses which of the runs islands, ptdf, dcpf, acpf, fdxb,
-%   fdbx, qlim1 and qlim2 to make, separated by commas (default: all), so that new results don't
+%   fdbx, qlim1, qlim2, dcopf and opf to make, separated by commas (default: all), so that new results don't
 %   need the slow ones again. The AC runs follow dcpf only if it's chosen and succeeds.
 
 % Marks this file as a script, so Octave accepts the function definition that follows. Octave
@@ -102,7 +128,8 @@ end
 mpopt = mpoption('verbose', 0, 'out.all', 0);
 chosen = getenv('YBUS_REFERENCE_RUNS');
 if isempty(chosen)
-    chosen = {'islands', 'ptdf', 'dcpf', 'acpf', 'fdxb', 'fdbx', 'qlim1', 'qlim2'};
+    chosen = {'islands', 'ptdf', 'dcpf', 'acpf', 'fdxb', 'fdbx', 'qlim1', 'qlim2', 'dcopf', ...
+        'opf'};
 else
     chosen = strsplit(chosen, ',');
 end
@@ -196,6 +223,104 @@ for k = 1:numel(cases)
             LODF(sub2ind(size(LODF), outages, (1:k)')) = -1;
         end
         write_matrix(fullfile(out_dir, [name '_lodf.csv']), rows(outages), rows, LODF);
+    end
+
+    % The optimal power flows: DC with MIPS forced, then AC with MATPOWER's default, MIPS
+    for run = {{'dcopf', true}, {'opf', false}}
+        [prefix, dc] = deal(run{1}{1}, run{1}{2});
+        if ~wanted(prefix)
+            continue;
+        end
+        lastwarn('');
+        try
+            if dc
+                [result, success] = rundcopf(name, mpoption(mpopt, 'opf.dc.solver', 'MIPS'));
+            else
+                [result, success] = runopf(name, mpopt);
+            end
+        catch err
+            fprintf(2, '%s (%s): %s\n', name, prefix, err.message);
+            failed{end + 1} = [name ' (' prefix ')'];
+            continue;
+        end
+        % Whether Octave's backslash found a KKT system singular to machine precision, where it
+        %   warns and returns a least-squares solution by QR instead of the LU solve MIPS
+        %   expects, so that MIPS continues where an exact solve would stop it. Only the last
+        %   warning is kept, so this assumes none other followed
+        [~, warning_id] = lastwarn();
+        singular = any(strcmp(warning_id, {'Octave:nearly-singular-matrix', 'Octave:singular-matrix'}));
+        output = result.raw.output;
+        if ~strcmp(output.alg, 'MIPS')
+            fprintf(2, '%s (%s): solved by %s, not MIPS\n', name, prefix, output.alg);
+            failed{end + 1} = [name ' (' prefix ')'];
+            continue;
+        end
+        rows = (1:size(result.branch, 1))';
+        if dc
+            write_csv(fullfile(out_dir, [name '_dcopf_bus.csv']), 'bus,va_deg,lam_p', ...
+                '%d,%.17g,%.17g', result.bus(:, [BUS_I, VA, LAM_P]));
+            write_csv(fullfile(out_dir, [name '_dcopf_gen.csv']), ...
+                'row,bus,status,pg_mw,mu_pmin,mu_pmax', '%d,%d,%d,%.17g,%.17g,%.17g', ...
+                [(1:size(result.gen, 1))', result.gen(:, [GEN_BUS, GEN_STATUS, PG, MU_PMIN, MU_PMAX])]);
+            write_csv(fullfile(out_dir, [name '_dcopf_branch.csv']), ...
+                'row,from,to,status,pf_mw,mu_sf,mu_st,mu_angmin,mu_angmax', ...
+                '%d,%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g', ...
+                [rows, result.branch(:, [F_BUS, T_BUS, BR_STATUS, PF, MU_SF, MU_ST, MU_ANGMIN, MU_ANGMAX])]);
+        else
+            write_csv(fullfile(out_dir, [name '_opf_bus.csv']), ...
+                'bus,vm_pu,va_deg,lam_p,lam_q,mu_vmin,mu_vmax', ...
+                '%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g', ...
+                result.bus(:, [BUS_I, VM, VA, LAM_P, LAM_Q, MU_VMIN, MU_VMAX]));
+            write_csv(fullfile(out_dir, [name '_opf_gen.csv']), ...
+                'row,bus,status,pg_mw,qg_mvar,mu_pmin,mu_pmax,mu_qmin,mu_qmax', ...
+                '%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g', ...
+                [(1:size(result.gen, 1))', result.gen(:, [GEN_BUS, GEN_STATUS, PG, QG, ...
+                    MU_PMIN, MU_PMAX, MU_QMIN, MU_QMAX])]);
+            write_csv(fullfile(out_dir, [name '_opf_branch.csv']), ...
+                'row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar,mu_sf,mu_st,mu_angmin,mu_angmax', ...
+                '%d,%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g', ...
+                [rows, result.branch(:, [F_BUS, T_BUS, BR_STATUS, PF, QF, PT, QT, MU_SF, ...
+                    MU_ST, MU_ANGMIN, MU_ANGMAX])]);
+        end
+        % Row by row, since a record can leave a field empty (NaN here)
+        fields = {'feascond', 'gradcond', 'compcond', 'costcond', 'gamma', 'stepsize', 'obj', ...
+            'alphap', 'alphad'};
+        hist = output.hist;
+        history = NaN(numel(hist), numel(fields) + 1);
+        for h = 1:numel(hist)
+            history(h, 1) = h - 1;
+            for f = 1:numel(fields)
+                if ~isempty(hist(h).(fields{f}))
+                    history(h, f + 1) = hist(h).(fields{f});
+                end
+            end
+        end
+        write_csv(fullfile(out_dir, [name '_' prefix '_history.csv']), ...
+            ['iteration,' strjoin(fields, ',')], ['%d' repmat(',%.17g', 1, 9)], history);
+        % The summary last, so that its presence marks a complete run
+        fid = fopen(fullfile(out_dir, [name '_' prefix '_summary.csv']), 'w');
+        if dc
+            % The default solver's optimum, as a check: GLPK when the costs are linear
+            try
+                default = rundcopf(name, mpopt);
+                [default_f, default_alg] = deal(default.f, default.raw.output.alg);
+                if ~default.success
+                    default_f = NaN;
+                end
+            catch err
+                fprintf(2, '%s (dcopf, default solver): %s\n', name, err.message);
+                [default_f, default_alg] = deal(NaN, 'none');
+            end
+            fprintf(fid, 'objective,iterations,success,singular,default_objective,default_solver\n');
+            fprintf(fid, '%.17g,%d,%d,%d,%.17g,%s\n', result.f, output.iterations, success, ...
+                singular, default_f, default_alg);
+        else
+            fprintf(fid, 'objective,iterations,success,singular\n');
+            fprintf(fid, '%.17g,%d,%d,%d\n', result.f, output.iterations, success, singular);
+        end
+        fclose(fid);
+        printf('%s: %s %s in %d iterations, objective %.17g\n', name, prefix, ...
+            output.message, output.iterations, result.f);
     end
 
     if ~wanted('dcpf')

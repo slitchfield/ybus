@@ -14,6 +14,19 @@ use crate::interior_point_error::InteriorPointError;
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
 use crate::vector::{dot, norm_inf};
 
+/// The fill-reducing ordering for the KKT system's LU factorization: COLAMD.
+///
+/// The system's lower-right block, `0` for the equality constraints, has zero diagonals, which
+/// the LU must pivot away from by rows. AMD's symmetric ordering can't anticipate that, while
+/// COLAMD bounds the fill for any row pivoting. On `case_ACTIVSg10k`'s DC OPF (a 22,949 × 22,949
+/// KKT system with 103,095 entries), AMD's factors held 14 million entries and took 24 s per
+/// iteration, and COLAMD's 640,000, in 0.036 s (measured 2026-11-04). On MATPOWER's cases,
+/// both reproduce MATPOWER's iteration counts alike except on case2736sp's degenerate DC OPF,
+/// where COLAMD takes 44 to MATPOWER's 45 and AMD 45. Neither is UMFPACK's own ordering, which
+/// MATPOWER uses under Octave; a fuller study of the KKT solve is a follow-up in
+/// `docs/OptimizationChecklist.md`.
+pub const KKT_ORDERING: Ordering = Ordering::Colamd;
+
 /// MIPS's options, with its defaults.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -268,7 +281,8 @@ fn lagrangian_gradient(e: &Evaluation, lam: &[f64], mu: &[f64]) -> Vec<f64> {
 ///   row becomes one or two inequalities.
 /// - **Each iteration** solves the reduced KKT system `[M dg; dgᵀ 0] [dx; dλ] = [−N; −g]`,
 ///   with `M = Lxx + dh Z⁻¹ diag(μ) dhᵀ` and `N = Lx + dh Z⁻¹ (diag(μ) h + γ e)`, by
-///   `sparse_mat`'s LU ordered by AMD (where MATLAB uses its backslash), then takes primal and
+///   `sparse_mat`'s LU ordered by COLAMD (see [`KKT_ORDERING`]; MATLAB uses its backslash),
+///   then takes primal and
 ///   dual steps no longer than `xi` of the way to the boundary, and sets `γ = σ zᵀμ / niq`.
 /// - **It converges** when the feasibility, gradient, complementarity and cost measures all
 ///   fall below their tolerances, and fails numerically on a NaN or too long a step, a step
@@ -492,7 +506,7 @@ pub fn mips<P: Problem>(
         let kkt = CscMatrix::from_triplets(size, size, triplets).expect("indices in range");
         let rhs: Vec<f64> = n_vec.iter().chain(&e.g).map(|v| -v).collect();
         let solved = kkt
-            .analyze_lu(Ordering::Amd)
+            .analyze_lu(KKT_ORDERING)
             .and_then(|symbolic| symbolic.factor(&kkt, LuOptions::default()))
             .and_then(|lu| lu.solve(&rhs));
         let dxdlam = match solved {
