@@ -1,2 +1,2 @@
-objective,iterations,success,default_objective,default_solver
-7642.5917771564509,10,1,7642.5917771564509,MIPS
+objective,iterations,success,singular,default_objective,default_solver
+7642.5917771564509,10,1,0,7642.5917771564509,MIPS

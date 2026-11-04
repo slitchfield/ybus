@@ -51,6 +51,55 @@ pub struct DcModel {
     matpower_slack: usize,
 }
 
+/// MATPOWER's `makeBdc` over a network in internal numbering: the B matrices and phase-shifter
+/// injections (p.u.), shared by the DC power flow and the DC optimal power flow.
+pub(crate) struct Bdc {
+    pub(crate) bbus: CsrMatrix<f64>,
+    pub(crate) bf: CsrMatrix<f64>,
+    pub(crate) pbusinj_pu: Vec<f64>,
+    pub(crate) pfinj_pu: Vec<f64>,
+}
+
+impl Bdc {
+    /// The matrices over `nb` connected buses and the in-service branches at case rows
+    /// `branch_rows`, whose internal (from, to) buses are `ends`. Each branch's reactance must
+    /// be nonzero.
+    pub(crate) fn new(
+        case: &Case,
+        nb: usize,
+        branch_rows: &[usize],
+        ends: &[(usize, usize)],
+    ) -> Bdc {
+        // Each branch's (from, to) and (to, from) stamps are pushed together, so both positions
+        //   sum the same values in the same order and Bbus is exactly symmetric, which cholesky
+        //   requires. Every stamped position stays stored even if its stamps cancel, so the
+        //   pattern depends only on the topology.
+        let nl = branch_rows.len();
+        let mut bbus_triplets = Vec::with_capacity(4 * nl);
+        let mut bf_triplets = Vec::with_capacity(2 * nl);
+        let mut pfinj_pu = Vec::with_capacity(nl);
+        let mut pbusinj_pu = vec![0.0; nb];
+        for (k, (&row, &(from, to))) in branch_rows.iter().zip(ends).enumerate() {
+            let branch = &case.branch[row];
+            let b = 1.0 / branch.x / branch.effective_tap();
+            bbus_triplets.extend([(from, from, b), (from, to, -b), (to, from, -b), (to, to, b)]);
+            bf_triplets.extend([(k, from, b), (k, to, -b)]);
+            let pfinj = b * (-branch.shift_deg * PI / 180.0);
+            pfinj_pu.push(pfinj);
+            pbusinj_pu[from] += pfinj;
+            pbusinj_pu[to] -= pfinj;
+        }
+        Bdc {
+            bbus: CsrMatrix::from_triplets(nb, nb, bbus_triplets)
+                .expect("internal bus indices are below nb"),
+            bf: CsrMatrix::from_triplets(nl, nb, bf_triplets)
+                .expect("internal branch and bus indices are in range"),
+            pbusinj_pu,
+            pfinj_pu,
+        }
+    }
+}
+
 impl DcModel {
     /// Builds the DC model of `case`, as MATPOWER's `makeBdc` does after `ext2int`.
     ///
@@ -80,32 +129,17 @@ impl DcModel {
                 Ok(())
             }
         })?;
-        let nb = topology.bus_rows.len();
-        let (branch_rows, ends) = (&topology.branch_rows, &topology.ends);
-
-        // makeBdc. Each branch's (from, to) and (to, from) stamps are pushed together, so both
-        //   positions sum the same values in the same order and Bbus is exactly symmetric,
-        //   which cholesky requires. Every stamped position stays stored even if its stamps
-        //   cancel, so the pattern depends only on the topology.
-        let nl = branch_rows.len();
-        let mut bbus_triplets = Vec::with_capacity(4 * nl);
-        let mut bf_triplets = Vec::with_capacity(2 * nl);
-        let mut pfinj_pu = Vec::with_capacity(nl);
-        let mut pbusinj_pu = vec![0.0; nb];
-        for (k, (&row, &(from, to))) in branch_rows.iter().zip(ends).enumerate() {
-            let branch = &case.branch[row];
-            let b = 1.0 / branch.x / branch.effective_tap();
-            bbus_triplets.extend([(from, from, b), (from, to, -b), (to, from, -b), (to, to, b)]);
-            bf_triplets.extend([(k, from, b), (k, to, -b)]);
-            let pfinj = b * (-branch.shift_deg * PI / 180.0);
-            pfinj_pu.push(pfinj);
-            pbusinj_pu[from] += pfinj;
-            pbusinj_pu[to] -= pfinj;
-        }
-        let bbus = CsrMatrix::from_triplets(nb, nb, bbus_triplets)
-            .expect("internal bus indices are below nb");
-        let bf = CsrMatrix::from_triplets(nl, nb, bf_triplets)
-            .expect("internal branch and bus indices are in range");
+        let Bdc {
+            bbus,
+            bf,
+            pbusinj_pu,
+            pfinj_pu,
+        } = Bdc::new(
+            case,
+            topology.bus_rows.len(),
+            &topology.branch_rows,
+            &topology.ends,
+        );
 
         let bus_labels = topology
             .bus_rows

@@ -295,3 +295,140 @@ pub fn read_limited(dir: &Path, case: &str, run: &str) -> Result<Vec<usize>, Str
     let rows = table(dir, case, run, "limited", "row")?;
     Ok(rows.iter().map(|fields| fields[0] as usize).collect())
 }
+
+/// One case's `rundcopf` results (MIPS forced), each table in the case's row order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DcOpfReference {
+    /// Each bus's voltage angle (degrees).
+    pub va_deg: Vec<f64>,
+    /// Each bus's real power price ($/MWh).
+    pub lam_p: Vec<f64>,
+    /// Each generator's real power output (MW).
+    pub pg_mw: Vec<f64>,
+    /// The multipliers of each generator's lower and upper real power limits ($/MWh).
+    pub mu_pmin: Vec<f64>,
+    pub mu_pmax: Vec<f64>,
+    /// Each branch's real power flow at the from end (MW).
+    pub pf_mw: Vec<f64>,
+    /// The multipliers of each branch's flow limit at the from and to ends ($/MWh).
+    pub mu_sf: Vec<f64>,
+    pub mu_st: Vec<f64>,
+    /// The multipliers of each branch's angle difference limits ($/degree).
+    pub mu_angmin: Vec<f64>,
+    pub mu_angmax: Vec<f64>,
+    /// The objective ($/hr).
+    pub objective: f64,
+    /// MIPS's iterations.
+    pub iterations: usize,
+    /// Whether MIPS converged.
+    pub success: bool,
+    /// Whether Octave found a KKT system singular to machine precision during the run, and so
+    /// solved it by least squares instead (see `generate_reference.m`).
+    pub singular: bool,
+    /// The objective with `rundcopf`'s default solver (NaN if it failed), and that solver.
+    pub default_objective: f64,
+    pub default_solver: String,
+}
+
+/// Reads `<case>_dcopf_bus.csv`, `_gen.csv`, `_branch.csv` and `_summary.csv` from `dir`.
+pub fn read_dcopf(dir: &Path, case: &str) -> Result<DcOpfReference, String> {
+    let bus = table(dir, case, "dcopf", "bus", "bus,va_deg,lam_p")?;
+    let gen = table(
+        dir,
+        case,
+        "dcopf",
+        "gen",
+        "row,bus,status,pg_mw,mu_pmin,mu_pmax",
+    )?;
+    let branch = table(
+        dir,
+        case,
+        "dcopf",
+        "branch",
+        "row,from,to,status,pf_mw,mu_sf,mu_st,mu_angmin,mu_angmax",
+    )?;
+    let column = |rows: &[Vec<f64>], k: usize| rows.iter().map(|row| row[k]).collect();
+    let summary = summary(
+        dir,
+        case,
+        "dcopf",
+        "objective,iterations,success,singular,default_objective,default_solver",
+    )?;
+    Ok(DcOpfReference {
+        va_deg: column(&bus, 1),
+        lam_p: column(&bus, 2),
+        pg_mw: column(&gen, 2),
+        mu_pmin: column(&gen, 3),
+        mu_pmax: column(&gen, 4),
+        pf_mw: column(&branch, 3),
+        mu_sf: column(&branch, 4),
+        mu_st: column(&branch, 5),
+        mu_angmin: column(&branch, 6),
+        mu_angmax: column(&branch, 7),
+        objective: parse_field(&summary, 0)?,
+        iterations: parse_field::<usize>(&summary, 1)?,
+        success: parse_field::<u8>(&summary, 2)? == 1,
+        singular: parse_field::<u8>(&summary, 3)? == 1,
+        default_objective: parse_field(&summary, 4)?,
+        default_solver: summary[5].clone(),
+    })
+}
+
+/// The fields of a summary file's one line, after checking its header.
+fn summary(dir: &Path, case: &str, run: &str, header: &str) -> Result<Vec<String>, String> {
+    let path = dir.join(format!("{case}_{run}_summary.csv"));
+    let text = fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.first() != Some(&header) || lines.len() != 2 {
+        return Err(format!(
+            "{}: expected the header {header} and one line",
+            path.display()
+        ));
+    }
+    let fields: Vec<String> = lines[1].split(',').map(str::to_string).collect();
+    if fields.len() != header.split(',').count() {
+        return Err(format!("{}: line 2 is malformed", path.display()));
+    }
+    Ok(fields)
+}
+
+fn parse_field<T: std::str::FromStr>(fields: &[String], k: usize) -> Result<T, String> {
+    fields[k]
+        .parse()
+        .map_err(|_| format!("summary field {} ({:?}) is malformed", k + 1, fields[k]))
+}
+
+/// The largest absolute difference in each of a DC OPF's quantities from `rundcopf`'s, by
+/// name, and in the objective relative to its magnitude (at least 1).
+pub fn dcopf_deviation(
+    solution: &powerflow::opf::dc::DcOpfSolution,
+    reference: &DcOpfReference,
+) -> Vec<(&'static str, f64)> {
+    let pairs: [(&'static str, &[f64], &[f64]); 10] = [
+        ("va_deg", &solution.va_deg, &reference.va_deg),
+        ("lam_p", &solution.lam_p, &reference.lam_p),
+        ("pg_mw", &solution.pg_mw, &reference.pg_mw),
+        ("mu_pmin", &solution.mu_pmin, &reference.mu_pmin),
+        ("mu_pmax", &solution.mu_pmax, &reference.mu_pmax),
+        ("pf_mw", &solution.pf_mw, &reference.pf_mw),
+        ("mu_sf", &solution.mu_sf, &reference.mu_sf),
+        ("mu_st", &solution.mu_st, &reference.mu_st),
+        ("mu_angmin", &solution.mu_angmin, &reference.mu_angmin),
+        ("mu_angmax", &solution.mu_angmax, &reference.mu_angmax),
+    ];
+    let mut deviations: Vec<(&'static str, f64)> = pairs
+        .iter()
+        .map(|&(name, actual, expected)| {
+            let difference = if actual.len() == expected.len() {
+                largest_difference(actual, expected.iter().copied())
+            } else {
+                f64::NAN
+            };
+            (name, difference)
+        })
+        .collect();
+    let objective =
+        (solution.objective - reference.objective).abs() / reference.objective.abs().max(1.0);
+    deviations.push(("objective (relative)", objective));
+    deviations
+}

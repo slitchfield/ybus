@@ -150,8 +150,8 @@ Facts checked when this roadmap was written (2026-11-03):
       committed for case14, case30 and case118 and generated locally for every case with costs.
       - **Runs:** `rundcopf` with `opf.dc.solver = 'MIPS'`, and `runopf` with its defaults
         (MIPS). Each records bus, generator and branch results with their prices and
-        multipliers, a summary (objective, MIPS's iterations, success, and for DC the default
-        solver's objective and name), and MIPS's per-iteration history. A run where MIPS fails
+        multipliers, a summary (objective, MIPS's iterations, success, whether Octave's
+        least-squares fallback was taken, and for DC the default solver's objective and name), and MIPS's per-iteration history. A run where MIPS fails
         is still recorded.
       - **Committed:** case14, case30 and case118, 30 files, 152 KB (33 KB compressed).
         Regenerating them gives byte-for-byte the same files. All six runs converge: DC in 10, 9
@@ -162,8 +162,49 @@ Facts checked when this roadmap was written (2026-11-03):
       - **Running under `ulimit -v`:** Octave hung at no CPU in `rundcopf` under an
         address-space limit until BLAS was made single-threaded. `generate-reference.sh` now
         sets `OPENBLAS_NUM_THREADS=1` and `OMP_NUM_THREADS=1` unless they're already set.
-- [ ] The DC OPF: `[Va, Pg, y]` with the power balance, flow limits, angle limits and the
+- [x] The DC OPF: `[Va, Pg, y]` with the power balance, flow limits, angle limits and the
       piecewise-linear rows, solved through the quadratic-program wrapper, against `rundcopf`.
+      - **`powerflow::opf::dc`:** `dc_opf` follows the legacy `opf_setup`'s DC model, after
+        `ext2int`:
+        - every bus of type REF has its angle fixed; there's no `bustypes` and no island check,
+          as in MATPOWER's OPF
+        - the constraint blocks `Pmis`, `Pf`, `ang` (`makeAang`, including its literal 0° limits)
+          and `ycon`, in that order
+        - `dcopf_solver`'s starting point, and MATPOWER's MIPS options (`feastol` 5e-6)
+        - the constant cost terms added after the solve, as `opt_model.solve` adds them
+        - the results mapped back as `dcopf_solver` and `opf` map them, with out-of-service
+          elements zeroed
+      - **Shared with the DC power flow:** the `ext2int` half of the topology (`Network`) and
+        `makeBdc` (`Bdc`), now crate-private pieces of their own.
+      - **Fixtures**, worked out by hand: a binding flow limit, a binding angle limit,
+        piecewise-linear costs, a dispatchable load, and two islands with a reference each.
+      - **Committed references:** MATPOWER's iteration counts on case14, case30 and case118,
+        with every quantity within 6.9e-12 (the bar is 1e-9) and objectives within 1.7e-15.
+      - **Every local case with costs (73):** `local_cases_match_rundcopf`, run with
+        `YBUS_DCOPF_CASES`. Its criteria follow what was found:
+        - **The outcome** always matches: MATPOWER converges on 58 cases and fails on 15, and so
+          does `powerflow`, except on case3120sp (below).
+        - **Iteration counts** match on 56 of the 57 runs MATPOWER finishes without Octave's
+          fallback (below). The exception is case2736sp, at 44 to MATPOWER's 45, since MIPS
+          switched to COLAMD (`KKT_ORDERING`).
+        - **Objectives and prices** agree wherever both converge: objectives within 1e-10
+          relative, prices and multipliers within 1e-8, and the optimum within 1e-6 of the
+          default solver's (GLPK on 52 cases).
+        - **Dispatch, angles and flows aren't compared locally.** On degenerate problems
+          (linear costs, several generators at the same marginal cost) the optimum is a set,
+          and the point found differs, by up to 61.5 MW on case8387pegase, while objectives
+          agree within 5.5e-14 and prices within 3e-11. MATPOWER's own MP-Core and legacy
+          implementations differ from each other the same way: 3.84 MW on case1354pegase, with
+          objectives equal within 4e-16. The committed cases' optima are unique, and are
+          compared in full.
+      - **Octave's least-squares fallback:** when a KKT system is singular to machine precision,
+        Octave's backslash warns and returns a least-squares solution by QR, not the LU
+        solution. MIPS then continues where an exact solve would stop it on too long a step.
+        UMFPACK's own LU, called directly, gives our step (case16am's third iteration: a norm of
+        1.7e14 from both, against the fallback's 0.33). The references now record when this
+        happened (a `singular` column): on 6 cases, 5 of which MATPOWER fails anyway. There the
+        iteration counts aren't compared. On case3120sp `powerflow` converges at 148 iterations
+        where MATPOWER fails at 150.
 
 ### PR 3: the AC OPF and the survey
 

@@ -54,7 +54,7 @@ For each case:
 | `<case>_dcopf_bus.csv` | `bus`, `va_deg`, `lam_p` (the bus's real power price, $/MWh) |
 | `<case>_dcopf_gen.csv` | `row`, `bus`, `status`, `pg_mw`, `mu_pmin`, `mu_pmax` (multipliers of the real power limits, $/MWh) |
 | `<case>_dcopf_branch.csv` | `row`, `from`, `to`, `status`, `pf_mw`, `mu_sf`, `mu_st` (multipliers of the flow limit at the from and to ends, $/MWh), `mu_angmin`, `mu_angmax` (of the angle difference limits, $/degree) |
-| `<case>_dcopf_summary.csv` | `objective` ($/hr), `iterations` (MIPS's), `success`, `default_objective` and `default_solver` (`rundcopf` with its default solver; NaN if it failed) |
+| `<case>_dcopf_summary.csv` | `objective` ($/hr), `iterations` (MIPS's), `success`, `singular` (1 if Octave found a KKT system singular to machine precision, and so solved it by least squares instead of LU: MIPS's steps then differ from an exact solve's), `default_objective` and `default_solver` (`rundcopf` with its default solver; NaN if it failed) |
 | `<case>_dcopf_history.csv` | `iteration` (0 for the starting point), then MIPS's `feascond`, `gradcond`, `compcond`, `costcond`, `gamma`, `stepsize`, `obj`, `alphap` and `alphad` after it |
 | `<case>_opf_bus.csv` | `bus`, `vm_pu`, `va_deg`, `lam_p`, `lam_q` ($/MVAr-hr), `mu_vmin`, `mu_vmax` (multipliers of the voltage magnitude limits, $/p.u.) |
 | `<case>_opf_gen.csv` | `row`, `bus`, `status`, `pg_mw`, `qg_mvar`, `mu_pmin`, `mu_pmax`, `mu_qmin`, `mu_qmax` |

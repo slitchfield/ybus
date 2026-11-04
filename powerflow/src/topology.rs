@@ -7,6 +7,72 @@ use std::collections::{HashMap, VecDeque};
 use crate::case::{Branch, BusType, Case};
 use crate::powerflow_error::PowerflowError;
 
+/// The elements a case's network keeps after MATPOWER's `ext2int`, in internal numbering:
+/// internal bus `i` is case bus row `bus_rows[i]`, and internal branch `k` is case branch row
+/// `branch_rows[k]`; both keep the case's order. No bus roles: the power flows add them with
+/// [`Topology`], while the optimal power flow takes its references from the bus types alone.
+#[derive(Debug, Clone)]
+pub(crate) struct Network {
+    pub(crate) bus_rows: Vec<usize>,
+    pub(crate) branch_rows: Vec<usize>,
+    /// The internal (from, to) buses of each internal branch, parallel to `branch_rows`
+    pub(crate) ends: Vec<(usize, usize)>,
+    pub(crate) gen_rows: Vec<usize>,
+    /// The internal bus of each in-service generator, parallel to `gen_rows`
+    pub(crate) gen_buses: Vec<usize>,
+}
+
+impl Network {
+    /// `case`'s network after `ext2int`, after validating it with [`Case::validate`]: buses
+    /// that aren't isolated (type 4) are connected, in case order, and generators and branches
+    /// count only when in service and attached to connected buses. `check_branch` is called on
+    /// each such branch, with its 1-based case row, as it's found, so a model can reject a
+    /// branch it can't represent before any later check runs.
+    pub(crate) fn new(
+        case: &Case,
+        mut check_branch: impl FnMut(usize, &Branch) -> Result<(), PowerflowError>,
+    ) -> Result<Network, PowerflowError> {
+        // Only Case::parse validates, so a case edited since needs checking here
+        case.validate()?;
+
+        // ext2int: connected buses, in case order, and the label → internal index map
+        let bus_rows: Vec<usize> = (0..case.bus.len())
+            .filter(|&row| case.bus[row].bus_type != BusType::Isolated)
+            .collect();
+        let mut internal = HashMap::with_capacity(bus_rows.len());
+        for (index, &row) in bus_rows.iter().enumerate() {
+            internal.insert(case.bus[row].bus_label, index);
+        }
+
+        // Generators and branches count only when in service and fully connected
+        let (mut gen_rows, mut gen_buses) = (vec![], vec![]);
+        for (row, generator) in case.generator.iter().enumerate() {
+            if let (true, Some(&bus)) = (generator.status, internal.get(&generator.bus_label)) {
+                gen_rows.push(row);
+                gen_buses.push(bus);
+            }
+        }
+        let mut branch_rows = vec![];
+        let mut ends = vec![];
+        for (row, branch) in case.branch.iter().enumerate() {
+            let from = internal.get(&branch.from_label);
+            let to = internal.get(&branch.to_label);
+            if let (true, Some(&from), Some(&to)) = (branch.status, from, to) {
+                check_branch(row + 1, branch)?;
+                branch_rows.push(row);
+                ends.push((from, to));
+            }
+        }
+        Ok(Network {
+            bus_rows,
+            branch_rows,
+            ends,
+            gen_rows,
+            gen_buses,
+        })
+    }
+}
+
 /// A case's topology for a power flow, in internal numbering: internal bus `i` is case bus row
 /// `bus_rows[i]`, and internal branch `k` is case branch row `branch_rows[k]`; both keep the
 /// case's order.
@@ -42,40 +108,16 @@ impl Topology {
     ///   the island and may not fail at all, since rounding can leave a tiny positive pivot.
     pub(crate) fn new(
         case: &Case,
-        mut check_branch: impl FnMut(usize, &Branch) -> Result<(), PowerflowError>,
+        check_branch: impl FnMut(usize, &Branch) -> Result<(), PowerflowError>,
     ) -> Result<Topology, PowerflowError> {
-        // Only Case::parse validates, so a case edited since needs checking here
-        case.validate()?;
-
-        // ext2int: connected buses, in case order, and the label → internal index map
-        let bus_rows: Vec<usize> = (0..case.bus.len())
-            .filter(|&row| case.bus[row].bus_type != BusType::Isolated)
-            .collect();
-        let mut internal = HashMap::with_capacity(bus_rows.len());
-        for (index, &row) in bus_rows.iter().enumerate() {
-            internal.insert(case.bus[row].bus_label, index);
-        }
+        let Network {
+            bus_rows,
+            branch_rows,
+            ends,
+            gen_rows,
+            gen_buses,
+        } = Network::new(case, check_branch)?;
         let nb = bus_rows.len();
-
-        // Generators and branches count only when in service and fully connected
-        let (mut gen_rows, mut gen_buses) = (vec![], vec![]);
-        for (row, generator) in case.generator.iter().enumerate() {
-            if let (true, Some(&bus)) = (generator.status, internal.get(&generator.bus_label)) {
-                gen_rows.push(row);
-                gen_buses.push(bus);
-            }
-        }
-        let mut branch_rows = vec![];
-        let mut ends = vec![];
-        for (row, branch) in case.branch.iter().enumerate() {
-            let from = internal.get(&branch.from_label);
-            let to = internal.get(&branch.to_label);
-            if let (true, Some(&from), Some(&to)) = (branch.status, from, to) {
-                check_branch(row + 1, branch)?;
-                branch_rows.push(row);
-                ends.push((from, to));
-            }
-        }
 
         let Roles {
             ref_buses,
