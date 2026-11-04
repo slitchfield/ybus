@@ -1,7 +1,9 @@
 //! First and second derivatives of AC power injections and branch flows with respect to the
-//! bus voltages in polar coordinates (angles `Va`, magnitudes `Vm`), for the AC optimal power
-//! flow, in the complex matrix notation of MATPOWER Technical Note 2 (R. D. Zimmerman, "AC power
-//! flows, generalized OPF costs and their derivatives using complex matrix notation", 2010).
+//! bus voltages in polar coordinates (angles `Va`, magnitudes `Vm`), which the AC optimal power
+//! flow uses, in the complex matrix notation of MATPOWER Technical Note 2 (R. D. Zimmerman, "AC
+//! power flows, generalized OPF costs and their derivatives using complex matrix notation",
+//! 2010). The matrices come from [`AcModel`](crate::ac::AcModel): Ybus, Yf and Yt, over its
+//! connected buses (in `bus_rows` order) and in-service branches.
 //!
 //! Every quantity here has the form `S = [C V] conj(Y V)`: the bus injections with `C = I` and
 //! `Y = Ybus`, and the flows into a branch at its from (to) end with `C = Cf` (`Ct`) and
@@ -25,6 +27,9 @@
 //!   and `d2Abr_dV2`.
 //!
 //! Each Hessian is returned as the real `2nb × 2nb` matrix over `[Va, Vm]`.
+//!
+//! The functions panic if the matrices, voltages and weights don't agree in size: `C` and `Y`
+//! must both be `rows × nb`, with one voltage per bus and one weight per row.
 
 use sparse_mat::compressed_matrix::CsrMatrix;
 use sparse_mat::Complex;
@@ -62,17 +67,18 @@ fn conj(values: &[C64]) -> Vec<C64> {
 
 /// `S = [C V] conj(Y V)` for `c` (rows × nb) and `y` (rows × nb), with its first derivatives
 /// with respect to `Va` and `Vm` (complex, rows × nb).
-pub(crate) struct Flows {
+#[derive(Clone, Debug, PartialEq)]
+pub struct Flows {
     /// `S`, one per row
-    pub(crate) s: Vec<C64>,
+    pub s: Vec<C64>,
     /// `∂S/∂Va`
-    pub(crate) ds_dva: CsrMatrix<C64>,
+    pub ds_dva: CsrMatrix<C64>,
     /// `∂S/∂Vm`
-    pub(crate) ds_dvm: CsrMatrix<C64>,
+    pub ds_dvm: CsrMatrix<C64>,
 }
 
 /// [`Flows`] for `S = [C V] conj(Y V)` at voltages `v`.
-pub(crate) fn flows(c: &CsrMatrix<C64>, y: &CsrMatrix<C64>, v: &[C64]) -> Flows {
+pub fn flows(c: &CsrMatrix<C64>, y: &CsrMatrix<C64>, v: &[C64]) -> Flows {
     let d = PolarDerivatives::new(v);
     let cv = c.mul_vec(v).expect("C has a column per bus");
     let i_conj = conj(&y.mul_vec(v).expect("Y has a column per bus"));
@@ -153,7 +159,7 @@ fn weighted(c: &CsrMatrix<C64>, y: &CsrMatrix<C64>, w: &[f64]) -> CsrMatrix<C64>
 
 /// The Hessian (real, 2nb × 2nb over `[Va, Vm]`) of `pᵀ Re(S) + qᵀ Im(S)` for
 /// `S = [C V] conj(Y V)` at voltages `v`, with weights `p` and `q`, one per row.
-pub(crate) fn weighted_hessian(
+pub fn weighted_hessian(
     c: &CsrMatrix<C64>,
     y: &CsrMatrix<C64>,
     v: &[C64],
@@ -170,9 +176,9 @@ pub(crate) fn weighted_hessian(
     }))
 }
 
-/// The squared apparent power `|S|²` of each row of `S = [C V] conj(Y V)` at voltages `v`, and
-/// its derivatives with respect to `[Va, Vm]` (real, rows × 2nb).
-pub(crate) fn squared_magnitudes(flows: &Flows) -> (Vec<f64>, CsrMatrix<f64>) {
+/// The squared apparent power `|S|²` of each row of `flows`' `S`, and its derivatives with
+/// respect to `[Va, Vm]` (real, rows × 2nb).
+pub fn squared_magnitudes(flows: &Flows) -> (Vec<f64>, CsrMatrix<f64>) {
     let squared = flows.s.iter().map(|s| s.norm_sqr()).collect();
     let twice_conj: Vec<C64> = flows.s.iter().map(|s| 2.0 * s.conj()).collect();
     let derivative = |ds: &CsrMatrix<C64>| {
@@ -187,7 +193,7 @@ pub(crate) fn squared_magnitudes(flows: &Flows) -> (Vec<f64>, CsrMatrix<f64>) {
 
 /// The Hessian (real, 2nb × 2nb over `[Va, Vm]`) of `μᵀ |S|²` for `S = [C V] conj(Y V)` at
 /// voltages `v`, with `flows` the [`Flows`] there.
-pub(crate) fn squared_magnitude_hessian(
+pub fn squared_magnitude_hessian(
     c: &CsrMatrix<C64>,
     y: &CsrMatrix<C64>,
     v: &[C64],
@@ -219,233 +225,4 @@ pub(crate) fn squared_magnitude_hessian(
     outer
         .try_add(&weighted_hessian(c, y, v, &p, &q))
         .expect("both 2nb × 2nb")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ac::Admittances;
-    use crate::case::Case;
-    use crate::topology::Network;
-
-    /// Four buses with a transformer (tap and phase shift), line charging and bus shunts.
-    const CASE: &str = "function mpc = derivatives
-mpc.version = '2';
-mpc.baseMVA = 100;
-mpc.bus = [
-1 3 0 0 0 0 1 1.02 0 135 1 1.1 0.9;
-2 1 50 20 2 5 1 0.98 -3 135 1 1.1 0.9;
-3 2 30 10 0 -3 1 1.01 4 135 1 1.1 0.9;
-4 1 40 15 0 0 1 0.97 -6 135 1 1.1 0.9;
-];
-mpc.gen = [
-1 0 0 100 -100 1 100 1 200 0 0 0 0 0 0 0 0 0 0 0 0;
-3 40 0 100 -100 1 100 1 200 0 0 0 0 0 0 0 0 0 0 0 0;
-];
-mpc.branch = [
-1 2 0.01 0.1 0.02 0 0 0 0 0 1 -360 360;
-2 3 0.02 0.15 0.01 0 0 0 0.98 5 1 -360 360;
-3 4 0.015 0.12 0.03 0 0 0 0 0 1 -360 360;
-1 4 0.03 0.2 0 0 0 0 1.03 -2 1 -360 360;
-2 4 0.02 0.18 0.01 0 0 0 0 0 1 -360 360;
-];
-";
-
-    struct Fixture {
-        v: Vec<C64>,
-        ybus: CsrMatrix<C64>,
-        yf: CsrMatrix<C64>,
-        cf: CsrMatrix<C64>,
-        identity: CsrMatrix<C64>,
-    }
-
-    fn fixture() -> Fixture {
-        let case = Case::parse(CASE).unwrap();
-        let network = Network::new(&case, |_, _| Ok(())).unwrap();
-        let y = Admittances::new(
-            &case,
-            &network.bus_rows,
-            &network.branch_rows,
-            &network.ends,
-        );
-        let nb = network.bus_rows.len();
-        let v = network
-            .bus_rows
-            .iter()
-            .map(|&row| C64::from_polar(case.bus[row].vm_pu, case.bus[row].va_deg.to_radians()))
-            .collect();
-        let cf = CsrMatrix::<C64>::from_triplets(
-            network.ends.len(),
-            nb,
-            network
-                .ends
-                .iter()
-                .enumerate()
-                .map(|(k, &(f, _))| (k, f, C64::new(1.0, 0.0))),
-        )
-        .unwrap();
-        Fixture {
-            v,
-            ybus: y.ybus,
-            yf: y.yf,
-            cf,
-            identity: CsrMatrix::identity(nb),
-        }
-    }
-
-    /// The voltages with the polar coordinate `k` (angles first, then magnitudes) moved by `h`.
-    fn moved(v: &[C64], k: usize, h: f64) -> Vec<C64> {
-        let nb = v.len();
-        let mut v = v.to_vec();
-        let (m, a) = (v[k % nb].norm(), v[k % nb].arg());
-        v[k % nb] = if k < nb {
-            C64::from_polar(m, a + h)
-        } else {
-            C64::from_polar(m + h, a)
-        };
-        v
-    }
-
-    fn dense(m: &CsrMatrix<f64>) -> Vec<Vec<f64>> {
-        let (rows, cols) = m.shape();
-        let mut out = vec![vec![0.0; cols]; rows];
-        for (i, j, value) in m.iter() {
-            out[i][j] += value;
-        }
-        out
-    }
-
-    fn assert_close(actual: f64, expected: f64, what: &str) {
-        let tolerance = 1e-8 * expected.abs().max(1.0);
-        assert!(
-            (actual - expected).abs() <= tolerance,
-            "{what}: {actual} vs {expected}"
-        );
-    }
-
-    const H: f64 = 1e-6;
-
-    #[test]
-    fn first_derivatives_match_finite_differences() {
-        let f = fixture();
-        let nb = f.v.len();
-        for (name, c, y) in [("bus", &f.identity, &f.ybus), ("from", &f.cf, &f.yf)] {
-            let flows = flows(c, y, &f.v);
-            let jacobian = CsrMatrix::hstack([flows.ds_dva.clone(), flows.ds_dvm.clone()]).unwrap();
-            let (re, im) = (dense(&jacobian.real()), dense(&jacobian.imag()));
-            let (_, squared_jacobian) = squared_magnitudes(&flows);
-            let squared_jacobian = dense(&squared_jacobian);
-            for k in 0..2 * nb {
-                let plus = super::flows(c, y, &moved(&f.v, k, H)).s;
-                let minus = super::flows(c, y, &moved(&f.v, k, -H)).s;
-                for row in 0..plus.len() {
-                    let ds = (plus[row] - minus[row]) / (2.0 * H);
-                    assert_close(re[row][k], ds.re, &format!("{name} Re dS[{row}][{k}]"));
-                    assert_close(im[row][k], ds.im, &format!("{name} Im dS[{row}][{k}]"));
-                    let da = (plus[row].norm_sqr() - minus[row].norm_sqr()) / (2.0 * H);
-                    assert_close(
-                        squared_jacobian[row][k],
-                        da,
-                        &format!("{name} dA[{row}][{k}]"),
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn bus_derivatives_agree_with_the_newton_jacobian() {
-        // The power flow's Jacobian holds the P rows at PV and PQ buses and the Q rows at PQ
-        //   buses, against the angles at PV and PQ buses and the magnitudes at PQ buses
-        let case = Case::parse(CASE).unwrap();
-        let model = crate::ac::AcModel::new(&case).unwrap();
-        let f = fixture();
-        let jacobian = model.jacobian(&f.v).to_csr();
-        let jacobian = dense(&jacobian);
-        let flows = flows(&f.identity, &f.ybus, &f.v);
-        let (dp_dva, dq_dva) = (dense(&flows.ds_dva.real()), dense(&flows.ds_dva.imag()));
-        let (dp_dvm, dq_dvm) = (dense(&flows.ds_dvm.real()), dense(&flows.ds_dvm.imag()));
-        let pv_pq: Vec<usize> = model
-            .pv_buses()
-            .iter()
-            .chain(model.pq_buses())
-            .copied()
-            .collect();
-        let pq = model.pq_buses();
-        let rows: Vec<(usize, bool)> = pv_pq
-            .iter()
-            .map(|&b| (b, true))
-            .chain(pq.iter().map(|&b| (b, false)))
-            .collect();
-        let cols: Vec<(usize, bool)> = pv_pq
-            .iter()
-            .map(|&b| (b, true))
-            .chain(pq.iter().map(|&b| (b, false)))
-            .collect();
-        for (i, &(bus, real)) in rows.iter().enumerate() {
-            for (k, &(other, angle)) in cols.iter().enumerate() {
-                let expected = match (real, angle) {
-                    (true, true) => dp_dva[bus][other],
-                    (true, false) => dp_dvm[bus][other],
-                    (false, true) => dq_dva[bus][other],
-                    (false, false) => dq_dvm[bus][other],
-                };
-                assert!(
-                    (jacobian[i][k] - expected).abs() <= 1e-12 * expected.abs().max(1.0),
-                    "J[{i}][{k}]: {} vs {expected}",
-                    jacobian[i][k]
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn second_derivatives_match_finite_differences_of_the_first() {
-        let f = fixture();
-        let nb = f.v.len();
-        for (name, c, y) in [("bus", &f.identity, &f.ybus), ("from", &f.cf, &f.yf)] {
-            let rows = c.shape().0;
-            // Distinct weights, so that no term can hide behind another
-            let p: Vec<f64> = (0..rows).map(|r| 0.7 + 0.3 * r as f64).collect();
-            let q: Vec<f64> = (0..rows).map(|r| -0.4 + 0.25 * r as f64).collect();
-            let mu: Vec<f64> = (0..rows).map(|r| 1.1 + 0.2 * r as f64).collect();
-            let hessian = dense(&weighted_hessian(c, y, &f.v, &p, &q));
-            let flows_at = flows(c, y, &f.v);
-            let squared_hessian = dense(&squared_magnitude_hessian(c, y, &f.v, &flows_at, &mu));
-            // The gradient of pᵀ Re S + qᵀ Im S, and of μᵀ |S|², at voltages v
-            let gradients = |v: &[C64]| {
-                let flows = flows(c, y, v);
-                let jacobian =
-                    CsrMatrix::hstack([flows.ds_dva.clone(), flows.ds_dvm.clone()]).unwrap();
-                let weighted: Vec<f64> = (0..2 * nb)
-                    .map(|k| {
-                        jacobian.real().vec_mul(&p).unwrap()[k]
-                            + jacobian.imag().vec_mul(&q).unwrap()[k]
-                    })
-                    .collect();
-                let squared = squared_magnitudes(&flows).1.vec_mul(&mu).unwrap();
-                (weighted, squared)
-            };
-            for k in 0..2 * nb {
-                let (wp, sp) = gradients(&moved(&f.v, k, H));
-                let (wm, sm) = gradients(&moved(&f.v, k, -H));
-                for i in 0..2 * nb {
-                    let expected = (wp[i] - wm[i]) / (2.0 * H);
-                    assert_close(hessian[i][k], expected, &format!("{name} H[{i}][{k}]"));
-                    let expected = (sp[i] - sm[i]) / (2.0 * H);
-                    assert_close(
-                        squared_hessian[i][k],
-                        expected,
-                        &format!("{name} HA[{i}][{k}]"),
-                    );
-                }
-            }
-            // Symmetric, as a Hessian must be
-            for (i, row) in hessian.iter().enumerate() {
-                for (k, &value) in row.iter().enumerate() {
-                    assert_close(value, hessian[k][i], &format!("{name} symmetry"));
-                }
-            }
-        }
-    }
 }

@@ -5,13 +5,15 @@
 //!   prepared for the solver as `opf_setup` and `makeAy` prepare them.
 //! - [`dc`]: the DC optimal power flow ([`dc::dc_opf`]), as `rundcopf` computes it with MIPS.
 //! - [`ac`]: the AC optimal power flow ([`ac::ac_opf`]), as `runopf` computes it with MIPS.
+//! - [`derivatives`]: the first and second derivatives of AC power injections and branch flows
+//!   that the AC optimal power flow uses, as MATPOWER Technical Note 2 gives them.
 //!
 //! See phase O1 of `docs/OptimizationChecklist.md` for the roadmap.
 
 pub mod ac;
 pub mod cost;
 pub mod dc;
-mod derivatives;
+pub mod derivatives;
 
 use std::f64::consts::PI;
 

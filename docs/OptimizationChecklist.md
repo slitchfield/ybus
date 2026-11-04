@@ -214,12 +214,13 @@ with legacy results generated locally to explain differences.
 - [x] The AC OPF: `[Va, Vm, Pg, Qg, y]` with the power balance and flow limits (and their first
       and second derivatives), angle limits, dispatchable loads and the piecewise-linear rows,
       from `nlpopf_solver`'s starting point, against `runopf`.
-      - **Derivatives** (`opf::derivatives`, crate-private), in Technical Note 2's complex matrix
-        notation. Every quantity is `[C V] conj(Y V)`, so one formula gives the first
-        derivatives, and one Hessian of the bilinear form `Vᵀ M conj(V)` gives the second
+      - **Derivatives** (`opf::derivatives`, public, as MATPOWER's are), in Technical Note 2's
+        complex matrix notation. Every quantity is `[C V] conj(Y V)`, so one formula gives the
+        first derivatives, and one Hessian of the bilinear form `Vᵀ M conj(V)` gives the second
         derivatives of the bus injections and both ends' flows. The squared apparent power adds
-        `2 Re(dSᴴ [μ] dS)`. Tested against central finite differences at 1e-8 relative (a
-        planted sign error fails them), for symmetry, and against the Newton Jacobian at 1e-12.
+        `2 Re(dSᴴ [μ] dS)`. Tested (`tests/opf_derivatives_test.rs`) against central finite
+        differences at 1e-8 relative (a planted sign error fails them), for symmetry, and against
+        the Newton Jacobian at 1e-12.
       - **`opf::ac`:** `ac_opf` follows `opf_setup`'s AC model for MIPS (`legacy_formulation`
         0):
         - REF angles fixed; `Pmis` and `Qmis`; `Sf` and `St` as squared apparent power on the
