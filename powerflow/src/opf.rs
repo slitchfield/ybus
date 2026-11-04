@@ -9,3 +9,6 @@
 
 pub mod cost;
 pub mod dc;
+// Used by the AC OPF, which follows
+#[allow(dead_code)]
+mod derivatives;
