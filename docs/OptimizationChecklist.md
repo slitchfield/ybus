@@ -111,8 +111,9 @@ Facts checked when this roadmap was written (2026-11-03):
       - **`interior_point::mips::mips` and `qps_mips`,** following `mips.m` step by step: the
         bounds and linear constraints split into equalities and one- or two-sided inequalities,
         the starting slacks and multipliers, the reduced KKT system solved with `sparse_mat`'s
-        AMD-ordered LU (where MATLAB uses its backslash; a singular system counts as MIPS's
-        numerical failure, as MATLAB's NaN does), step control, the step lengths, the barrier
+        LU, ordered by AMD and by COLAMD since PR 2 (where MATLAB uses its backslash; a singular
+        system counts as MIPS's numerical failure, as MATLAB's NaN does), step control, the step
+        lengths, the barrier
         update, the termination and failure tests, and the multipliers' filtering and mapping
         back to the bounds and linear constraints.
       - **References:** `scripts/generate-mips-reference.sh` records MATPOWER's MIPS 1.5.2 on the
@@ -121,7 +122,8 @@ Facts checked when this roadmap was written (2026-11-03):
         limit, each with step control off and on (`interior_point/tests/data/mips_reference.txt`).
       - **Agreement:** every run takes MATPOWER's exit status and iteration count (including the
         infeasible LP's numerical failure after 6, and 150 at the limit), and its solution,
-        objective and multipliers agree within 6.5e-14 relative (the bar is 1e-12), except a
+        objective and multipliers agree within 6.5e-14 relative (1.0e-13 since the switch to
+        COLAMD in PR 2; the bar is 1e-12), except a
         failed run's diverged multipliers (about 3e24), within 3.3e-7. Each problem also meets
         `t_mips`'s known answers to its precision.
 - [x] Generator costs in `powerflow`: polynomial (with `opf_setup`'s handling) and
@@ -200,6 +202,13 @@ Facts checked when this roadmap was written (2026-11-03):
       fixed; a symmetric indefinite LDLᵀ factorization in `sparse_mat`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
       augmented KKT systems.
+- [ ] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
+      compare against. MIPS's LU switched from AMD to COLAMD in O1's PR 2: with zero diagonals
+      in the equality block, AMD's factors filled 14 million entries on `case_ACTIVSg10k`
+      (24 s per factorization) against COLAMD's 640,000 (0.036 s). COLAMD lost one iteration-count
+      match (case2736sp's DC OPF, 44 to MATPOWER's 45). The study would cover AMD, COLAMD,
+      orderings that keep the KKT structure (constraints after the variables they touch), LDLᵀ
+      and UMFPACK-like strategies, by fill, time and agreement with MATPOWER.
 - [ ] **Parallel and GPU.** Batched OPF solves with rayon, and a GPU KKT factorization if phase
       O2's spike supports one; warm starts across related problems, such as outage sequences.
       Recorded.

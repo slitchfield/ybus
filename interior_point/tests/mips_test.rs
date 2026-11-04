@@ -27,7 +27,8 @@ use sparse_mat::compressed_matrix::CsrMatrix;
 /// How far our results may be from MATPOWER's, relative to the larger magnitude (at least 1).
 /// Both solve the same small systems, but by different LU factorizations (UMFPACK's in
 /// MATPOWER), so they agree to rounding, compounded over the iterations: the largest
-/// difference measured on a converged run is 6.5e-14 (hs71's lower-bound multiplier).
+/// difference measured is 1.0e-13 (hs71 from (2, 2, 2, 2), at the iteration limit) with the
+/// COLAMD-ordered LU, and was 6.5e-14 (hs71's lower-bound multiplier) with AMD.
 const AGREEMENT: f64 = 1e-12;
 
 /// The same for the multipliers of a run that fails numerically, which have diverged (to about
