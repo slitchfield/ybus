@@ -41,12 +41,96 @@ pub struct AcModel {
     topology: Topology,
 }
 
-/// The values a case stamps into Ybus, Yf and Yt, in the order `AcModel::new` lists their
+/// The values a case stamps into Ybus, Yf and Yt, in the order `Admittances::new` lists their
 /// positions.
 struct Stamps {
     ybus: Vec<Complex<f64>>,
     yf: Vec<Complex<f64>>,
     yt: Vec<Complex<f64>>,
+}
+
+/// The stamp values of `case`'s in-service branches at case rows `branch_rows` and its bus
+/// shunts at case rows `bus_rows`, in the order [`Admittances::new`] lists their positions:
+/// four Ybus stamps per branch then one shunt per bus, and two Yf and two Yt stamps per branch.
+fn stamps(case: &Case, bus_rows: &[usize], branch_rows: &[usize]) -> Stamps {
+    let nl = branch_rows.len();
+    let mut stamps = Stamps {
+        ybus: Vec::with_capacity(4 * nl + bus_rows.len()),
+        yf: Vec::with_capacity(2 * nl),
+        yt: Vec::with_capacity(2 * nl),
+    };
+    for &row in branch_rows {
+        let [yff, yft, ytf, ytt] = branch_stamps(&case.branch[row]);
+        stamps.ybus.extend([yff, yft, ytf, ytt]);
+        stamps.yf.extend([yff, yft]);
+        stamps.yt.extend([ytf, ytt]);
+    }
+    stamps.ybus.extend(bus_rows.iter().map(|&row| {
+        let bus = &case.bus[row];
+        Complex::new(bus.gs_mw, bus.bs_mvar) / case.base_mva
+    }));
+    stamps
+}
+
+/// MATPOWER's `makeYbus` over a network in internal numbering: Ybus, Yf and Yt (p.u.) with the
+/// assembly maps that re-stamp them, shared by the AC power flow and the AC optimal power flow.
+/// See [`AcModel::new`] for the stamps.
+pub(crate) struct Admittances {
+    pub(crate) ybus: CsrMatrix<Complex<f64>>,
+    pub(crate) yf: CsrMatrix<Complex<f64>>,
+    pub(crate) yt: CsrMatrix<Complex<f64>>,
+    pub(crate) ybus_map: AssemblyMap,
+    pub(crate) yf_map: AssemblyMap,
+    pub(crate) yt_map: AssemblyMap,
+}
+
+impl Admittances {
+    /// The matrices over the connected buses at case rows `bus_rows` and the in-service
+    /// branches at case rows `branch_rows`, whose internal (from, to) buses are `ends`. Each
+    /// branch's impedance must be nonzero.
+    pub(crate) fn new(
+        case: &Case,
+        bus_rows: &[usize],
+        branch_rows: &[usize],
+        ends: &[(usize, usize)],
+    ) -> Admittances {
+        let nb = bus_rows.len();
+        let nl = branch_rows.len();
+        let stamps = stamps(case, bus_rows, branch_rows);
+
+        let mut ybus_positions = Vec::with_capacity(4 * nl + nb);
+        let mut yf_positions = Vec::with_capacity(2 * nl);
+        let mut yt_positions = Vec::with_capacity(2 * nl);
+        for (k, &(f, t)) in ends.iter().enumerate() {
+            ybus_positions.extend([(f, f), (f, t), (t, f), (t, t)]);
+            yf_positions.extend([(k, f), (k, t)]);
+            yt_positions.extend([(k, f), (k, t)]);
+        }
+        ybus_positions.extend((0..nb).map(|i| (i, i)));
+
+        let build = |rows, positions: &[(usize, usize)], values: &[Complex<f64>]| {
+            CsrMatrix::from_triplets_mapped(
+                rows,
+                nb,
+                positions
+                    .iter()
+                    .zip(values)
+                    .map(|(&(i, j), &value)| (i, j, value)),
+            )
+            .expect("internal indices are in range")
+        };
+        let (ybus, ybus_map) = build(nb, &ybus_positions, &stamps.ybus);
+        let (yf, yf_map) = build(nl, &yf_positions, &stamps.yf);
+        let (yt, yt_map) = build(nl, &yt_positions, &stamps.yt);
+        Admittances {
+            ybus,
+            yf,
+            yt,
+            ybus_map,
+            yf_map,
+            yt_map,
+        }
+    }
 }
 
 /// A branch's π-model stamps, as in `makeYbus`: series admittance `Ys = 1 / (r + jx)`, line
@@ -76,7 +160,7 @@ fn pi_stamps(r: f64, x: f64, b: f64, tap: f64, shift_deg: f64) -> [Complex<f64>;
 
 /// `PowerflowError::ZeroImpedance` for an in-service branch with `r = x = 0`, whose series
 /// admittance is infinite.
-fn check_impedance(row: usize, branch: &Branch) -> Result<(), PowerflowError> {
+pub(crate) fn check_impedance(row: usize, branch: &Branch) -> Result<(), PowerflowError> {
     if branch.r == 0.0 && branch.x == 0.0 {
         Err(PowerflowError::ZeroImpedance { row })
     } else {
@@ -102,34 +186,19 @@ impl AcModel {
     /// `NoReferenceBus` or `IslandWithoutReference`.
     pub fn new(case: &Case) -> Result<AcModel, PowerflowError> {
         let topology = Topology::new(case, check_impedance)?;
-        let nb = topology.bus_rows.len();
-        let nl = topology.branch_rows.len();
-        let stamps = Self::stamps(case, &topology);
-
-        let mut ybus_positions = Vec::with_capacity(4 * nl + nb);
-        let mut yf_positions = Vec::with_capacity(2 * nl);
-        let mut yt_positions = Vec::with_capacity(2 * nl);
-        for (k, &(f, t)) in topology.ends.iter().enumerate() {
-            ybus_positions.extend([(f, f), (f, t), (t, f), (t, t)]);
-            yf_positions.extend([(k, f), (k, t)]);
-            yt_positions.extend([(k, f), (k, t)]);
-        }
-        ybus_positions.extend((0..nb).map(|i| (i, i)));
-
-        let build = |rows, positions: &[(usize, usize)], values: &[Complex<f64>]| {
-            CsrMatrix::from_triplets_mapped(
-                rows,
-                nb,
-                positions
-                    .iter()
-                    .zip(values)
-                    .map(|(&(i, j), &value)| (i, j, value)),
-            )
-            .expect("internal indices are in range")
-        };
-        let (ybus, ybus_map) = build(nb, &ybus_positions, &stamps.ybus);
-        let (yf, yf_map) = build(nl, &yf_positions, &stamps.yf);
-        let (yt, yt_map) = build(nl, &yt_positions, &stamps.yt);
+        let Admittances {
+            ybus,
+            yf,
+            yt,
+            ybus_map,
+            yf_map,
+            yt_map,
+        } = Admittances::new(
+            case,
+            &topology.bus_rows,
+            &topology.branch_rows,
+            &topology.ends,
+        );
         Ok(AcModel {
             base_mva: case.base_mva,
             ybus,
@@ -140,29 +209,6 @@ impl AcModel {
             yt_map,
             topology,
         })
-    }
-
-    /// The stamp values of `case`'s branches and bus shunts, in the order `new` lists their
-    /// positions: four Ybus stamps per branch then one shunt per bus, and two Yf and two Yt
-    /// stamps per branch.
-    fn stamps(case: &Case, topology: &Topology) -> Stamps {
-        let nl = topology.branch_rows.len();
-        let mut stamps = Stamps {
-            ybus: Vec::with_capacity(4 * nl + topology.bus_rows.len()),
-            yf: Vec::with_capacity(2 * nl),
-            yt: Vec::with_capacity(2 * nl),
-        };
-        for &row in &topology.branch_rows {
-            let [yff, yft, ytf, ytt] = branch_stamps(&case.branch[row]);
-            stamps.ybus.extend([yff, yft, ytf, ytt]);
-            stamps.yf.extend([yff, yft]);
-            stamps.yt.extend([ytf, ytt]);
-        }
-        stamps.ybus.extend(topology.bus_rows.iter().map(|&row| {
-            let bus = &case.bus[row];
-            Complex::new(bus.gs_mw, bus.bs_mvar) / case.base_mva
-        }));
-        stamps
     }
 
     /// Re-stamps Ybus, Yf and Yt from `case`'s branch impedances, charging, taps and phase
@@ -178,7 +224,7 @@ impl AcModel {
         for &row in &self.topology.branch_rows {
             check_impedance(row + 1, &case.branch[row])?;
         }
-        let stamps = Self::stamps(case, &self.topology);
+        let stamps = stamps(case, &self.topology.bus_rows, &self.topology.branch_rows);
         let same_stamps_message = "the maps were built for these matrices from the same stamp list";
         self.ybus
             .refill(&self.ybus_map, &stamps.ybus)
