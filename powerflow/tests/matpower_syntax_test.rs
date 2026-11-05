@@ -229,3 +229,22 @@ fn text_outside_ascii_next_to_dots_and_quotes() {
         expected
     );
 }
+
+#[test]
+fn continuations_anywhere_on_a_line() {
+    // At every offset around the reader's 64-byte chunks: unless the line continues, `+ 2;` on
+    //   the next is a statement of its own, and not a supported one
+    for pad in 40..140 {
+        let body = format!("mpc.note = 1{}...\n + 2;\n", " ".repeat(pad));
+        assert!(Case::parse(&case_with(&body)).is_ok(), "pad {pad}");
+    }
+}
+
+#[test]
+fn dots_separated_only_by_strings_continue_a_line() {
+    // Existing behaviour, kept: a string between dots doesn't break their run, so this line
+    //   ends at the third dot, inside the second string, which is then never closed. MATLAB
+    //   wouldn't read a continuation here; changing that should be a deliberate change.
+    let (line, message) = parse_message(Case::parse(&case_with("mpc.note = 1 .\"x\".\"y\".\n")));
+    assert_eq!((line, message.as_str()), (4, "string is never closed"));
+}

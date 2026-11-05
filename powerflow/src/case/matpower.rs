@@ -158,10 +158,38 @@ fn find_code(text: &str, mut stop: impl FnMut(u8) -> bool) -> Result<Option<usiz
     Ok(None)
 }
 
+/// Whether `bytes` holds any byte of `set`, or (with `dot_pairs`) two dots in a row within one
+/// 64-byte chunk, which any three dots in a row have. Each chunk is checked without an early
+/// exit, so the compiler can compare many bytes at once: most lines of a case file hold none of
+/// what the scans stop on, and this rules them out faster than [`find_code`] can.
+fn contains_any<const N: usize>(bytes: &[u8], set: [u8; N], dot_pairs: bool) -> bool {
+    bytes.chunks(64).any(|chunk| {
+        let any = chunk.iter().fold(false, |any, &b| {
+            set.iter().fold(any, |any, &s| any | (b == s))
+        });
+        let pair = dot_pairs
+            && chunk
+                .iter()
+                .zip(&chunk[1..])
+                .fold(false, |pair, (&a, &b)| pair | ((a == b'.') & (b == b'.')));
+        any || pair
+    })
+}
+
 /// Removes a `%` or `#` comment and a `...` continuation (and the rest of its line) from
 /// `line`, outside strings. A line with an unclosed string is kept whole, for the parser to
 /// report.
 fn strip_line(number: usize, line: &str) -> CodeLine<'_> {
+    // Without a quote every byte reaches the predicate below (an opening quote doesn't, so dots
+    //   separated only by strings count as a run), and three dots in a row need two, so a line
+    //   with none of these has nothing to remove
+    if !contains_any(line.as_bytes(), *b"%#'\"", true) {
+        return CodeLine {
+            number,
+            code: line,
+            continued: false,
+        };
+    }
     let mut previous_dot_run = 0;
     let found = find_code(line, |b| {
         if b == b'.' {
@@ -546,8 +574,13 @@ fn collect_until<'a>(
     loop {
         let line = &lines[cursor.index];
         let text = &line.code[cursor.pos..];
-        let found = find_code(text, |b| b == close as u8)
-            .map_err(|_| parse_error(line.number, "string is never closed"))?;
+        // Without a quote or `close`, the scan would find nothing
+        let found = if contains_any(text.as_bytes(), [b'\'', b'"', close as u8], false) {
+            find_code(text, |b| b == close as u8)
+                .map_err(|_| parse_error(line.number, "string is never closed"))?
+        } else {
+            None
+        };
         if let Some(end) = found {
             segments.push(Segment {
                 line: line.number,
