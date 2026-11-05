@@ -15,10 +15,19 @@ change. Each record names the code, the machine and the method it used.
 | [`dc-contingency-2026-11-02.md`](dc-contingency-2026-11-02.md) | Every single-branch outage of every case by rank-1 updates of B′'s kept factorization (Phase 5), against refactoring. |
 | [`colamd-2026-11-03.md`](colamd-2026-11-03.md) | COLAMD against AMD on every case's Jacobian and B′: AMD fills less on every case, so it stays the default. |
 | [`ac-reactive-limits-reuse-2026-11-03.md`](ac-reactive-limits-reuse-2026-11-03.md) | The reactive-limit survey with a limit loop's later rounds solving against one superset Jacobian: the same results as MATPOWER, one at a time 2.9× faster in all. |
+| [`profile-2026-11-04.md`](profile-2026-11-04.md) | Where the power flows spend their time (phase O2): samply profiles of DC, Newton, fast-decoupled, reactive limits and N-1 outages on four large cases, folded into stages, and the targets chosen from them. |
 | [`opf-2026-11-04.md`](opf-2026-11-04.md) | The DC and AC optimal power flows on every case with costs, solved by MIPS (phase O1), against MATPOWER's MP-Core and legacy implementations: outcomes, iterations, agreement and time against MATPOWER. |
 | [`ac-reactive-limits-2026-11-01.md`](ac-reactive-limits-2026-11-01.md) | Newton's method on every case with generator reactive limits enforced, all at once and one at a time, against MATPOWER's legacy `runpf`, including the held generators. |
 
 ## Measuring
+
+- **Profiling:** `--profile profiling` builds the release profile with debug line tables
+  (`Cargo.toml`), so a sampling profiler names functions and lines in the same optimized code
+  the surveys time, for example `cargo build --profile profiling -p powerflow --example
+  ac_survey`, then a profiler on `target/profiling/examples/ac_survey`.
+  `scripts/profile-pf.sh [<output.md>]` profiles the power flows with samply through the
+  `profile_pf` example, which repeats each workload's whole pipeline so every stage weighs as in
+  one run, and `scripts/profile_summary.py` folds the samples into stages.
 
 - **One case, repeatably:** `cargo bench -p powerflow --bench dc_power_flow` runs the criterion
   benchmarks in `powerflow/benches/dc_power_flow.rs`, which time parsing, the model and the

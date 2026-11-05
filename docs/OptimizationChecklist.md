@@ -287,8 +287,23 @@ with legacy results generated locally to explain differences.
 
 ## Phase O2: accelerating the power flow
 
-- [ ] **Decide** what to accelerate first, from profiles of the existing surveys: Newton,
+- [x] **Decide** what to accelerate first, from profiles of the existing surveys: Newton,
       fast-decoupled, DC, N-1 outages and reactive limits. Record where the time goes.
+      - **Recorded** in [`docs/benchmarks/profile-2026-11-04.md`](benchmarks/profile-2026-11-04.md):
+        samply profiles (`scripts/profile-pf.sh`, the `profile_pf` example, the `profiling`
+        build profile) of seven workloads on case2383wp, case9241pegase, case_ACTIVSg70k and
+        case_SyntheticUSA, folded into stages.
+      - **Decided with the maintainer (2026-11-04):** results stay bit-identical on the CPU path;
+        samply for the CPU, Nsight Systems for the CUDA spike.
+      - **The targets, in order:**
+        1. **N-1 outages without per-outage allocation:** allocating, zeroing and copying each
+           outage's result vectors take 35–55% of the N-1 time, against 7–9% for the sparse
+           solves (bound 1.5–2.2×).
+        2. **The LU refactorization kernel:** 41–64% of one-at-a-time reactive limits and 25% of
+           a large Newton solve (halving it bounds the gain at 1.3–1.5× for reactive limits).
+        3. **Parsing:** 25–48% of a single DC or fast-decoupled run.
+      - **Smaller follow-ups:** the sorting in `solve_round`, allocation in the Newton loop, and
+        reusing AMD's ordering.
 - [ ] **The CPU.** Parallelism within one solve (refills, mismatches and flows with rayon), SIMD
       in the hot kernels, cache-friendlier layouts, and level-scheduled or supernodal triangular
       solves if the profiles point there. Each measured against the current records, with the
