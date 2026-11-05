@@ -3,10 +3,10 @@
 //! `scripts/profile-pf.sh`. The survey examples time each step separately, for its median, so a
 //! profile of them would weight the steps by their timing budgets instead.
 //!
-//! Usage: `profile_pf <workload> <case.m> [<seconds>]`, with `<workload>` one of `dc`, `nr`,
-//! `fdxb`, `fdbx`, `qlim2` (Newton's method with reactive limits enforced one at a time), `n1`
-//! (every single-branch outage by rank-k updates) and `n1-parallel` (the same in parallel, which
-//! needs the `rayon` feature). The pipeline repeats until `<seconds>` (default 5) have passed, at
+//! Usage: `profile_pf <workload> <case.m> [<seconds>]`, with `<workload>` one of `parse`
+//! (reading the case alone), `dc`, `nr`, `fdxb`, `fdbx`, `qlim2` (Newton's method with reactive
+//! limits enforced one at a time), `n1` (every single-branch outage by rank-k updates) and
+//! `n1-parallel` (the same in parallel, which needs the `rayon` feature). The pipeline repeats until `<seconds>` (default 5) have passed, at
 //! least once. Prints the number of runs and the mean time per run to stderr.
 
 use std::env;
@@ -50,7 +50,7 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: profile_pf dc|nr|fdxb|fdbx|qlim2|n1|n1-parallel <case.m> [<seconds>]");
+    eprintln!("usage: profile_pf parse|dc|nr|fdxb|fdbx|qlim2|n1|n1-parallel <case.m> [<seconds>]");
     ExitCode::from(2)
 }
 
@@ -68,6 +68,7 @@ fn run(workload: &str, path: &Path) -> Result<(), String> {
         Ok(())
     };
     match workload {
+        "parse" => Ok(()),
         "dc" => {
             let model = DcModel::new(&case).map_err(|err| err.to_string())?;
             let _ = model.solve(&case);

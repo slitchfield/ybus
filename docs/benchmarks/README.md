@@ -16,6 +16,7 @@ change. Each record names the code, the machine and the method it used.
 | [`colamd-2026-11-03.md`](colamd-2026-11-03.md) | COLAMD against AMD on every case's Jacobian and B′: AMD fills less on every case, so it stays the default. |
 | [`ac-reactive-limits-reuse-2026-11-03.md`](ac-reactive-limits-reuse-2026-11-03.md) | The reactive-limit survey with a limit loop's later rounds solving against one superset Jacobian: the same results as MATPOWER, one at a time 2.9× faster in all. |
 | [`lu-refactor-2026-11-05.md`](lu-refactor-2026-11-05.md) | The LU refactorization kernel (phase O2): latency-bound; fused nested column pairs make it 1.19–1.27× faster on the largest Jacobians, bit for bit, and why level scheduling and other options were set aside. |
+| [`parsing-2026-11-05.md`](parsing-2026-11-05.md) | Reading MATPOWER cases (phase O2): byte-level scans and a vectorizable precheck, with the same results for every input; 1.54× faster over all cases, and what's left. |
 | [`dc-contingency-allocation-2026-11-04.md`](dc-contingency-allocation-2026-11-04.md) | The N-1 survey after phase O2's first CPU target: reachability from a bridge forest instead of a search per outage, sparse solves into reused buffers, and per-thread outage workspaces. The same results bit for bit, 4.5× faster serially and 4.6× in parallel over all cases. |
 | [`profile-2026-11-04.md`](profile-2026-11-04.md) | Where the power flows spend their time (phase O2): samply profiles of DC, Newton, fast-decoupled, reactive limits and N-1 outages on four large cases, folded into stages, and the targets chosen from them. |
 | [`opf-2026-11-04.md`](opf-2026-11-04.md) | The DC and AC optimal power flows on every case with costs, solved by MIPS (phase O1), against MATPOWER's MP-Core and legacy implementations: outcomes, iterations, agreement and time against MATPOWER. |
@@ -29,7 +30,8 @@ change. Each record names the code, the machine and the method it used.
   ac_survey`, then a profiler on `target/profiling/examples/ac_survey`.
   `scripts/profile-pf.sh [<output.md>]` profiles the power flows with samply through the
   `profile_pf` example, which repeats each workload's whole pipeline so every stage weighs as in
-  one run, and `scripts/profile_summary.py` folds the samples into stages.
+  one run, and `scripts/profile_summary.py` folds the samples into stages. Its `parse` workload
+  reads a case alone, for timing the reader.
 
 - **One case, repeatably:** `cargo bench -p powerflow --bench dc_power_flow` runs the criterion
   benchmarks in `powerflow/benches/dc_power_flow.rs`, which time parsing, the model and the
