@@ -19,7 +19,7 @@ one: optimal power flow, interior-point solvers and acceleration.
 
 ## Development
 
-- **MSRV:** Rust 1.87, set in `[workspace.package]` in the root `Cargo.toml` and checked by a CI
+- **MSRV:** Rust 1.88, set in `[workspace.package]` in the root `Cargo.toml` and checked by a CI
   job.
 - **`./check.sh`:** runs everything the Check CI job runs, over the whole workspace: fmt,
   clippy with `-D warnings`, and the tests with no features, all features and each
