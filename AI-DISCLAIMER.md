@@ -128,8 +128,10 @@ licensing follows current best practices for AI-assisted software development:
   [`powerflow/tests/data/matpower-reference/README.md`](powerflow/tests/data/matpower-reference/README.md).
 - **Compatible dependencies:** every dependency, including transitive and development ones, is
   available under the MIT or Apache-2.0 license (one also under Unicode-3.0, which it requires
-  alongside them); some offer the Unlicense or BSD-2-Clause as further alternatives. `cargo deny`
-  enforces this in CI, allowing only MIT, Apache-2.0 and Unicode-3.0.
+  alongside them), except libloading, which the GPU path (`ybus_cuda`, and powerflow's optional
+  `cuda` feature) uses through cudarc and which is under ISC, a permissive license equivalent
+  to MIT; some offer the Unlicense or BSD-2-Clause as further alternatives. `cargo deny`
+  enforces this in CI, allowing only MIT, Apache-2.0, Unicode-3.0 and ISC.
 - **Transparency:** AI involvement is disclosed in this document, in commit trailers and in the
   pull requests' implementation reports, and sources are attributed as described above.
 
