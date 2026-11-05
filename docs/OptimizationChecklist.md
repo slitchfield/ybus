@@ -320,7 +320,19 @@ with legacy results generated locally to explain differences.
           hid from the profile's allocation share.
         - **What's left:** each outage's dense updates and back substitutions, which a streaming
           API returning only the flows a caller wants could cut (deferred).
-      - [ ] **The LU refactorization kernel** (target 2).
+      - [x] **The LU refactorization kernel** (target 2;
+        [`lu-refactor-2026-11-05.md`](benchmarks/lu-refactor-2026-11-05.md)):
+        - **The kernel is latency-bound:** 0.7–1.4 ns per multiply-subtract, on indirect
+          gathers and scatters.
+        - **Fusing nested column pairs** (85–98% of the work on large Jacobians: each bus's angle
+          and magnitude columns) halves the scatter traffic with the factors bit for bit
+          unchanged: refactorization 1.27× faster on case_ACTIVSg70k and 1.19× on
+          case_SyntheticUSA; one-at-a-time reactive limits there 1.10× (565 → 514 s), Newton
+          1.04–1.06×. Its buffers are also kept between calls.
+        - **Set aside with the maintainer (2026-11-05):** level scheduling (at most 1.4× even
+          ideally on case_ACTIVSg70k, since most work is a serial chain of separator columns),
+          unchecked indexing (about 10%, needs `unsafe`), parallelism within large columns, and
+          low-rank updates instead of refactoring for reactive limits (not bit-identical).
       - [ ] **Parsing** (target 3).
 - [ ] **A CUDA spike** behind a `cuda` feature (through `cudarc`). Batched DC and N-1 solves and
       the Jacobian refill on the GPU, with transfers counted, against the CPU path. The CUDA
