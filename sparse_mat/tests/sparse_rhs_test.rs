@@ -270,3 +270,85 @@ fn sparse_solves_check_the_length() {
     assert_eq!(lu.solve_sparse(&b).err(), mismatch());
     assert_eq!(lu.solve_lower_sparse(&b).err(), mismatch());
 }
+
+/// Every value's bits, so that "bit for bit" also tells 0.0 from −0.0
+fn bits(values: &[f64]) -> Vec<u64> {
+    values.iter().map(|v| v.to_bits()).collect()
+}
+
+/// More right-hand sides for the workspace tests: empty, and every position.
+fn more_rhs(n: usize) -> Vec<SparseVector<f64>> {
+    let mut rhs = sparse_rhs(n);
+    rhs.push(SparseVector::new(n, vec![], vec![]).unwrap());
+    rhs.push(
+        SparseVector::new(
+            n,
+            (0..n).collect(),
+            (0..n).map(|i| 1.0 + i as f64).collect(),
+        )
+        .unwrap(),
+    );
+    rhs
+}
+
+#[test]
+fn solves_into_a_reused_workspace_match_solve_sparse_bit_for_bit() {
+    use sparse_mat::compressed_matrix::SparseSolveWorkspace;
+    // One workspace for every solve, through factors of different sizes and kinds, so stale
+    //   marks or values from an earlier solve would show
+    let mut workspace = SparseSolveWorkspace::new();
+    for (n, fill, seed) in [(120, 2, 3), (40, 5, 1), (80, 3, 2)] {
+        let spd = random_spd(n, fill, seed);
+        let cholesky = spd
+            .analyze_cholesky(Ordering::Amd)
+            .unwrap()
+            .factor(&spd)
+            .unwrap();
+        let square = random_square(n, fill, 0.5, seed).to_csc();
+        let lu = square
+            .analyze_lu(Ordering::Amd)
+            .unwrap()
+            .factor(&square, Default::default())
+            .unwrap();
+        for _ in 0..2 {
+            for b in more_rhs(n) {
+                let mut x = vec![f64::NAN; n];
+                cholesky
+                    .solve_sparse_into(&b, &mut workspace, &mut x)
+                    .unwrap();
+                assert_eq!(
+                    bits(&x),
+                    bits(&cholesky.solve_sparse(&b).unwrap()),
+                    "Cholesky n={n}"
+                );
+                let mut x = vec![f64::NAN; n];
+                lu.solve_sparse_into(&b, &mut workspace, &mut x).unwrap();
+                assert_eq!(bits(&x), bits(&lu.solve_sparse(&b).unwrap()), "LU n={n}");
+            }
+        }
+    }
+}
+
+#[test]
+fn solves_into_check_both_lengths() {
+    use sparse_mat::compressed_matrix::SparseSolveWorkspace;
+    let a = random_spd(10, 20, 4);
+    let cholesky = a
+        .analyze_cholesky(Ordering::Amd)
+        .unwrap()
+        .factor(&a)
+        .unwrap();
+    let b = SparseVector::new(10, vec![3], vec![1.0]).unwrap();
+    let mut workspace = SparseSolveWorkspace::new();
+    let mut short = vec![0.0; 9];
+    assert!(matches!(
+        cholesky.solve_sparse_into(&b, &mut workspace, &mut short),
+        Err(SparseError::ShapeMismatch { .. })
+    ));
+    let wrong = SparseVector::new(9, vec![3], vec![1.0]).unwrap();
+    let mut x = vec![0.0; 10];
+    assert!(matches!(
+        cholesky.solve_sparse_into(&wrong, &mut workspace, &mut x),
+        Err(SparseError::ShapeMismatch { .. })
+    ));
+}

@@ -308,6 +308,20 @@ with legacy results generated locally to explain differences.
       in the hot kernels, cache-friendlier layouts, and level-scheduled or supernodal triangular
       solves if the profiles point there. Each measured against the current records, with the
       results unchanged or within an agreed bar.
+      - [x] **N-1 outages without per-outage allocation** (target 1;
+        [`dc-contingency-allocation-2026-11-04.md`](benchmarks/dc-contingency-allocation-2026-11-04.md)):
+        - **Changes:** reachability from a bridge forest built once per model, instead of an
+          adjacency rebuilt and searched per outage; `sparse_mat`'s `solve_sparse_into` with a
+          reusable `SparseSolveWorkspace`; per-thread outage workspaces; and `finish` computing
+          flows into the result and `Bbus θ` only at the reference buses.
+        - **Results:** bit for bit the same. All outages of all cases take 4.5× less time
+          serially and 4.6× in parallel; on case_SyntheticUSA, 157 s serially, from 680 s. The
+          reachability check gave most of it: its breadth-first search, inlined into the outage,
+          hid from the profile's allocation share.
+        - **What's left:** each outage's dense updates and back substitutions, which a streaming
+          API returning only the flows a caller wants could cut (deferred).
+      - [ ] **The LU refactorization kernel** (target 2).
+      - [ ] **Parsing** (target 3).
 - [ ] **A CUDA spike** behind a `cuda` feature (through `cudarc`). Batched DC and N-1 solves and
       the Jacobian refill on the GPU, with transfers counted, against the CPU path. The CUDA
       toolkit gets installed only when cuSPARSE or cuSOLVER is needed. Record the outcome.

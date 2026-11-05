@@ -131,6 +131,45 @@ fn every_small_outage_matches_refactoring() {
     eprintln!("ring: {solved} outages solved, {errors} islanding in both");
 }
 
+/// A radial feeder off the reference bus whose far end has the smallest label, so a cut near
+/// the root strands buses whose smallest (in case order) is deep in the feeder; a cycle hanging
+/// off the feeder, whose branches are no bridges; and a second reference bus behind a bridge,
+/// which keeps its side reachable when that bridge's neighbours go.
+#[test]
+fn radial_feeders_and_several_references_match_refactoring() {
+    let buses = vec![
+        // Listed so the feeder's far end (bus 2) comes before its root side in case order
+        B(2, 1, 5.0, 0.0, 0.0),
+        B(1, 3, 0.0, 0.0, 0.0),
+        B(5, 1, 10.0, 0.0, 0.0),
+        B(4, 1, 8.0, 0.0, 0.0),
+        B(3, 1, 6.0, 0.0, 0.0),
+        B(9, 1, 7.0, 0.0, 0.0),
+        B(10, 1, 4.0, 0.0, 0.0),
+        B(7, 1, 3.0, 0.0, 0.0),
+        B(8, 3, 0.0, 0.0, 0.0),
+    ];
+    let gens = vec![G(1, 0.0, true), G(8, 10.0, true)];
+    let branches = vec![
+        // The feeder 1 → 5 → 4 → 3 → 2
+        L(1, 5, 0.1, 0.0, 0.0, true),
+        L(5, 4, 0.1, 0.0, 0.0, true),
+        L(4, 3, 0.1, 0.0, 0.0, true),
+        L(3, 2, 0.1, 0.0, 0.0, true),
+        // A cycle 4 → 9 → 10 → 4 off the feeder
+        L(4, 9, 0.2, 0.0, 0.0, true),
+        L(9, 10, 0.2, 0.0, 0.0, true),
+        L(10, 4, 0.2, 0.0, 0.0, true),
+        // Bus 7 off bus 5, and the second reference bus 8 behind the bridge 7–8
+        L(5, 7, 0.15, 0.0, 0.0, true),
+        L(7, 8, 0.15, 0.0, 0.0, true),
+    ];
+    let case = fixture(&buses, &gens, &branches);
+    let (solved, errors) = check_every_small_set(&case);
+    assert!(solved > 0 && errors > 0, "{solved} solved, {errors} errors");
+    eprintln!("feeder: {solved} outages solved, {errors} islanding in both");
+}
+
 #[test]
 fn outages_match_refactoring_on_the_lu_path() {
     // A series capacitor in place of the chord makes B′ indefinite

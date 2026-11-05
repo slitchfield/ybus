@@ -48,6 +48,7 @@ pub use assembly::AssemblyMap;
 pub use cholesky::{Cholesky, SymbolicCholesky};
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
 pub use ordering::Ordering;
+pub use solvers::SparseSolveWorkspace;
 
 mod sealed {
     pub trait Sealed {}
