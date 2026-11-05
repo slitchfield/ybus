@@ -615,21 +615,56 @@ fn parse_matrix(segments: &[Segment]) -> Result<Vec<Row>, PowerflowError> {
         Ok(())
     };
 
+    let push = |current: &mut Option<Row>, rows: &[Row], line: usize, token: &str| {
+        let value = parse_number(line, token, "a matrix")?;
+        current
+            .get_or_insert_with(|| Row {
+                line,
+                // Rows normally match the first, so this is usually their final size
+                values: Vec::with_capacity(rows.first().map_or(0, |first| first.values.len())),
+            })
+            .values
+            .push(value);
+        Ok(())
+    };
+
     for segment in segments {
-        let mut parts = segment.text.split(';').peekable();
+        let text = segment.text;
+        if text.is_ascii() {
+            // The same split by bytes: these are the ASCII characters `char::is_whitespace`
+            //   accepts, and the rest of the segment can't hold any others
+            let mut start = None;
+            for (i, &b) in text.as_bytes().iter().enumerate() {
+                match b {
+                    b'\t' | b'\n' | 0x0b | 0x0c | b'\r' | b' ' | b',' | b';' => {
+                        if let Some(start) = start.take() {
+                            push(&mut current, &rows, segment.line, &text[start..i])?;
+                        }
+                        if b == b';' {
+                            finish(current.take(), &mut rows)?;
+                        }
+                    }
+                    _ => {
+                        start.get_or_insert(i);
+                    }
+                }
+            }
+            if let Some(start) = start {
+                push(&mut current, &rows, segment.line, &text[start..])?;
+            }
+            // The end of a line that isn't continued ends the row too
+            if !segment.continued {
+                finish(current.take(), &mut rows)?;
+            }
+            continue;
+        }
+        let mut parts = text.split(';').peekable();
         while let Some(part) = parts.next() {
             for token in part
                 .split(|c: char| c.is_whitespace() || c == ',')
                 .filter(|token| !token.is_empty())
             {
-                let value = parse_number(segment.line, token, "a matrix")?;
-                current
-                    .get_or_insert_with(|| Row {
-                        line: segment.line,
-                        values: Vec::new(),
-                    })
-                    .values
-                    .push(value);
+                push(&mut current, &rows, segment.line, token)?;
             }
             // A `;` ends the row; so does the end of a line that isn't continued
             if parts.peek().is_some() || !segment.continued {
