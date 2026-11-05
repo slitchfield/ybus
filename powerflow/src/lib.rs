@@ -13,6 +13,10 @@
 //! Both power flows are validated against MATPOWER's own results; see the roadmap in
 //! `docs/PowerFlowChecklist.md`.
 
+// No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
+//   API
+#![forbid(unsafe_code)]
+
 pub mod ac;
 pub mod case;
 pub mod dc;
