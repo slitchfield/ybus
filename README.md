@@ -23,8 +23,8 @@ one: optimal power flow, interior-point solvers and acceleration.
 - **MSRV:** Rust 1.88, set in `[workspace.package]` in the root `Cargo.toml` and checked by a CI
   job.
 - **`./check.sh`:** runs everything the Check CI job runs, over the whole workspace: fmt,
-  clippy with `-D warnings`, and the tests with no features, all features and each
-  `sparse_mat` feature alone, plus doc tests (including the `sparse_mat` README's example).
+  clippy with `-D warnings`, and the tests with no features, all features and each optional
+  feature alone, plus doc tests (including the `sparse_mat` README's example).
   The benchmarks run once, as tests, in the first of those passes only.
 - **Dependencies:** `cargo deny --all-features check` checks advisories, licenses, banned
   crates and sources against `deny.toml`. The Dependencies CI job runs it.
@@ -34,6 +34,9 @@ one: optimal power flow, interior-point solvers and acceleration.
   - **How tests use it:** `powerflow` tests find cases through `powerflow/tests/common`. They
     skip when MATPOWER hasn't been fetched. Set `YBUS_REQUIRE_CASES=1` to make missing cases
     fail instead; the Check CI job fetches MATPOWER (cached) and sets it.
+- **GPU tests:** the tests of `ybus_cuda` and of powerflow's `cuda` feature skip, saying so, on
+  a machine without CUDA, as on CI. Set `YBUS_REQUIRE_CUDA=1` to make that a failure, when
+  running `./check.sh` on a machine with a GPU.
   - **Cases that compute their data with code:** some MATPOWER cases rescale their data with
     MATLAB code, which the `powerflow` reader rejects rather than misread.
     `scripts/normalize-cases.sh` evaluates every case with MATPOWER's own `loadcase` and writes
