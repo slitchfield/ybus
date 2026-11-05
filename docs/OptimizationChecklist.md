@@ -333,7 +333,15 @@ with legacy results generated locally to explain differences.
           ideally on case_ACTIVSg70k, since most work is a serial chain of separator columns),
           unchecked indexing (about 10%, needs `unsafe`), parallelism within large columns, and
           low-rank updates instead of refactoring for reactive limits (not bit-identical).
-      - [ ] **Parsing** (target 3).
+      - [x] **Parsing** (target 3; [`parsing-2026-11-05.md`](benchmarks/parsing-2026-11-05.md)):
+        - **Byte-level scans:** the reader scans lines and tokenizes matrices by bytes (every
+          byte it stops on is ASCII), with a vectorizable precheck that rules out the lines
+          holding nothing to stop on, and sizes rows like the first. Float parsing is still
+          `str::parse`.
+        - **Results:** the same results for 18,749 inputs, malformed ones included; reading a
+          case 1.54× faster over all cases (median 1.51× from 20 KB up), DC runs 1.17–1.30×.
+        - **Left:** float parsing is now its largest part (about 28%). A fused single pass or
+          our own float parser were not tried.
 - [ ] **A CUDA spike** behind a `cuda` feature (through `cudarc`). Batched DC and N-1 solves and
       the Jacobian refill on the GPU, with transfers counted, against the CPU path. The CUDA
       toolkit gets installed only when cuSPARSE or cuSOLVER is needed. Record the outcome.

@@ -119,53 +119,88 @@ fn quote_starts_string(text: &str, i: usize) -> bool {
     }
 }
 
-/// Finds the first character outside strings in `text` (one line of code) for which `stop`
-/// returns true, and returns its byte index. Single- and double-quoted strings are skipped,
-/// with doubled quotes as escapes, and a `'` that transposes isn't taken for a string. Returns
-/// `Err(start)` for a string that isn't closed on the line, since MATLAB strings can't span
-/// lines.
-fn find_code(text: &str, mut stop: impl FnMut(char) -> bool) -> Result<Option<usize>, usize> {
-    let mut chars = text.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        let quote = match c {
-            '\'' if quote_starts_string(text, i) => '\'',
-            '"' => '"',
-            _ if stop(c) => return Ok(Some(i)),
-            _ => continue,
+/// Finds the first byte outside strings in `text` (one line of code) for which `stop` returns
+/// true, and returns its index. Single- and double-quoted strings are skipped, with doubled
+/// quotes as escapes, and a `'` that transposes isn't taken for a string. Returns `Err(start)`
+/// for a string that isn't closed on the line, since MATLAB strings can't span lines.
+///
+/// The scan is by bytes, not characters: the quotes and every byte a caller stops on are ASCII,
+/// and in UTF-8 an ASCII byte only ever encodes that character, so the indices found are those
+/// of a scan by characters. A character outside ASCII reaches `stop` as each of its bytes, all
+/// at least 0x80, which the callers treat as they would the character.
+fn find_code(text: &str, mut stop: impl FnMut(u8) -> bool) -> Result<Option<usize>, usize> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let quote = match bytes[i] {
+            b'\'' if quote_starts_string(text, i) => b'\'',
+            b'"' => b'"',
+            b if stop(b) => return Ok(Some(i)),
+            _ => {
+                i += 1;
+                continue;
+            }
         };
         // Skip the string, where a doubled quote is an escaped one
+        let start = i;
+        i += 1;
         loop {
-            match chars.next() {
-                Some((_, q)) if q == quote => {
-                    if chars.peek().is_some_and(|&(_, next)| next == quote) {
-                        chars.next();
-                    } else {
-                        break;
-                    }
+            match bytes[i..].iter().position(|&b| b == quote) {
+                Some(offset) if bytes.get(i + offset + 1) == Some(&quote) => i += offset + 2,
+                Some(offset) => {
+                    i += offset + 1;
+                    break;
                 }
-                Some(_) => {}
-                None => return Err(i),
+                None => return Err(start),
             }
         }
     }
     Ok(None)
 }
 
+/// Whether `bytes` holds any byte of `set`, or (with `dot_pairs`) two dots in a row within one
+/// 64-byte chunk, which any three dots in a row have. Each chunk is checked without an early
+/// exit, so the compiler can compare many bytes at once: most lines of a case file hold none of
+/// what the scans stop on, and this rules them out faster than [`find_code`] can.
+fn contains_any<const N: usize>(bytes: &[u8], set: [u8; N], dot_pairs: bool) -> bool {
+    bytes.chunks(64).any(|chunk| {
+        let any = chunk.iter().fold(false, |any, &b| {
+            set.iter().fold(any, |any, &s| any | (b == s))
+        });
+        let pair = dot_pairs
+            && chunk
+                .iter()
+                .zip(&chunk[1..])
+                .fold(false, |pair, (&a, &b)| pair | ((a == b'.') & (b == b'.')));
+        any || pair
+    })
+}
+
 /// Removes a `%` or `#` comment and a `...` continuation (and the rest of its line) from
 /// `line`, outside strings. A line with an unclosed string is kept whole, for the parser to
 /// report.
 fn strip_line(number: usize, line: &str) -> CodeLine<'_> {
+    // Without a quote every byte reaches the predicate below (an opening quote doesn't, so dots
+    //   separated only by strings count as a run), and three dots in a row need two, so a line
+    //   with none of these has nothing to remove
+    if !contains_any(line.as_bytes(), *b"%#'\"", true) {
+        return CodeLine {
+            number,
+            code: line,
+            continued: false,
+        };
+    }
     let mut previous_dot_run = 0;
-    let found = find_code(line, |c| {
-        if c == '.' {
+    let found = find_code(line, |b| {
+        if b == b'.' {
             previous_dot_run += 1;
         } else {
             previous_dot_run = 0;
         }
-        matches!(c, '%' | '#') || previous_dot_run == 3
+        matches!(b, b'%' | b'#') || previous_dot_run == 3
     });
     match found {
-        Ok(Some(i)) if line[i..].starts_with('.') => CodeLine {
+        Ok(Some(i)) if line.as_bytes()[i] == b'.' => CodeLine {
             number,
             // The index is the third dot of `...`
             code: &line[..i - 2],
@@ -425,12 +460,12 @@ fn skip_expression(lines: &[CodeLine], start: Cursor) -> Result<Cursor, Powerflo
         let line = &lines[cursor.index];
         let text = &line.code[cursor.pos..];
         let mut unbalanced = false;
-        let found = find_code(text, |c| match c {
-            '(' | '[' | '{' => {
+        let found = find_code(text, |b| match b {
+            b'(' | b'[' | b'{' => {
                 depth += 1;
                 false
             }
-            ')' | ']' | '}' => match depth.checked_sub(1) {
+            b')' | b']' | b'}' => match depth.checked_sub(1) {
                 Some(d) => {
                     depth = d;
                     false
@@ -440,7 +475,7 @@ fn skip_expression(lines: &[CodeLine], start: Cursor) -> Result<Cursor, Powerflo
                     true
                 }
             },
-            ';' | ',' => depth == 0,
+            b';' | b',' => depth == 0,
             _ => false,
         })
         .map_err(|_| parse_error(line.number, "string is never closed"))?;
@@ -528,7 +563,7 @@ struct Segment<'a> {
 }
 
 /// Gathers a literal's body from `start` (just past the opening bracket) until the closing
-/// `close` outside strings. Returns the body's segments and the position just after `close`.
+/// `close` (ASCII: `]` or `}`) outside strings. Returns the body's segments and the position just after `close`.
 fn collect_until<'a>(
     lines: &'a [CodeLine<'a>],
     start: Cursor,
@@ -539,8 +574,13 @@ fn collect_until<'a>(
     loop {
         let line = &lines[cursor.index];
         let text = &line.code[cursor.pos..];
-        let found = find_code(text, |c| c == close)
-            .map_err(|_| parse_error(line.number, "string is never closed"))?;
+        // Without a quote or `close`, the scan would find nothing
+        let found = if contains_any(text.as_bytes(), [b'\'', b'"', close as u8], false) {
+            find_code(text, |b| b == close as u8)
+                .map_err(|_| parse_error(line.number, "string is never closed"))?
+        } else {
+            None
+        };
         if let Some(end) = found {
             segments.push(Segment {
                 line: line.number,
@@ -608,21 +648,56 @@ fn parse_matrix(segments: &[Segment]) -> Result<Vec<Row>, PowerflowError> {
         Ok(())
     };
 
+    let push = |current: &mut Option<Row>, rows: &[Row], line: usize, token: &str| {
+        let value = parse_number(line, token, "a matrix")?;
+        current
+            .get_or_insert_with(|| Row {
+                line,
+                // Rows normally match the first, so this is usually their final size
+                values: Vec::with_capacity(rows.first().map_or(0, |first| first.values.len())),
+            })
+            .values
+            .push(value);
+        Ok(())
+    };
+
     for segment in segments {
-        let mut parts = segment.text.split(';').peekable();
+        let text = segment.text;
+        if text.is_ascii() {
+            // The same split by bytes: these are the ASCII characters `char::is_whitespace`
+            //   accepts, and the rest of the segment can't hold any others
+            let mut start = None;
+            for (i, &b) in text.as_bytes().iter().enumerate() {
+                match b {
+                    b'\t' | b'\n' | 0x0b | 0x0c | b'\r' | b' ' | b',' | b';' => {
+                        if let Some(start) = start.take() {
+                            push(&mut current, &rows, segment.line, &text[start..i])?;
+                        }
+                        if b == b';' {
+                            finish(current.take(), &mut rows)?;
+                        }
+                    }
+                    _ => {
+                        start.get_or_insert(i);
+                    }
+                }
+            }
+            if let Some(start) = start {
+                push(&mut current, &rows, segment.line, &text[start..])?;
+            }
+            // The end of a line that isn't continued ends the row too
+            if !segment.continued {
+                finish(current.take(), &mut rows)?;
+            }
+            continue;
+        }
+        let mut parts = text.split(';').peekable();
         while let Some(part) = parts.next() {
             for token in part
                 .split(|c: char| c.is_whitespace() || c == ',')
                 .filter(|token| !token.is_empty())
             {
-                let value = parse_number(segment.line, token, "a matrix")?;
-                current
-                    .get_or_insert_with(|| Row {
-                        line: segment.line,
-                        values: Vec::new(),
-                    })
-                    .values
-                    .push(value);
+                push(&mut current, &rows, segment.line, token)?;
             }
             // A `;` ends the row; so does the end of a line that isn't continued
             if parts.peek().is_some() || !segment.continued {
