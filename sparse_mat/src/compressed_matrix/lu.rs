@@ -83,6 +83,17 @@ pub struct Lu<T: Scalar = f64> {
     prefer_diagonal: bool,
     a_ptr: Vec<usize>,
     a_idx: Vec<usize>,
+    /// `refactor`'s scratch, kept between calls so a refactorization allocates nothing: the
+    /// dense column it scatters into (all zero between calls), and the buffers the next
+    /// refactorization writes `L`'s and `U`'s values into, swapped with the current ones on
+    /// success
+    refactor_x: Vec<T>,
+    spare_l: Vec<T>,
+    spare_u: Vec<T>,
+    /// For each column `j` of `L`, whether column `j + 1`'s pattern below its diagonal is
+    /// column `j`'s below row `j + 1`, so the two can update together (see `refactor`); found
+    /// on the first refactorization
+    nested: Vec<bool>,
 }
 
 impl<T: Scalar> CscMatrix<T> {
@@ -371,7 +382,29 @@ fn gilbert_peierls<T: Scalar + ComplexFloat>(
         prefer_diagonal,
         a_ptr: a.ptr.clone(),
         a_idx: a.idx.clone(),
+        refactor_x: vec![],
+        spare_l: vec![],
+        spare_u: vec![],
+        nested: vec![],
     })
+}
+
+/// For each column `j` of `l` (unit lower triangular, diagonal first in each column, rows
+/// sorted), whether column `j + 1`'s rows below its diagonal are exactly column `j`'s after row
+/// `j + 1`, which must come first: then column `j` updates row `j + 1` and the rows column
+/// `j + 1` updates, so `refactor` can apply the two columns in one pass.
+fn nested_columns<T: Scalar>(l: &CscMatrix<T>) -> Vec<bool> {
+    let n = l.shape.1;
+    (0..n)
+        .map(|j| {
+            if j + 1 >= n {
+                return false;
+            }
+            let below = &l.idx[l.ptr[j] + 1..l.ptr[j + 1]];
+            let next = &l.idx[l.ptr[j + 1] + 1..l.ptr[j + 2]];
+            below.first() == Some(&(j + 1)) && below[1..] == *next
+        })
+        .collect()
 }
 
 /// Sorts each column's entries by row, keeping each value with its row.
@@ -667,13 +700,21 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
             return Err(SparseError::PatternMismatch);
         }
         let tau = threshold::<T>(self.options);
-        let mut step_of = vec![0; n];
-        for (step, &row) in self.row_perm.iter().enumerate() {
-            step_of[row] = step;
+        // The scratch kept from the last call. Every value of L and U is written below, in its
+        //   column, before any later column reads it, so the spares need no clearing; x is all
+        //   zero, since each column clears every entry it scatters. On an early return the
+        //   scratch is simply dropped, and the next call grows it again
+        let mut l_val = std::mem::take(&mut self.spare_l);
+        l_val.resize(self.l.data.len(), T::zero());
+        let mut u_val = std::mem::take(&mut self.spare_u);
+        u_val.resize(self.u.data.len(), T::zero());
+        let mut x = std::mem::take(&mut self.refactor_x);
+        x.resize(n, T::zero());
+        if self.nested.len() != n {
+            self.nested = nested_columns(&self.l);
         }
-        let mut l_val = vec![T::zero(); self.l.data.len()];
-        let mut u_val = vec![T::zero(); self.u.data.len()];
-        let mut x = vec![T::zero(); n];
+        // Row `i` of A is step `row_perm_inverse[i]` of the pivot sequence
+        let step_of = &self.row_perm_inverse;
         for k in 0..n {
             let col = self.col_perm[k];
             for p in matrix.ptr[col]..matrix.ptr[col + 1] {
@@ -682,14 +723,39 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
             // U's column in increasing row order is a topological order, since L is lower
             //   triangular in the pivoted numbering
             let diagonal = self.u.ptr[k + 1] - 1;
-            let above = self.u.ptr[k]..diagonal;
-            for (&j, u_jk_slot) in self.u.idx[above.clone()].iter().zip(&mut u_val[above]) {
+            let mut p = self.u.ptr[k];
+            while p < diagonal {
+                let j = self.u.idx[p];
                 let u_jk = x[j];
                 x[j] = T::zero();
-                *u_jk_slot = u_jk;
+                u_val[p] = u_jk;
                 let column_j = self.l.ptr[j] + 1..self.l.ptr[j + 1];
-                for (&row, &l_rj) in self.l.idx[column_j.clone()].iter().zip(&l_val[column_j]) {
-                    x[row] = x[row] - l_rj * u_jk;
+                if p + 1 < diagonal && self.u.idx[p + 1] == j + 1 && self.nested[j] {
+                    // Columns j and j + 1 of L together: column j's first entry below its
+                    //   diagonal is row j + 1, whose value is u_{j+1,k}, and its other rows
+                    //   are column j + 1's below its diagonal. Each row takes column j's term
+                    //   and then column j + 1's, in the order the columns apply one after the
+                    //   other, in one pass instead of two
+                    let first = column_j.start;
+                    x[j + 1] = x[j + 1] - l_val[first] * u_jk;
+                    let u_next = x[j + 1];
+                    x[j + 1] = T::zero();
+                    u_val[p + 1] = u_next;
+                    let column_next = self.l.ptr[j + 1] + 1..self.l.ptr[j + 2];
+                    let rows = &self.l.idx[column_next.clone()];
+                    for ((&row, &l_rj), &l_rnext) in rows
+                        .iter()
+                        .zip(&l_val[first + 1..column_j.end])
+                        .zip(&l_val[column_next])
+                    {
+                        x[row] = x[row] - l_rj * u_jk - l_rnext * u_next;
+                    }
+                    p += 2;
+                } else {
+                    for (&row, &l_rj) in self.l.idx[column_j.clone()].iter().zip(&l_val[column_j]) {
+                        x[row] = x[row] - l_rj * u_jk;
+                    }
+                    p += 1;
                 }
             }
             let pivot = x[k];
@@ -713,8 +779,9 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
                 x[row] = T::zero();
             }
         }
-        self.l.data = l_val;
-        self.u.data = u_val;
+        self.spare_l = std::mem::replace(&mut self.l.data, l_val);
+        self.spare_u = std::mem::replace(&mut self.u.data, u_val);
+        self.refactor_x = x;
         Ok(RefactorOutcome::Reused)
     }
 }

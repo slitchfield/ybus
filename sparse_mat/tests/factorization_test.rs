@@ -1063,6 +1063,83 @@ fn refactor_errors_leave_the_factorization_unchanged() {
     assert_close(&lu.solve(&[3.0, 4.0]).unwrap(), &[1.0, 1.0], 1e-12);
 }
 
+/// A matrix of 2 × 2 blocks, as a Newton Jacobian has one block per bus (angle and magnitude):
+/// node `i` couples to its neighbours on a ring with chords, every coupling a dense block, and
+/// each diagonal block dominant. A node's two variables share their pattern, so fill-reducing
+/// orderings keep them together and the factors' columns come in nested pairs, which
+/// `refactor` updates together.
+fn two_by_two_blocks(nodes: usize, seed: u64) -> CscMatrix<f64> {
+    let mut rng = Lcg(seed);
+    let mut value = || 0.5 + (rng.next() % 1000) as f64 / 1000.0;
+    let mut triplets = vec![];
+    let mut couple = |i: usize, j: usize, triplets: &mut Vec<(usize, usize, f64)>| {
+        for (a, b) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            triplets.push((2 * i + a, 2 * j + b, -value()));
+            triplets.push((2 * j + a, 2 * i + b, -value()));
+        }
+    };
+    for i in 0..nodes {
+        couple(i, (i + 1) % nodes, &mut triplets);
+        if i % 3 == 0 {
+            couple(i, (i + nodes / 3) % nodes, &mut triplets);
+        }
+    }
+    for i in 0..nodes {
+        for (a, b) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            let diagonal = if a == b { 20.0 } else { 0.0 };
+            triplets.push((2 * i + a, 2 * i + b, diagonal + value()));
+        }
+    }
+    CscMatrix::from_triplets(2 * nodes, 2 * nodes, triplets).unwrap()
+}
+
+#[test]
+fn refactor_of_two_by_two_blocks_factors_and_repeats_bit_for_bit() {
+    for (nodes, seed) in [(12, 5), (60, 6), (200, 7)] {
+        let a = two_by_two_blocks(nodes, seed);
+        let mut lu = a
+            .analyze_lu(Ordering::Amd)
+            .unwrap()
+            .factor(&a, Default::default())
+            .unwrap();
+        let b = new_values(&a, seed + 100);
+        assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused));
+        assert_lu_reconstructs(&b, &lu);
+        let n = 2 * nodes;
+        let x: Vec<f64> = (0..n).map(|i| 1.0 + (i % 7) as f64).collect();
+        let rhs = b.mul_vec(&x).unwrap();
+        assert_close(&lu.solve(&rhs).unwrap(), &x, 1e-9);
+        // The same values again, after other values in between: the same bits
+        let bits = |lu: &sparse_mat::compressed_matrix::Lu<f64>| -> Vec<u64> {
+            lu.l()
+                .values()
+                .iter()
+                .chain(lu.u().values())
+                .map(|v| v.to_bits())
+                .collect()
+        };
+        let first = bits(&lu);
+        assert_eq!(lu.refactor(&a), Ok(RefactorOutcome::Reused));
+        assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused));
+        assert_eq!(bits(&lu), first, "nodes = {nodes}");
+    }
+}
+
+#[test]
+fn refactor_after_a_failed_one_gives_the_same_bits() {
+    // The kept scratch is dropped by a failed refactorization and grown again by the next
+    let a = CscMatrix::from_dense(&[[2.0, 1.0], [1.0, 3.0]]).unwrap();
+    let b = CscMatrix::from_dense(&[[4.0, 1.0], [2.0, 5.0]]).unwrap();
+    let singular = CscMatrix::from_dense(&[[1.0, 2.0], [2.0, 4.0]]).unwrap();
+    let mut lu = a.lu().unwrap();
+    assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused));
+    let first = (lu.l().values().to_vec(), lu.u().values().to_vec());
+    assert!(lu.refactor(&singular).is_err());
+    assert_eq!(lu.refactor(&a), Ok(RefactorOutcome::Reused));
+    assert_eq!(lu.refactor(&b), Ok(RefactorOutcome::Reused));
+    assert_eq!((lu.l().values().to_vec(), lu.u().values().to_vec()), first);
+}
+
 // Several right-hand sides
 
 fn right_hand_sides(n: usize, count: usize) -> Vec<Vec<f64>> {
