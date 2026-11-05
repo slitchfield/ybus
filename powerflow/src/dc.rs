@@ -20,7 +20,9 @@
 use std::f64::consts::PI;
 use std::sync::OnceLock;
 
-use sparse_mat::compressed_matrix::{Cholesky, CsrMatrix, Lu, LuOptions, Ordering};
+use sparse_mat::compressed_matrix::{
+    Cholesky, CsrMatrix, Lu, LuOptions, Ordering, SparseSolveWorkspace,
+};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::sparse_matrix::SparseVector;
 
@@ -413,6 +415,19 @@ impl Factor {
         .expect("one entry per unknown")
     }
 
+    fn solve_sparse_into(
+        &self,
+        rhs: &SparseVector<f64>,
+        workspace: &mut SparseSolveWorkspace<f64>,
+        x: &mut [f64],
+    ) {
+        match self {
+            Factor::Cholesky(factor) => factor.solve_sparse_into(rhs, workspace, x),
+            Factor::Lu(factor) => factor.solve_sparse_into(rhs, workspace, x),
+        }
+        .expect("one entry per unknown")
+    }
+
     fn solve_sparse(&self, rhs: &SparseVector<f64>) -> Vec<f64> {
         match self {
             Factor::Cholesky(factor) => factor.solve_sparse(rhs),
@@ -535,24 +550,36 @@ impl DcStudy<'_> {
             va_deg[row] = angle / (PI / 180.0);
         }
 
+        // Each in-service branch's flow, row by row as `Bf θ` computes it
         let mut pf_mw = vec![0.0; case.branch.len()];
-        let bf_theta = model.bf.mul_vec(theta).expect("one angle per bus");
-        for ((&row, flow), pfinj) in model
+        for (k, (&row, pfinj)) in model
             .topology
             .branch_rows
             .iter()
-            .zip(bf_theta)
             .zip(&model.pfinj_pu)
+            .enumerate()
         {
-            pf_mw[row] = (flow + pfinj) * base_mva;
+            pf_mw[row] = (row_dot(&model.bf, k, theta) + pfinj) * base_mva;
         }
-        let mut injection = model.bbus.mul_vec(theta).expect("one angle per bus");
+        // `Bbus θ`, only at the reference buses, whose injections the slack needs, less what
+        //   the outaged branches carried there
+        let ref_buses = &model.topology.ref_buses;
+        let mut injection: Vec<f64> = ref_buses
+            .iter()
+            .map(|&bus| row_dot(&model.bbus, bus, theta))
+            .collect();
         for &k in outaged {
             pf_mw[model.topology.branch_rows[k]] = 0.0;
             let (from, to) = model.topology.ends[k];
             let flow = model.susceptance(k) * (theta[from] - theta[to]);
-            injection[from] -= flow;
-            injection[to] += flow;
+            for (r, &bus) in ref_buses.iter().enumerate() {
+                if bus == from {
+                    injection[r] -= flow;
+                }
+                if bus == to {
+                    injection[r] += flow;
+                }
+            }
         }
 
         // The slack: the first in-service generator at each reference bus takes up the
@@ -561,14 +588,14 @@ impl DcStudy<'_> {
         for &row in &model.topology.gen_rows {
             pg_mw[row] = case.generator[row].pg_mw;
         }
-        for &bus in &model.topology.ref_buses {
+        for (r, &bus) in ref_buses.iter().enumerate() {
             let first = model
                 .topology
                 .gen_buses
                 .iter()
                 .position(|&gen_bus| gen_bus == bus)
                 .expect("a reference bus has an in-service generator");
-            pg_mw[model.topology.gen_rows[first]] += (injection[bus] - pbus[bus]) * base_mva;
+            pg_mw[model.topology.gen_rows[first]] += (injection[r] - pbus[bus]) * base_mva;
         }
 
         DcSolution {
@@ -584,4 +611,13 @@ impl DcStudy<'_> {
 /// their errors.
 pub fn dc_power_flow(case: &Case) -> Result<DcSolution, PowerflowError> {
     DcModel::new(case)?.solve(case)
+}
+
+/// Row `row` of `m` times `x`, summed from zero in the row's order, exactly as `mul_vec`
+/// computes each entry of `m x`: so a single entry is bit for bit the product's.
+fn row_dot(m: &CsrMatrix<f64>, row: usize, x: &[f64]) -> f64 {
+    let (cols, values) = m.outer(row).expect("a row of the matrix");
+    cols.iter()
+        .zip(values)
+        .fold(0.0, |sum, (&col, &value)| sum + value * x[col])
 }

@@ -13,13 +13,26 @@
 //! are combinations of the `c_k`, so `x` is the base solution plus a combination of `Y`'s
 //! columns, with no further solve.
 
-use sparse_mat::compressed_matrix::CscMatrix;
+use sparse_mat::compressed_matrix::{CscMatrix, SparseSolveWorkspace};
 use sparse_mat::sparse_matrix::SparseVector;
 
 use super::reach::ReachScratch;
 use super::{DcSolution, DcStudy};
 use crate::case::Case;
 use crate::powerflow_error::PowerflowError;
+
+/// The scratch one outage reuses from the last: the outage's injections and angles, the solution
+/// `x`, the columns of `Y`, the sparse solves' workspace and the reachability search's. Each
+/// outage overwrites what it reads, so its results are those of fresh buffers.
+#[derive(Default)]
+struct OutageWorkspace {
+    pbus: Vec<f64>,
+    theta: Vec<f64>,
+    x: Vec<f64>,
+    y: Vec<Vec<f64>>,
+    solve: SparseSolveWorkspace<f64>,
+    reach: ReachScratch,
+}
 
 impl DcStudy<'_> {
     /// The DC power flow for `case`'s injections with the case branch rows `outaged` taken out,
@@ -51,9 +64,10 @@ impl DcStudy<'_> {
         outages: &[Vec<usize>],
     ) -> Result<Vec<Result<DcSolution, PowerflowError>>, PowerflowError> {
         let (pbus, theta, base, position) = self.outage_base(case)?;
+        let mut workspace = OutageWorkspace::default();
         Ok(outages
             .iter()
-            .map(|rows| self.outage(case, rows, &pbus, &theta, &base, &position))
+            .map(|rows| self.outage(case, rows, &pbus, &theta, &base, &position, &mut workspace))
             .collect())
     }
 
@@ -68,9 +82,13 @@ impl DcStudy<'_> {
     ) -> Result<Vec<Result<DcSolution, PowerflowError>>, PowerflowError> {
         use rayon::prelude::*;
         let (pbus, theta, base, position) = self.outage_base(case)?;
+        // One workspace per worker thread: each outage still runs exactly the sequential
+        //   operations, and the workspace holds only scratch it overwrites
         Ok(outages
             .par_iter()
-            .map(|rows| self.outage(case, rows, &pbus, &theta, &base, &position))
+            .map_init(OutageWorkspace::default, |workspace, rows| {
+                self.outage(case, rows, &pbus, &theta, &base, &position, workspace)
+            })
             .collect())
     }
 
@@ -101,7 +119,9 @@ impl DcStudy<'_> {
     }
 
     /// One outage, given the base solve: the scheduled injections, the base angles (radians)
-    /// and the base unknowns, and each internal bus's position among the unknowns.
+    /// and the base unknowns, and each internal bus's position among the unknowns. `workspace`
+    /// holds the scratch, reused from earlier outages.
+    #[allow(clippy::too_many_arguments)]
     fn outage(
         &self,
         case: &Case,
@@ -110,6 +130,7 @@ impl DcStudy<'_> {
         theta: &[f64],
         base: &[f64],
         position: &[Option<usize>],
+        workspace: &mut OutageWorkspace,
     ) -> Result<DcSolution, PowerflowError> {
         let model = self.model;
         let topology = &model.topology;
@@ -131,22 +152,32 @@ impl DcStudy<'_> {
         outaged.sort_unstable();
         outaged.dedup();
         let reachability = model.reachability();
-        if let Some(stranded) =
-            reachability.stranded(topology, &outaged, &mut ReachScratch::default())
-        {
+        if let Some(stranded) = reachability.stranded(topology, &outaged, &mut workspace.reach) {
             return Err(PowerflowError::IslandWithoutReference {
                 bus_label: model.bus_labels[stranded],
             });
         }
 
         // The outaged phase shifters' injections leave the scheduled injections
-        let mut pbus = pbus.to_vec();
+        let OutageWorkspace {
+            pbus: outage_pbus,
+            theta: outage_theta,
+            x,
+            y,
+            solve,
+            ..
+        } = workspace;
+        outage_pbus.clear();
+        outage_pbus.extend_from_slice(pbus);
+        let pbus = outage_pbus;
         for &k in &outaged {
             let (from, to) = topology.ends[k];
             pbus[from] += model.pfinj_pu[k];
             pbus[to] -= model.pfinj_pu[k];
         }
-        let mut theta = theta.to_vec();
+        outage_theta.clear();
+        outage_theta.extend_from_slice(theta);
+        let theta = outage_theta;
         if let Some(factor) = &self.factor {
             // The outaged branches that touch an unknown, with c_k over the unknowns as
             //   (position, ±1) and α_k, its share of the change in the right-hand side
@@ -173,20 +204,24 @@ impl DcStudy<'_> {
             }
             let n = self.unknown.len();
             // Y's columns, A⁻¹ c_k, and x = A⁻¹ r′ = base + Σ α_k Y_k
-            let y: Vec<Vec<f64>> = columns
-                .iter()
-                .map(|(entries, _, _)| {
-                    let c = SparseVector::new(
-                        n,
-                        entries.iter().map(|&(p, _)| p).collect(),
-                        entries.iter().map(|&(_, v)| v).collect(),
-                    )
-                    .expect("distinct positions below the number of unknowns, sorted");
-                    factor.solve_sparse(&c)
-                })
-                .collect();
-            let mut x = base.to_vec();
-            for ((_, _, alpha), y_k) in columns.iter().zip(&y) {
+            if y.len() < columns.len() {
+                y.resize_with(columns.len(), Vec::new);
+            }
+            let y = &mut y[..columns.len()];
+            for ((entries, _, _), y_k) in columns.iter().zip(y.iter_mut()) {
+                let c = SparseVector::new(
+                    n,
+                    entries.iter().map(|&(p, _)| p).collect(),
+                    entries.iter().map(|&(_, v)| v).collect(),
+                )
+                .expect("distinct positions below the number of unknowns, sorted");
+                y_k.resize(n, 0.0);
+                factor.solve_sparse_into(&c, solve, y_k);
+            }
+            let y = &*y;
+            x.clear();
+            x.extend_from_slice(base);
+            for ((_, _, alpha), y_k) in columns.iter().zip(y) {
                 for (x_i, y_i) in x.iter_mut().zip(y_k) {
                     *x_i += alpha * y_i;
                 }
@@ -211,7 +246,7 @@ impl DcStudy<'_> {
                 let w = CscMatrix::from_triplets(m, m, triplets).expect("indices below m");
                 let ctx: Vec<f64> = columns
                     .iter()
-                    .map(|(entries, _, _)| dot(entries, &x))
+                    .map(|(entries, _, _)| dot(entries, x))
                     .collect();
                 let singular = || PowerflowError::SingularNetwork {
                     bus_label: case.bus[topology.bus_rows[topology.ends[outaged[0]].0]].bus_label,
@@ -222,14 +257,14 @@ impl DcStudy<'_> {
                     .lu()
                     .and_then(|lu| lu.solve(&ctx))
                     .map_err(|_| singular())?;
-                for (z_j, y_j) in z.iter().zip(&y) {
+                for (z_j, y_j) in z.iter().zip(y) {
                     for (x_i, y_i) in x.iter_mut().zip(y_j) {
                         *x_i += z_j * y_i;
                     }
                 }
             }
-            self.place(case, &mut theta, &x)?;
+            self.place(case, theta, x)?;
         }
-        Ok(self.finish(case, &theta, &pbus, &outaged))
+        Ok(self.finish(case, theta, pbus, &outaged))
     }
 }
