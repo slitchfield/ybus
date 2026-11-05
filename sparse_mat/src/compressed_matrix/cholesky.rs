@@ -9,7 +9,7 @@ use num_complex::ComplexFloat;
 use num_traits::{Float, NumCast};
 
 use super::properties::magnitude_squared;
-use super::solvers::reach;
+use super::solvers::{reach_into, SparseSolveWorkspace};
 use super::{CompressedMatrix, CsrMatrix, Ordering};
 use crate::sparse_error::SparseError;
 use crate::sparse_matrix::SparseVector;
@@ -386,33 +386,66 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
     /// `x` is generally dense. The result agrees with `solve`'s to within rounding. Returns
     /// `SparseError::ShapeMismatch` unless `b` has one entry per row of `A`.
     pub fn solve_sparse(&self, b: &SparseVector<T>) -> Result<Vec<T>, SparseError> {
+        let mut x = vec![T::zero(); self.perm.len()];
+        self.solve_sparse_into(b, &mut SparseSolveWorkspace::new(), &mut x)?;
+        Ok(x)
+    }
+
+    /// [`Cholesky::solve_sparse`] into `x`, with `workspace`'s buffers instead of fresh ones, so
+    /// a sequence of solves (such as one per outage) allocates nothing once the workspace has
+    /// grown: bit for bit `solve_sparse`'s result. Every entry of `x` is overwritten. Returns
+    /// `SparseError::ShapeMismatch` unless `b` and `x` have one entry per row of `A`.
+    pub fn solve_sparse_into(
+        &self,
+        b: &SparseVector<T>,
+        workspace: &mut SparseSolveWorkspace<T>,
+        x: &mut [T],
+    ) -> Result<(), SparseError> {
         self.check_rhs(b.len())?;
-        let (_, mut y) = self.forward_sparse(b);
-        self.back_substitute(&mut y);
-        let mut x = vec![T::zero(); y.len()];
+        self.check_rhs(x.len())?;
+        self.forward_sparse_into(b, workspace);
+        let y = &mut workspace.y;
+        self.back_substitute(y);
         for (&row, &value) in self.perm.iter().zip(y.iter()) {
             x[row] = value;
         }
-        Ok(x)
+        Ok(())
     }
 
     /// The reach of `b` (already checked) in increasing order, and `L⁻¹ P b` as a dense vector
     /// that is zero outside it. Column `j` of `L` is row `j` of `Lᴴ`, conjugated, with the
     /// (real) diagonal first.
     fn forward_sparse(&self, b: &SparseVector<T>) -> (Vec<usize>, Vec<T>) {
+        let mut workspace = SparseSolveWorkspace::new();
+        self.forward_sparse_into(b, &mut workspace);
+        (workspace.pattern, workspace.y)
+    }
+
+    /// [`Cholesky::forward_sparse`] into `workspace`'s `pattern` and `y`.
+    fn forward_sparse_into(&self, b: &SparseVector<T>, workspace: &mut SparseSolveWorkspace<T>) {
         let lt = &self.l_adjoint;
         let n = self.perm.len();
-        let pattern = reach(
+        let SparseSolveWorkspace {
+            marked,
+            stack,
+            pattern,
+            y,
+        } = workspace;
+        reach_into(
             n,
             &lt.ptr,
             &lt.idx,
             b.indices().iter().map(|&row| self.perm_inverse[row]),
+            marked,
+            stack,
+            pattern,
         );
-        let mut y = vec![T::zero(); n];
+        y.clear();
+        y.resize(n, T::zero());
         for (row, value) in b.iter() {
             y[self.perm_inverse[row]] = value;
         }
-        for &j in &pattern {
+        for &j in pattern.iter() {
             let diagonal = lt.ptr[j];
             y[j] = y[j] / lt.data[diagonal];
             let y_j = y[j];
@@ -421,7 +454,6 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
                 y[i] = y[i] - lt.data[p].conj() * y_j;
             }
         }
-        (pattern, y)
     }
 
     fn check_rhs(&self, len: usize) -> Result<(), SparseError> {

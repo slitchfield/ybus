@@ -27,25 +27,65 @@ impl<T: Scalar, O: Orientation> CompressedMatrix<T, O> {
     }
 }
 
-/// The reach of a sparse right-hand side in a triangular factor's graph: every node reachable
-/// from `starts` along the factor's edges, in increasing order, which is the pattern of the
-/// forward solve's result (Gilbert 1994).
+/// Reusable buffers for the sparse right-hand-side solves `Lu::solve_sparse_into` and
+/// `Cholesky::solve_sparse_into`: a reach's marks, stack and pattern, and the dense work vector.
+/// One workspace serves any number of solves with any factors; it grows to the largest system
+/// it has served and allocates nothing after that.
+#[derive(Clone, Debug)]
+pub struct SparseSolveWorkspace<T> {
+    /// One mark per node, all `false` between uses
+    pub(crate) marked: Vec<bool>,
+    pub(crate) stack: Vec<usize>,
+    /// The last reach, in increasing order
+    pub(crate) pattern: Vec<usize>,
+    /// The last forward solve's result, dense
+    pub(crate) y: Vec<T>,
+}
+
+impl<T> SparseSolveWorkspace<T> {
+    /// An empty workspace, which grows on first use.
+    pub fn new() -> Self {
+        SparseSolveWorkspace {
+            marked: vec![],
+            stack: vec![],
+            pattern: vec![],
+            y: vec![],
+        }
+    }
+}
+
+impl<T> Default for SparseSolveWorkspace<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The reach of a sparse right-hand side in a triangular factor's graph, into `found`: every
+/// node reachable from `starts` along the factor's edges, in increasing order, which is the
+/// pattern of the forward solve's result (Gilbert 1994).
 ///
 /// Node `j`'s children are `idx[ptr[j] + 1..ptr[j + 1]]`: each major index stores its diagonal
 /// first and then larger indices, as the columns of `L` do in `Lu` and in `Cholesky`'s `Lᴴ`.
 /// Every edge leads to a larger node, so increasing order is a topological order and the solve
-/// can take the reach in that order. `starts` must be distinct. Allocates O(n) for the marks but
-/// visits only the reach.
-pub(crate) fn reach(
+/// can take the reach in that order. `starts` must be distinct. `marked` (all `false` on entry
+/// and on return, grown to `n` if shorter) and `stack` are scratch; clearing only the marks it
+/// set keeps a reused workspace's cost to the reach itself.
+pub(crate) fn reach_into(
     n: usize,
     ptr: &[usize],
     idx: &[usize],
     starts: impl IntoIterator<Item = usize>,
-) -> Vec<usize> {
-    let mut marked = vec![false; n];
-    let mut stack: Vec<usize> = starts.into_iter().collect();
-    let mut found = Vec::with_capacity(stack.len());
-    for &start in &stack {
+    marked: &mut Vec<bool>,
+    stack: &mut Vec<usize>,
+    found: &mut Vec<usize>,
+) {
+    if marked.len() < n {
+        marked.resize(n, false);
+    }
+    stack.clear();
+    stack.extend(starts);
+    found.clear();
+    for &start in stack.iter() {
         marked[start] = true;
         found.push(start);
     }
@@ -58,8 +98,10 @@ pub(crate) fn reach(
             }
         }
     }
+    for &node in found.iter() {
+        marked[node] = false;
+    }
     found.sort_unstable();
-    found
 }
 
 impl<T: Scalar + ComplexFloat, O: Orientation> CompressedMatrix<T, O> {

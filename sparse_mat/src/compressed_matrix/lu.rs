@@ -13,7 +13,7 @@ use num_traits::NumCast;
 
 use super::access::check_permutation;
 use super::cholesky::inverse_permutation;
-use super::solvers::reach;
+use super::solvers::{reach_into, SparseSolveWorkspace};
 use super::{CompressedMatrix, CscMatrix, Ordering};
 use crate::sparse_error::SparseError;
 use crate::sparse_matrix::SparseVector;
@@ -540,37 +540,69 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
     /// Returns
     /// `SparseError::ShapeMismatch` unless `b` has one entry per row of `A`.
     pub fn solve_sparse(&self, b: &SparseVector<T>) -> Result<Vec<T>, SparseError> {
+        let mut x = vec![T::zero(); self.row_perm.len()];
+        self.solve_sparse_into(b, &mut SparseSolveWorkspace::new(), &mut x)?;
+        Ok(x)
+    }
+
+    /// [`Lu::solve_sparse`] into `x`, with `workspace`'s buffers instead of fresh ones, so a
+    /// sequence of solves (such as one per outage) allocates nothing once the workspace has
+    /// grown: bit for bit `solve_sparse`'s result. Every entry of `x` is overwritten. Returns
+    /// `SparseError::ShapeMismatch` unless `b` and `x` have one entry per row of `A`.
+    pub fn solve_sparse_into(
+        &self,
+        b: &SparseVector<T>,
+        workspace: &mut SparseSolveWorkspace<T>,
+        x: &mut [T],
+    ) -> Result<(), SparseError> {
         self.check_rhs(b.len())?;
-        let (_, mut y) = self.forward_sparse(b);
-        self.back_substitute(&mut y);
-        let mut x = vec![T::zero(); y.len()];
+        self.check_rhs(x.len())?;
+        self.forward_sparse_into(b, workspace);
+        let y = &mut workspace.y;
+        self.back_substitute(y);
         for (&col, &value) in self.col_perm.iter().zip(y.iter()) {
             x[col] = value;
         }
-        Ok(x)
+        Ok(())
     }
 
     /// The reach of `b` (already checked) in increasing order, and `L⁻¹ P b` as a dense vector
     /// that is zero outside it. `L` has a unit diagonal, stored first in each column.
     fn forward_sparse(&self, b: &SparseVector<T>) -> (Vec<usize>, Vec<T>) {
+        let mut workspace = SparseSolveWorkspace::new();
+        self.forward_sparse_into(b, &mut workspace);
+        (workspace.pattern, workspace.y)
+    }
+
+    /// [`Lu::forward_sparse`] into `workspace`'s `pattern` and `y`.
+    fn forward_sparse_into(&self, b: &SparseVector<T>, workspace: &mut SparseSolveWorkspace<T>) {
         let n = self.row_perm.len();
-        let pattern = reach(
+        let SparseSolveWorkspace {
+            marked,
+            stack,
+            pattern,
+            y,
+        } = workspace;
+        reach_into(
             n,
             &self.l.ptr,
             &self.l.idx,
             b.indices().iter().map(|&row| self.row_perm_inverse[row]),
+            marked,
+            stack,
+            pattern,
         );
-        let mut y = vec![T::zero(); n];
+        y.clear();
+        y.resize(n, T::zero());
         for (row, value) in b.iter() {
             y[self.row_perm_inverse[row]] = value;
         }
-        for &j in &pattern {
+        for &j in pattern.iter() {
             let y_j = y[j];
             for p in self.l.ptr[j] + 1..self.l.ptr[j + 1] {
                 y[self.l.idx[p]] = y[self.l.idx[p]] - self.l.data[p] * y_j;
             }
         }
-        (pattern, y)
     }
 
     fn check_rhs(&self, len: usize) -> Result<(), SparseError> {
