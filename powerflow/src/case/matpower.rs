@@ -119,32 +119,39 @@ fn quote_starts_string(text: &str, i: usize) -> bool {
     }
 }
 
-/// Finds the first character outside strings in `text` (one line of code) for which `stop`
-/// returns true, and returns its byte index. Single- and double-quoted strings are skipped,
-/// with doubled quotes as escapes, and a `'` that transposes isn't taken for a string. Returns
-/// `Err(start)` for a string that isn't closed on the line, since MATLAB strings can't span
-/// lines.
-fn find_code(text: &str, mut stop: impl FnMut(char) -> bool) -> Result<Option<usize>, usize> {
-    let mut chars = text.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        let quote = match c {
-            '\'' if quote_starts_string(text, i) => '\'',
-            '"' => '"',
-            _ if stop(c) => return Ok(Some(i)),
-            _ => continue,
+/// Finds the first byte outside strings in `text` (one line of code) for which `stop` returns
+/// true, and returns its index. Single- and double-quoted strings are skipped, with doubled
+/// quotes as escapes, and a `'` that transposes isn't taken for a string. Returns `Err(start)`
+/// for a string that isn't closed on the line, since MATLAB strings can't span lines.
+///
+/// The scan is by bytes, not characters: the quotes and every byte a caller stops on are ASCII,
+/// and in UTF-8 an ASCII byte only ever encodes that character, so the indices found are those
+/// of a scan by characters. A character outside ASCII reaches `stop` as each of its bytes, all
+/// at least 0x80, which the callers treat as they would the character.
+fn find_code(text: &str, mut stop: impl FnMut(u8) -> bool) -> Result<Option<usize>, usize> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let quote = match bytes[i] {
+            b'\'' if quote_starts_string(text, i) => b'\'',
+            b'"' => b'"',
+            b if stop(b) => return Ok(Some(i)),
+            _ => {
+                i += 1;
+                continue;
+            }
         };
         // Skip the string, where a doubled quote is an escaped one
+        let start = i;
+        i += 1;
         loop {
-            match chars.next() {
-                Some((_, q)) if q == quote => {
-                    if chars.peek().is_some_and(|&(_, next)| next == quote) {
-                        chars.next();
-                    } else {
-                        break;
-                    }
+            match bytes[i..].iter().position(|&b| b == quote) {
+                Some(offset) if bytes.get(i + offset + 1) == Some(&quote) => i += offset + 2,
+                Some(offset) => {
+                    i += offset + 1;
+                    break;
                 }
-                Some(_) => {}
-                None => return Err(i),
+                None => return Err(start),
             }
         }
     }
@@ -156,16 +163,16 @@ fn find_code(text: &str, mut stop: impl FnMut(char) -> bool) -> Result<Option<us
 /// report.
 fn strip_line(number: usize, line: &str) -> CodeLine<'_> {
     let mut previous_dot_run = 0;
-    let found = find_code(line, |c| {
-        if c == '.' {
+    let found = find_code(line, |b| {
+        if b == b'.' {
             previous_dot_run += 1;
         } else {
             previous_dot_run = 0;
         }
-        matches!(c, '%' | '#') || previous_dot_run == 3
+        matches!(b, b'%' | b'#') || previous_dot_run == 3
     });
     match found {
-        Ok(Some(i)) if line[i..].starts_with('.') => CodeLine {
+        Ok(Some(i)) if line.as_bytes()[i] == b'.' => CodeLine {
             number,
             // The index is the third dot of `...`
             code: &line[..i - 2],
@@ -425,12 +432,12 @@ fn skip_expression(lines: &[CodeLine], start: Cursor) -> Result<Cursor, Powerflo
         let line = &lines[cursor.index];
         let text = &line.code[cursor.pos..];
         let mut unbalanced = false;
-        let found = find_code(text, |c| match c {
-            '(' | '[' | '{' => {
+        let found = find_code(text, |b| match b {
+            b'(' | b'[' | b'{' => {
                 depth += 1;
                 false
             }
-            ')' | ']' | '}' => match depth.checked_sub(1) {
+            b')' | b']' | b'}' => match depth.checked_sub(1) {
                 Some(d) => {
                     depth = d;
                     false
@@ -440,7 +447,7 @@ fn skip_expression(lines: &[CodeLine], start: Cursor) -> Result<Cursor, Powerflo
                     true
                 }
             },
-            ';' | ',' => depth == 0,
+            b';' | b',' => depth == 0,
             _ => false,
         })
         .map_err(|_| parse_error(line.number, "string is never closed"))?;
@@ -528,7 +535,7 @@ struct Segment<'a> {
 }
 
 /// Gathers a literal's body from `start` (just past the opening bracket) until the closing
-/// `close` outside strings. Returns the body's segments and the position just after `close`.
+/// `close` (ASCII: `]` or `}`) outside strings. Returns the body's segments and the position just after `close`.
 fn collect_until<'a>(
     lines: &'a [CodeLine<'a>],
     start: Cursor,
@@ -539,7 +546,7 @@ fn collect_until<'a>(
     loop {
         let line = &lines[cursor.index];
         let text = &line.code[cursor.pos..];
-        let found = find_code(text, |c| c == close)
+        let found = find_code(text, |b| b == close as u8)
             .map_err(|_| parse_error(line.number, "string is never closed"))?;
         if let Some(end) = found {
             segments.push(Segment {
