@@ -13,11 +13,10 @@
 //! are combinations of the `c_k`, so `x` is the base solution plus a combination of `Y`'s
 //! columns, with no further solve.
 
-use std::collections::VecDeque;
-
 use sparse_mat::compressed_matrix::CscMatrix;
 use sparse_mat::sparse_matrix::SparseVector;
 
+use super::reach::ReachScratch;
 use super::{DcSolution, DcStudy};
 use crate::case::Case;
 use crate::powerflow_error::PowerflowError;
@@ -131,7 +130,14 @@ impl DcStudy<'_> {
         }
         outaged.sort_unstable();
         outaged.dedup();
-        self.check_reach(&outaged)?;
+        let reachability = model.reachability();
+        if let Some(stranded) =
+            reachability.stranded(topology, &outaged, &mut ReachScratch::default())
+        {
+            return Err(PowerflowError::IslandWithoutReference {
+                bus_label: model.bus_labels[stranded],
+            });
+        }
 
         // The outaged phase shifters' injections leave the scheduled injections
         let mut pbus = pbus.to_vec();
@@ -225,39 +231,5 @@ impl DcStudy<'_> {
             self.place(case, &mut theta, &x)?;
         }
         Ok(self.finish(case, &theta, &pbus, &outaged))
-    }
-
-    /// `PowerflowError::IslandWithoutReference` unless every connected bus still reaches a
-    /// reference bus without the internal branches `outaged` (sorted), as a new model would
-    /// check.
-    fn check_reach(&self, outaged: &[usize]) -> Result<(), PowerflowError> {
-        let topology = &self.model.topology;
-        let nb = topology.bus_rows.len();
-        let mut neighbours = vec![vec![]; nb];
-        for (k, &(from, to)) in topology.ends.iter().enumerate() {
-            if outaged.binary_search(&k).is_err() {
-                neighbours[from].push(to);
-                neighbours[to].push(from);
-            }
-        }
-        let mut reached = vec![false; nb];
-        let mut queue: VecDeque<usize> = topology.ref_buses.iter().copied().collect();
-        for &bus in &topology.ref_buses {
-            reached[bus] = true;
-        }
-        while let Some(bus) = queue.pop_front() {
-            for &next in &neighbours[bus] {
-                if !reached[next] {
-                    reached[next] = true;
-                    queue.push_back(next);
-                }
-            }
-        }
-        match reached.iter().position(|&reached| !reached) {
-            Some(stranded) => Err(PowerflowError::IslandWithoutReference {
-                bus_label: self.model.bus_labels[stranded],
-            }),
-            None => Ok(()),
-        }
     }
 }

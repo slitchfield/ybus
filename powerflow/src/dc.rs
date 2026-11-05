@@ -18,6 +18,7 @@
 //!   `runpf.m`).
 
 use std::f64::consts::PI;
+use std::sync::OnceLock;
 
 use sparse_mat::compressed_matrix::{Cholesky, CsrMatrix, Lu, LuOptions, Ordering};
 use sparse_mat::sparse_error::SparseError;
@@ -26,8 +27,10 @@ use sparse_mat::sparse_matrix::SparseVector;
 use crate::case::{BusType, Case};
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Topology;
+use reach::Reachability;
 
 mod outage;
+mod reach;
 mod sensitivity;
 pub use sensitivity::{DcSensitivity, PtdfSlack};
 
@@ -49,6 +52,8 @@ pub struct DcModel {
     /// MATPOWER's default PTDF slack (internal): the first connected bus of type REF, or if
     /// there is none, the first reference bus `bustypes` chose
     matpower_slack: usize,
+    /// Which outages strand buses, built on the first outage that asks
+    reachability: OnceLock<Reachability>,
 }
 
 /// MATPOWER's `makeBdc` over a network in internal numbering: the B matrices and phase-shifter
@@ -160,7 +165,14 @@ impl DcModel {
             topology,
             bus_labels,
             matpower_slack,
+            reachability: OnceLock::new(),
         })
+    }
+
+    /// Which outages strand buses (see `reach`), built once, on first use.
+    fn reachability(&self) -> &Reachability {
+        self.reachability
+            .get_or_init(|| Reachability::new(&self.topology))
     }
 
     /// The system MVA base the per-unit values are relative to.
