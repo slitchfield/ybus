@@ -1,5 +1,5 @@
 [workspace]
-members = ["sparse_mat", "powerflow", "interior_point"]
+members = ["sparse_mat", "powerflow", "interior_point", "ybus_cuda"]
 # MSRV-aware dependency resolution: when generating a lockfile, prefer dependency versions
 #   that support rust-version. Cargo.lock is not committed, so CI resolves on every run.
 resolver = "3"
@@ -10,8 +10,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/slitchfield/ybus"
 # Oldest supported Rust, checked by the MSRV job in .github/workflows/rust.yml. Raised by
-#   `<uN>::is_multiple_of` (1.87).
-rust-version = "1.87"
+#   `<uN>::is_multiple_of` (1.87), then by the `cuda` feature's libloading 0.9 (through cudarc),
+#   which needs 1.88.
+rust-version = "1.88"
 
 # The release build with debug line tables, for sampling profilers (samply, Nsight Systems) to
 #   name functions and lines without changing the optimized code: `--profile profiling`

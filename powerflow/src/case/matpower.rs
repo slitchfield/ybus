@@ -1032,8 +1032,10 @@ fn gencost_from_row(row: &Row) -> Result<GenCost, PowerflowError> {
             startup,
             shutdown,
             points: values
-                .chunks_exact(2)
-                .map(|pair| (pair[0], pair[1]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&[x, y]| (x, y))
                 .collect(),
         }
     })

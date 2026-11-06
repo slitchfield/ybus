@@ -48,7 +48,7 @@ jobs:
       # Keep in sync with rust-version in the root Cargo.toml
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.87"
+          toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
       # Build and test only: lints and formatting are checked on stable by the Check job.
       #   MATPOWER isn't fetched here, so tests that need its cases skip; the Check job runs

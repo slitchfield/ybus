@@ -4,6 +4,10 @@
 //! [`compressed_matrix::CompressedMatrix`] (as `CsrMatrix` or `CscMatrix`) does the numerical
 //! work; [`sparse_error::SparseError`] is the error type.
 
+// No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
+//   API
+#![forbid(unsafe_code)]
+
 pub mod compressed_matrix;
 
 /// The `SparseMatrix` type and its iterators.

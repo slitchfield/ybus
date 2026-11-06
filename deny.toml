@@ -14,7 +14,9 @@ ignore = []
 # Permissive licenses compatible with this crate's MIT OR Apache-2.0. AI-DISCLAIMER.md also
 #   lists Unlicense, which only memchr (a dev-dependency, via serde_json) offers, as
 #   "Unlicense OR MIT"; MIT satisfies it, and cargo-deny warns about unused allowances.
-allow = ["MIT", "Apache-2.0", "Unicode-3.0"]
+#   ISC, a permissive license equivalent to MIT, is libloading's only license: cudarc loads the
+#   CUDA libraries through it, for ybus_cuda and powerflow's optional `cuda` feature.
+allow = ["MIT", "Apache-2.0", "Unicode-3.0", "ISC"]
 confidence-threshold = 0.9
 
 [bans]

@@ -1,13 +1,14 @@
 # ybus
 
 Sparse linear algebra, power flow and interior-point optimization for Rust. A Cargo workspace
-with three crates:
+with four crates:
 
 | Crate | Status | Contents |
 |---|---|---|
 | [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM, COLAMD), sparse Cholesky and LU (complex too, with refactoring, sparse right-hand sides and transposed solves), iterative refinement and condition estimates, conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
 | [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. It also lists a network's islands and bridges, computes PTDF and LODF from a kept factorization of B′, as MATPOWER does, and solves branch outages by rank-k updates of that factorization, matching a refactored solve, optionally in parallel (`rayon`). Also the optimal power flow, DC and AC, solved by `interior_point`'s MIPS, which matches MATPOWER's `rundcopf` and `runopf` on their reference cases, in the same number of iterations; over every case with costs, recorded in [`docs/benchmarks/`](docs/benchmarks/), it ends as MATPOWER does on every AC case and all but one DC case. |
 | [`interior_point`](interior_point/) | In progress | Interior-point solvers on top of `sparse_mat`. Done: MIPS, MATPOWER's primal-dual interior-point solver, reimplemented step for step from `mips.m`, with its quadratic-program wrapper. On the problems of MATPOWER's MIPS tests, it ends as MATPOWER does in the same number of iterations, and its results agree within 1.0e-13. |
+| [`ybus_cuda`](ybus_cuda/) | Experimental | The GPU path, on CUDA through `cudarc`, for phase O2's CUDA spike: a `sparse_mat` Cholesky or LU factorization uploaded once and solved for blocks of many right-hand sides by cuSPARSE, agreeing with the CPU to within rounding. Needs a CUDA 13 driver and cuSPARSE at run time, not to build. The workspace's only `unsafe` code is here; the other crates forbid it. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
 formulation is built around.
@@ -19,11 +20,11 @@ one: optimal power flow, interior-point solvers and acceleration.
 
 ## Development
 
-- **MSRV:** Rust 1.87, set in `[workspace.package]` in the root `Cargo.toml` and checked by a CI
+- **MSRV:** Rust 1.88, set in `[workspace.package]` in the root `Cargo.toml` and checked by a CI
   job.
 - **`./check.sh`:** runs everything the Check CI job runs, over the whole workspace: fmt,
-  clippy with `-D warnings`, and the tests with no features, all features and each
-  `sparse_mat` feature alone, plus doc tests (including the `sparse_mat` README's example).
+  clippy with `-D warnings`, and the tests with no features, all features and each optional
+  feature alone, plus doc tests (including the `sparse_mat` README's example).
   The benchmarks run once, as tests, in the first of those passes only.
 - **Dependencies:** `cargo deny --all-features check` checks advisories, licenses, banned
   crates and sources against `deny.toml`. The Dependencies CI job runs it.
@@ -33,6 +34,9 @@ one: optimal power flow, interior-point solvers and acceleration.
   - **How tests use it:** `powerflow` tests find cases through `powerflow/tests/common`. They
     skip when MATPOWER hasn't been fetched. Set `YBUS_REQUIRE_CASES=1` to make missing cases
     fail instead; the Check CI job fetches MATPOWER (cached) and sets it.
+- **GPU tests:** the tests of `ybus_cuda` and of powerflow's `cuda` feature skip, saying so, on
+  a machine without CUDA, as on CI. Set `YBUS_REQUIRE_CUDA=1` to make that a failure, when
+  running `./check.sh` on a machine with a GPU.
   - **Cases that compute their data with code:** some MATPOWER cases rescale their data with
     MATLAB code, which the `powerflow` reader rejects rather than misread.
     `scripts/normalize-cases.sh` evaluates every case with MATPOWER's own `loadcase` and writes

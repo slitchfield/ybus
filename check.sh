@@ -15,8 +15,9 @@ cargo test --workspace "${targets[@]}" --all-features
 # Each optional feature on its own, to catch code that only builds or lints cleanly when
 #   another feature is also enabled. Keep this list in sync with [features] in
 #   sparse_mat/Cargo.toml and powerflow/Cargo.toml. The workspace root has no features of its
-#   own, so each one is named with its crate.
-for feature in sparse_mat/serde sparse_mat/rayon powerflow/rayon; do
+#   own, so each one is named with its crate. The GPU tests skip on a machine without CUDA;
+#   YBUS_REQUIRE_CUDA=1 makes that a failure instead.
+for feature in sparse_mat/serde sparse_mat/rayon powerflow/rayon powerflow/cuda; do
     cargo clippy --workspace --all-targets --features "$feature" -- -D warnings -W clippy::all
     cargo test --workspace "${targets[@]}" --features "$feature"
 done

@@ -11,6 +11,10 @@
 //!
 //! The linear algebra is [`sparse_mat`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
 
+// No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
+//   API
+#![forbid(unsafe_code)]
+
 pub mod interior_point_error;
 pub mod mips;
 pub mod problem;

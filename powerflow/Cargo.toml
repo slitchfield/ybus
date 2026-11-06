@@ -13,16 +13,25 @@ rust-version.workspace = true
 # Parallel batches: outages, PTDF and LODF columns (DcStudy::par_solve_outages,
 #   DcSensitivity::par_ptdf_columns and par_lodf_columns)
 rayon = ["sparse_mat/rayon", "dep:rayon"]
+# The GPU path, through ybus_cuda (which needs a CUDA 13 driver and cuSPARSE at run time, not to
+#   build): so far, the cuda_survey example and tests that B′ and Jacobian factors solve alike
+#   on the GPU
+cuda = ["dep:ybus_cuda"]
 
 [dependencies]
 sparse_mat = { path = "../sparse_mat" }
 interior_point = { path = "../interior_point" }
 rayon = { version = "1", optional = true }
+ybus_cuda = { path = "../ybus_cuda", optional = true }
 
 [dev-dependencies]
 # The benchmarks in benches/, without plotting or parallel analysis, which keeps the dependency
 #   tree (and cargo-deny's license check) small; results are still printed and saved
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[example]]
+name = "cuda_survey"
+required-features = ["cuda", "rayon"]
 
 [[bench]]
 name = "dc_power_flow"
