@@ -10,7 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 sparse_mat = { path = "../sparse_mat" }
-# The driver API and cuSPARSE, loaded at run time (dynamic-loading), so every machine builds this
+# The driver API, cuSPARSE and NVRTC (which compiles kernels.cu), loaded at run time (dynamic-loading), so every machine builds this
 #   crate without the CUDA toolkit and a machine without CUDA finds out when `Gpu::new` runs.
 #   The bindings are CUDA 13.0's, which any CUDA 13 driver serves.
-cudarc = { version = "0.19", default-features = false, features = ["std", "driver", "cusparse", "dynamic-loading", "cuda-13000"] }
+cudarc = { version = "0.19", default-features = false, features = ["std", "driver", "cusparse", "nvrtc", "dynamic-loading", "cuda-13000"] }

@@ -49,10 +49,10 @@ pub(crate) enum Fill {
     Upper,
 }
 
-/// A square triangular matrix in CSR form on the device, with its diagonal stored (a unit
-/// diagonal stored as ones). It owns the device arrays its descriptor points into, so they
-/// outlive the descriptor.
-pub(crate) struct Triangle {
+/// A matrix in CSR form on the device: a factor's triangle (square, with its diagonal stored, a
+/// unit diagonal as ones), or any matrix an operator applies. It owns the device arrays its
+/// descriptor points into, so they outlive the descriptor.
+pub(crate) struct Csr {
     descr: sys::cusparseSpMatDescr_t,
     _pointers: CudaSlice<i32>,
     _indices: CudaSlice<i32>,
@@ -67,22 +67,25 @@ fn to_i32(values: &[usize], entries: usize) -> Result<Vec<i32>, CudaError> {
         .collect()
 }
 
-impl Triangle {
-    /// Uploads the `n`×`n` CSR matrix with these arrays: row `i`'s entries are at
-    /// `pointers[i]..pointers[i + 1]` of `indices` (columns, ascending within each row) and
-    /// `values`. The caller ensures the arrays describe a valid triangle of `fill`'s kind.
+impl Csr {
+    /// Uploads the `rows`×`columns` CSR matrix with these arrays: row `i`'s entries are at
+    /// `pointers[i]..pointers[i + 1]` of `indices` (columns, ascending within each row and below
+    /// `columns`) and `values`. With `fill`, the caller ensures the arrays describe a valid
+    /// square triangle of that kind, for triangular solves.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn upload(
         context: &Arc<CudaContext>,
         stream: &Arc<CudaStream>,
-        n: usize,
+        rows: usize,
+        columns: usize,
         pointers: &[usize],
         indices: &[usize],
         values: &[f64],
-        fill: Fill,
+        fill: Option<Fill>,
     ) -> Result<Self, CudaError> {
         assert_eq!(
             pointers.len(),
-            n + 1,
+            rows + 1,
             "one pointer per row, and one past the end"
         );
         assert_eq!(indices.len(), values.len(), "one index per value");
@@ -96,14 +99,14 @@ impl Triangle {
             let (p, _p) = pointers.device_ptr(stream);
             let (i, _i) = indices.device_ptr(stream);
             let (v, _v) = values.device_ptr(stream);
-            // SAFETY: the three device arrays hold `n + 1` row offsets and `entries` column
-            //   indices and values, as declared, and are owned by the returned `Triangle`, which
+            // SAFETY: the three device arrays hold `rows + 1` row offsets and `entries` column
+            //   indices and values, as declared, and are owned by the returned `Csr`, which
             //   destroys the descriptor before dropping them; cuSPARSE only reads them
             unsafe {
                 sys::cusparseCreateCsr(
                     &mut descr,
-                    n as i64,
-                    n as i64,
+                    rows as i64,
+                    columns as i64,
                     entries as i64,
                     p as *mut c_void,
                     i as *mut c_void,
@@ -116,11 +119,14 @@ impl Triangle {
                 .result()?;
             }
         }
-        let triangle = Triangle {
+        let matrix = Csr {
             descr,
             _pointers: pointers,
             _indices: indices,
             _values: values,
+        };
+        let Some(fill) = fill else {
+            return Ok(matrix);
         };
         let mut fill = match fill {
             Fill::Lower => sys::cusparseFillMode_t::CUSPARSE_FILL_MODE_LOWER,
@@ -131,25 +137,25 @@ impl Triangle {
         //   type cuSPARSE expects for it, with that type's size
         unsafe {
             sys::cusparseSpMatSetAttribute(
-                triangle.descr,
+                matrix.descr,
                 sys::cusparseSpMatAttribute_t::CUSPARSE_SPMAT_FILL_MODE,
                 &mut fill as *mut _ as *mut c_void,
                 std::mem::size_of_val(&fill),
             )
             .result()?;
             sys::cusparseSpMatSetAttribute(
-                triangle.descr,
+                matrix.descr,
                 sys::cusparseSpMatAttribute_t::CUSPARSE_SPMAT_DIAG_TYPE,
                 &mut diagonal as *mut _ as *mut c_void,
                 std::mem::size_of_val(&diagonal),
             )
             .result()?;
         }
-        Ok(triangle)
+        Ok(matrix)
     }
 }
 
-impl Drop for Triangle {
+impl Drop for Csr {
     fn drop(&mut self) {
         // SAFETY: `descr` was created in `upload` and is destroyed only here, before the
         //   arrays it points into (fields drop after `drop` runs)
@@ -158,13 +164,13 @@ impl Drop for Triangle {
 }
 
 /// A dense column-major `rows`×`columns` matrix on the device, with its descriptor.
-struct Dense {
+pub(crate) struct Dense {
     descr: sys::cusparseDnMatDescr_t,
-    data: CudaSlice<f64>,
+    pub(crate) data: CudaSlice<f64>,
 }
 
 impl Dense {
-    fn new(
+    pub(crate) fn new(
         context: &Arc<CudaContext>,
         stream: &Arc<CudaStream>,
         rows: usize,
@@ -222,7 +228,7 @@ impl Spsm {
     fn analyse(
         handle: &Handle,
         stream: &Arc<CudaStream>,
-        matrix: &Triangle,
+        matrix: &Csr,
         from: &Dense,
         to: &Dense,
     ) -> Result<Self, CudaError> {
@@ -307,8 +313,8 @@ impl Block {
         context: &Arc<CudaContext>,
         stream: &Arc<CudaStream>,
         handle: &Handle,
-        lower: &Triangle,
-        upper: &Triangle,
+        lower: &Csr,
+        upper: &Csr,
         n: usize,
         width: usize,
     ) -> Result<Self, CudaError> {
@@ -327,6 +333,17 @@ impl Block {
 
     pub(crate) fn width(&self) -> usize {
         self.width
+    }
+
+    /// The block the right-hand sides go into and the solutions come out of.
+    pub(crate) fn first(&mut self) -> &mut Dense {
+        &mut self.first
+    }
+
+    /// Both blocks: the first, and the second, which the lower solve writes into and is
+    /// otherwise free between solves.
+    pub(crate) fn both(&mut self) -> (&mut Dense, &mut Dense) {
+        (&mut self.first, &mut self.second)
     }
 
     /// Copies `host` (column-major, `n * width` values) into the block.
@@ -355,8 +372,8 @@ impl Block {
         &mut self,
         handle: &Handle,
         stream: &Arc<CudaStream>,
-        lower: &Triangle,
-        upper: &Triangle,
+        lower: &Csr,
+        upper: &Csr,
     ) -> Result<(), CudaError> {
         let solves = [
             (
@@ -398,3 +415,90 @@ impl Block {
         Ok(())
     }
 }
+
+/// A sparse-times-dense product `out = matrix · input + out` for blocks of one width, with the
+/// work buffer cuSPARSE asked for. `out` is initialized by the caller (with an offset) before
+/// each product.
+pub(crate) struct Product {
+    pub(crate) out: Dense,
+    buffer: CudaSlice<u8>,
+    width: usize,
+}
+
+impl Product {
+    /// A product of `matrix` (`rows` rows) with blocks shaped like `input`.
+    pub(crate) fn new(
+        context: &Arc<CudaContext>,
+        stream: &Arc<CudaStream>,
+        handle: &Handle,
+        matrix: &Csr,
+        input: &Dense,
+        rows: usize,
+        width: usize,
+    ) -> Result<Self, CudaError> {
+        let out = Dense::new(context, stream, rows, width)?;
+        let mut size = 0usize;
+        // SAFETY: every descriptor is live, and `ONE` is a host `f64`, as the pointer mode and
+        //   compute type say
+        unsafe {
+            sys::cusparseSpMM_bufferSize(
+                handle.raw,
+                sys::cusparseOperation_t::CUSPARSE_OPERATION_NON_TRANSPOSE,
+                sys::cusparseOperation_t::CUSPARSE_OPERATION_NON_TRANSPOSE,
+                &ONE as *const f64 as *const c_void,
+                matrix.descr,
+                input.descr,
+                &ONE as *const f64 as *const c_void,
+                out.descr,
+                sys::cudaDataType::CUDA_R_64F,
+                SPMM_ALGORITHM,
+                &mut size,
+            )
+            .result()?;
+        }
+        let buffer = stream.alloc_zeros::<u8>(size.max(1))?;
+        Ok(Product { out, buffer, width })
+    }
+
+    /// The block width it's for.
+    pub(crate) fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Adds `matrix · input` to `out`. `matrix` and `input` must be shaped as at `new`.
+    pub(crate) fn run(
+        &mut self,
+        handle: &Handle,
+        stream: &Arc<CudaStream>,
+        matrix: &Csr,
+        input: &mut Dense,
+    ) -> Result<(), CudaError> {
+        let (out_descr, input_descr) = (self.out.descr, input.descr);
+        let (b, _b) = self.buffer.device_ptr_mut(stream);
+        // Taken for their ordering on the stream
+        let (_i, _input) = input.data.device_ptr(stream);
+        let (_o, _out) = self.out.data.device_ptr_mut(stream);
+        // SAFETY: the descriptors are live and shaped as when the buffer size was asked for,
+        //   the buffer is that size and owned by `self`, and `ONE` is a host `f64`
+        unsafe {
+            sys::cusparseSpMM(
+                handle.raw,
+                sys::cusparseOperation_t::CUSPARSE_OPERATION_NON_TRANSPOSE,
+                sys::cusparseOperation_t::CUSPARSE_OPERATION_NON_TRANSPOSE,
+                &ONE as *const f64 as *const c_void,
+                matrix.descr,
+                input_descr,
+                &ONE as *const f64 as *const c_void,
+                out_descr,
+                sys::cudaDataType::CUDA_R_64F,
+                SPMM_ALGORITHM,
+                b as *mut c_void,
+            )
+            .result()?;
+        }
+        Ok(())
+    }
+}
+
+/// cuSPARSE's first CSR algorithm, which gives the same bits on every run
+const SPMM_ALGORITHM: sys::cusparseSpMMAlg_t = sys::cusparseSpMMAlg_t::CUSPARSE_SPMM_CSR_ALG1;

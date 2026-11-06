@@ -5,6 +5,10 @@
 //!   CUDA.
 //! - [`GpuFactor`]: a [`sparse_mat`] Cholesky or LU factorization uploaded once, which solves
 //!   blocks of right-hand sides with cuSPARSE's SpSM and reports the time spent on transfers.
+//! - [`GpuFactor::pair_solves`] and [`GpuFactor::pair_updates`]: blocks whose right-hand sides
+//!   are built on the device (`e_plus − e_minus`), optionally with a rank-one update of a base
+//!   solution per column, kept on the device as a [`GpuBlock`] for [`GpuOperator`] products and
+//!   per-column maxima, so only what's asked for is downloaded.
 //!
 //! This is the only crate in the workspace with `unsafe` code: cudarc exposes cuSPARSE only as
 //! raw FFI. Each `unsafe` block says why it's sound, and nothing unsafe crosses the public API.
@@ -17,9 +21,12 @@ use cudarc::cusparse::result::CusparseError;
 use cudarc::driver::DriverError;
 
 mod factor;
+mod kernels;
+mod pairs;
 mod sparse;
 
 pub use factor::{GpuFactor, Timings};
+pub use pairs::{ColumnMax, GpuBlock, GpuOperator, Pair, PairUpdate};
 
 use std::sync::Arc;
 
@@ -37,6 +44,8 @@ pub enum CudaError {
         /// The number of stored entries.
         entries: usize,
     },
+    /// NVRTC couldn't compile this crate's kernels.
+    Compile(String),
     /// A right-hand side doesn't have one entry per row of the factorization.
     ShapeMismatch {
         /// The number of rows of the factorization.
@@ -55,6 +64,7 @@ impl fmt::Display for CudaError {
                 f,
                 "a factor with {entries} entries is too large for 32-bit indices"
             ),
+            CudaError::Compile(log) => write!(f, "NVRTC couldn't compile the kernels: {log}"),
             CudaError::ShapeMismatch { expected, found } => write!(
                 f,
                 "a right-hand side has {found} entries, but the factorization has {expected} rows"
@@ -83,17 +93,21 @@ pub struct Gpu {
     context: Arc<CudaContext>,
     stream: Arc<CudaStream>,
     sparse: sparse::Handle,
+    kernels: kernels::Kernels,
 }
 
 impl Gpu {
-    /// The first CUDA device, or `None` if this machine has no CUDA: the driver or cuSPARSE
-    /// library can't be loaded, or the driver reports no device. Other failures are errors.
+    /// The first CUDA device, or `None` if this machine has no CUDA: the driver, cuSPARSE or
+    /// NVRTC library can't be loaded, or the driver reports no device. Other failures are
+    /// errors. It compiles this crate's kernels, which takes a fraction of a second.
     pub fn new() -> Result<Option<Gpu>, CudaError> {
         // SAFETY: these only try to load the libraries, which runs their initializers: the
-        //   system's CUDA driver and cuSPARSE, which cudarc would load on first use anyway
-        //   (and panic if it couldn't, which this check avoids)
+        //   system's CUDA driver, cuSPARSE and NVRTC, which cudarc would load on first use
+        //   anyway (and panic if it couldn't, which this check avoids)
         let present = unsafe {
-            cudarc::driver::sys::is_culib_present() && cudarc::cusparse::sys::is_culib_present()
+            cudarc::driver::sys::is_culib_present()
+                && cudarc::cusparse::sys::is_culib_present()
+                && cudarc::nvrtc::sys::is_culib_present()
         };
         if !present {
             return Ok(None);
@@ -107,10 +121,12 @@ impl Gpu {
         };
         let stream = context.default_stream();
         let sparse = sparse::Handle::new(&context, &stream)?;
+        let kernels = kernels::Kernels::compile(&context)?;
         Ok(Some(Gpu {
             context,
             stream,
             sparse,
+            kernels,
         }))
     }
 
