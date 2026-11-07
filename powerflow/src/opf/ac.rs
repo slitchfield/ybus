@@ -25,12 +25,16 @@
 //!
 //! It is solved by [`mips`] from `nlpopf_solver`'s starting point, with MATPOWER's MIPS options
 //! for the AC OPF (`feastol` = `opf.violation` = 5e-6, `cost_mult` = 1e-4, the rest MIPS's
-//! defaults), and with the constraints' derivatives from Technical Note 2's formulas (see the
+//! defaults), or, if the options choose it, by [`mehrotra`] from the same point with the same
+//! `feastol` and `cost_mult`, and with the constraints' derivatives from Technical Note 2's
+//! formulas (see the
 //! crate-private `opf::derivatives`). The results and multipliers are mapped back to the case
 //! as `nlpopf_solver` and `opf` map them.
 
-use interior_point::mips::{mips, MipsOptions, MipsSolution, MipsStatus};
+use interior_point::mehrotra::{mehrotra, MehrotraOptions};
+use interior_point::mips::{mips, MipsOptions};
 use interior_point::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Problem};
+use interior_point::solution::{kkt_residuals, KktResiduals, Status};
 use sparse_mat::compressed_matrix::CsrMatrix;
 use sparse_mat::Complex;
 
@@ -40,7 +44,9 @@ use crate::opf::cost::{OpfCosts, QuadraticCosts};
 use crate::opf::derivatives::{
     flows, squared_magnitude_hessian, squared_magnitudes, weighted_hessian, Flows,
 };
-use crate::opf::{helper_start, per_degree, reference_buses, starting_point, LinearRows};
+use crate::opf::{
+    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver, SolverResult,
+};
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Network;
 
@@ -50,9 +56,9 @@ type C64 = Complex<f64>;
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct AcOpfOptions {
-    /// MIPS's options. The default is MATPOWER's for the AC OPF: MIPS's defaults with
-    /// `feastol` set to `opf.violation`, 5e-6, and `cost_mult` 1e-4.
-    pub mips: MipsOptions,
+    /// The solver and its options. The default is MATPOWER's for the AC OPF: MIPS, with its
+    /// defaults but `feastol` set to `opf.violation`, 5e-6, and `cost_mult` 1e-4.
+    pub solver: OpfSolver,
 }
 
 impl Default for AcOpfOptions {
@@ -60,7 +66,22 @@ impl Default for AcOpfOptions {
         let mut mips = MipsOptions::default();
         mips.feastol = 5e-6;
         mips.cost_mult = 1e-4;
-        AcOpfOptions { mips }
+        AcOpfOptions {
+            solver: OpfSolver::Mips(mips),
+        }
+    }
+}
+
+impl AcOpfOptions {
+    /// The predictor-corrector method with MATPOWER's AC OPF settings: its defaults, but
+    /// `feastol` 5e-6 and `cost_mult` 1e-4, as MIPS runs by default.
+    pub fn mehrotra() -> Self {
+        let mut mehrotra = MehrotraOptions::default();
+        mehrotra.feastol = 5e-6;
+        mehrotra.cost_mult = 1e-4;
+        AcOpfOptions {
+            solver: OpfSolver::Mehrotra(mehrotra),
+        }
     }
 }
 
@@ -70,7 +91,7 @@ impl Default for AcOpfOptions {
 /// Out-of-service generators and branches, and those at an isolated bus, report 0.0 for every
 /// quantity except `vg_pu`, which keeps the case's, as MATPOWER's `opf` sets them. An isolated
 /// bus keeps its voltage from the case and has no prices. Results are reported whether or not
-/// MIPS converged: see [`AcOpfSolution::status`].
+/// the solver converged: see [`AcOpfSolution::status`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct AcOpfSolution {
     /// Each bus's voltage magnitude (p.u.)
@@ -112,19 +133,24 @@ pub struct AcOpfSolution {
     pub mu_angmax: Vec<f64>,
     /// The total cost ($/hr)
     pub objective: f64,
-    /// How MIPS ended
-    pub status: MipsStatus,
-    /// MIPS's iterations
+    /// How the solver ended
+    pub status: Status,
+    /// The solver's iterations
     pub iterations: usize,
-    /// MIPS's own result, on the model's variables `[Va, Vm, Pg, Qg, y]` and constraints, with
-    /// each iteration's record
-    pub solver: MipsSolution,
+    /// The KKT residuals at the solver's point and multipliers, on the model's own problem
+    /// (per unit, and $/hr for the objective), by
+    /// [`kkt_residuals`]: one measure for either
+    /// solver
+    pub residuals: KktResiduals,
+    /// The solver's own result, on the model's variables `[Va, Vm, Pg, Qg, y]` and
+    /// constraints, with each iteration's record
+    pub solver: SolverResult,
 }
 
 impl AcOpfSolution {
-    /// Whether MIPS converged, MATPOWER's `success`.
+    /// Whether the solver converged, MATPOWER's `success`.
     pub fn converged(&self) -> bool {
-        self.status == MipsStatus::Converged
+        self.status == Status::Converged
     }
 }
 
@@ -331,9 +357,9 @@ pub fn ac_opf(case: &Case) -> Result<AcOpfSolution, PowerflowError> {
     ac_opf_with_options(case, &AcOpfOptions::default())
 }
 
-/// Solves `case`'s AC optimal power flow as MATPOWER's `runopf` does with MIPS (see the
-/// [module documentation](self)). A solve that MIPS doesn't finish is still returned, with its
-/// [`AcOpfSolution::status`].
+/// Solves `case`'s AC optimal power flow as MATPOWER's `runopf` does with MIPS, or with the
+/// solver `options` choose (see the [module documentation](self)). A solve that the solver
+/// doesn't finish is still returned, with its [`AcOpfSolution::status`].
 ///
 /// # Errors
 ///
@@ -457,12 +483,21 @@ pub fn ac_opf_with_options(
         xmin: Some(xmin),
         xmax: Some(xmax),
     };
-    let solution = mips(&problem, &x0, &constraints, &options.mips)
-        .expect("the AC OPF model's dimensions are consistent");
+    let consistent = "the AC OPF model's dimensions are consistent";
+    let solution = match &options.solver {
+        OpfSolver::Mips(options) => {
+            SolverResult::Mips(mips(&problem, &x0, &constraints, options).expect(consistent))
+        }
+        OpfSolver::Mehrotra(options) => SolverResult::Mehrotra(
+            mehrotra(&problem, &x0, &constraints, options).expect(consistent),
+        ),
+    };
+    let residuals = kkt_residuals(&problem, &constraints, solution.x(), solution.multipliers())
+        .expect("the solver's multipliers fit its problem");
 
     // The results, back on the case's tables
-    let x = &solution.x;
-    let multipliers = &solution.multipliers;
+    let x = solution.x();
+    let multipliers = solution.multipliers();
     let v = problem.voltages(x);
     let nbus = case.bus.len();
     let mut vm_pu: Vec<f64> = case.bus.iter().map(|bus| bus.vm_pu).collect();
@@ -539,9 +574,10 @@ pub fn ac_opf_with_options(
         mu_st,
         mu_angmin,
         mu_angmax,
-        objective: solution.f,
-        status: solution.status,
-        iterations: solution.iterations,
+        objective: solution.f(),
+        status: solution.status(),
+        iterations: solution.iterations(),
+        residuals,
         solver: solution,
     })
 }

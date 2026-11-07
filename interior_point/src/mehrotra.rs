@@ -117,17 +117,10 @@ impl Default for MehrotraOptions {
     }
 }
 
-/// How a solve ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MehrotraStatus {
-    /// Every termination test passed
-    Converged,
-    /// `max_it` iterations passed without converging
-    MaxIterations,
-    /// The KKT system was singular, a step was NaN or too long, a step length fell below
-    /// `alpha_min`, or the average complementarity left `[ε, 1/ε]`
-    NumericalFailure,
-}
+/// How a solve ended, the status the solvers share. Here `NumericalFailure` is a singular KKT
+/// system, a NaN or too long a step, a step length below `alpha_min`, or the average
+/// complementarity outside `[ε, 1/ε]`.
+pub use crate::solution::Status as MehrotraStatus;
 
 /// One iteration's record: the termination measures, the average complementarity and the
 /// centering it chose, the step's 2-norm, the objective and the step lengths.

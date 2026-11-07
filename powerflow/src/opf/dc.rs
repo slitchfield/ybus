@@ -18,19 +18,24 @@
 //!   them.
 //!
 //! It is solved by [`qps_mips`] from `dcopf_solver`'s starting point, with MATPOWER's MIPS
-//! options for the OPF (`feastol` = `opf.violation` = 5e-6, the rest MIPS's defaults), and the
+//! options for the OPF (`feastol` = `opf.violation` = 5e-6, the rest MIPS's defaults), or, if
+//! the options choose it, by [`qps_mehrotra`] from the same point with the same `feastol`. The
 //! results and multipliers are mapped back to the case as `dcopf_solver` and `opf` map them.
 
 use std::f64::consts::PI;
 
-use interior_point::mips::{qps_mips, MipsOptions, MipsSolution, MipsStatus};
+use interior_point::mehrotra::{qps_mehrotra, MehrotraOptions};
+use interior_point::mips::{qps_mips, MipsOptions};
 use interior_point::problem::{Constraints, QuadraticProblem};
+use interior_point::solution::{kkt_residuals, KktResiduals, Status};
 use sparse_mat::compressed_matrix::CsrMatrix;
 
 use crate::case::Case;
 use crate::dc::Bdc;
 use crate::opf::cost::OpfCosts;
-use crate::opf::{helper_start, per_degree, reference_buses, starting_point, LinearRows};
+use crate::opf::{
+    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver, SolverResult,
+};
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Network;
 
@@ -38,16 +43,30 @@ use crate::topology::Network;
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DcOpfOptions {
-    /// MIPS's options. The default is MATPOWER's for the OPF: MIPS's defaults with `feastol`
-    /// set to `opf.violation`, 5e-6.
-    pub mips: MipsOptions,
+    /// The solver and its options. The default is MATPOWER's for the OPF: MIPS, with its
+    /// defaults but `feastol` set to `opf.violation`, 5e-6.
+    pub solver: OpfSolver,
 }
 
 impl Default for DcOpfOptions {
     fn default() -> Self {
         let mut mips = MipsOptions::default();
         mips.feastol = 5e-6;
-        DcOpfOptions { mips }
+        DcOpfOptions {
+            solver: OpfSolver::Mips(mips),
+        }
+    }
+}
+
+impl DcOpfOptions {
+    /// The predictor-corrector method with MATPOWER's OPF settings: its defaults, but `feastol`
+    /// 5e-6, as MIPS runs by default.
+    pub fn mehrotra() -> Self {
+        let mut mehrotra = MehrotraOptions::default();
+        mehrotra.feastol = 5e-6;
+        DcOpfOptions {
+            solver: OpfSolver::Mehrotra(mehrotra),
+        }
     }
 }
 
@@ -56,7 +75,7 @@ impl Default for DcOpfOptions {
 ///
 /// Out-of-service generators and branches, and those at an isolated bus, report 0.0 for every
 /// quantity, as MATPOWER's `opf` sets them. An isolated bus keeps its angle from the case and
-/// has no prices. Results are reported whether or not MIPS converged: see
+/// has no prices. Results are reported whether or not the solver converged: see
 /// [`DcOpfSolution::status`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct DcOpfSolution {
@@ -82,19 +101,24 @@ pub struct DcOpfSolution {
     pub mu_angmax: Vec<f64>,
     /// The total cost ($/hr), including the costs' constant terms
     pub objective: f64,
-    /// How MIPS ended
-    pub status: MipsStatus,
-    /// MIPS's iterations
+    /// How the solver ended
+    pub status: Status,
+    /// The solver's iterations
     pub iterations: usize,
-    /// MIPS's own result, on the model's variables `[Va, Pg, y]` and constraints, with each
-    /// iteration's record
-    pub solver: MipsSolution,
+    /// The KKT residuals at the solver's point and multipliers, on the model's own problem
+    /// (per unit, and $/hr for the objective), by
+    /// [`kkt_residuals`]: one measure for either
+    /// solver
+    pub residuals: KktResiduals,
+    /// The solver's own result, on the model's variables `[Va, Pg, y]` and constraints, with
+    /// each iteration's record
+    pub solver: SolverResult,
 }
 
 impl DcOpfSolution {
-    /// Whether MIPS converged, MATPOWER's `success`.
+    /// Whether the solver converged, MATPOWER's `success`.
     pub fn converged(&self) -> bool {
-        self.status == MipsStatus::Converged
+        self.status == Status::Converged
     }
 }
 
@@ -103,9 +127,9 @@ pub fn dc_opf(case: &Case) -> Result<DcOpfSolution, PowerflowError> {
     dc_opf_with_options(case, &DcOpfOptions::default())
 }
 
-/// Solves `case`'s DC optimal power flow as MATPOWER's `rundcopf` does with MIPS (see the
-/// [module documentation](self)). A solve that MIPS doesn't finish is still returned, with its
-/// [`DcOpfSolution::status`].
+/// Solves `case`'s DC optimal power flow as MATPOWER's `rundcopf` does with MIPS, or with the
+/// solver `options` choose (see the [module documentation](self)). A solve that the solver
+/// doesn't finish is still returned, with its [`DcOpfSolution::status`].
 ///
 /// # Errors
 ///
@@ -217,17 +241,22 @@ pub fn dc_opf_with_options(
         xmin: Some(xmin),
         xmax: Some(xmax),
     };
-    let solution = qps_mips(
-        &QuadraticProblem { h, c },
-        &constraints,
-        Some(&x0),
-        &options.mips,
-    )
-    .expect("the DC OPF model's dimensions are consistent, and it has bounds");
+    let qp = QuadraticProblem { h, c };
+    let consistent = "the DC OPF model's dimensions are consistent, and it has bounds";
+    let solution = match &options.solver {
+        OpfSolver::Mips(mips) => {
+            SolverResult::Mips(qps_mips(&qp, &constraints, Some(&x0), mips).expect(consistent))
+        }
+        OpfSolver::Mehrotra(mehrotra) => SolverResult::Mehrotra(
+            qps_mehrotra(&qp, &constraints, Some(&x0), mehrotra).expect(consistent),
+        ),
+    };
+    let residuals = kkt_residuals(&qp, &constraints, solution.x(), solution.multipliers())
+        .expect("the solver's multipliers fit its problem");
 
     // The results, back on the case's tables
-    let x = &solution.x;
-    let multipliers = &solution.multipliers;
+    let x = solution.x();
+    let multipliers = solution.multipliers();
     let mut va_deg: Vec<f64> = case.bus.iter().map(|bus| bus.va_deg).collect();
     let mut lam_p = vec![0.0; case.bus.len()];
     for (i, &row) in network.bus_rows.iter().enumerate() {
@@ -272,9 +301,10 @@ pub fn dc_opf_with_options(
         mu_st,
         mu_angmin,
         mu_angmax,
-        objective: solution.f + constant,
-        status: solution.status,
-        iterations: solution.iterations,
+        objective: solution.f() + constant,
+        status: solution.status(),
+        iterations: solution.iterations(),
+        residuals,
         solver: solution,
     })
 }

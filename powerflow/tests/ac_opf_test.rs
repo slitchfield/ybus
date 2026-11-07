@@ -4,15 +4,24 @@
 //! on a binding limit), marginal costs equal to the bus prices at generators inside their
 //! limits, and the objective equal to the costs of the dispatch. Then each case checks its
 //! feature: a binding apparent-power limit, binding voltage limits, reactive costs, a
-//! dispatchable load at its power factor, and the refusals.
+//! dispatchable load at its power factor, and the refusals. Each solving case runs on both
+//! solvers, MIPS (the default) and the predictor-corrector method.
 
 mod common;
 
 use common::ac_fixture::{ac_fixture, AcBranch, AcBus, AcGen};
 use powerflow::case::{BusType, Case, GenCost};
-use powerflow::opf::ac::{ac_opf, AcOpfSolution};
+use powerflow::opf::ac::{ac_opf, ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use powerflow::opf::cost::total_cost;
 use powerflow::powerflow_error::PowerflowError;
+
+/// Both solvers, at MATPOWER's AC OPF settings
+fn solvers() -> [(&'static str, AcOpfOptions); 2] {
+    [
+        ("MIPS", AcOpfOptions::default()),
+        ("Mehrotra", AcOpfOptions::mehrotra()),
+    ]
+}
 
 /// MIPS stops at a feasibility tolerance of 5e-6 p.u. and gradient and complementarity
 /// tolerances of 1e-6, so the checks allow about that, in MW and $/MWh
@@ -197,10 +206,12 @@ fn three_bus() -> Case {
 #[test]
 fn an_unconstrained_ring_is_optimal() {
     let case = three_bus();
-    let s = ac_opf(&case).unwrap();
-    assert_optimal(&case, &s);
-    // Losses make the far bus dearer than the generator bus
-    assert!(s.lam_p[1] > s.lam_p[0], "{:?}", s.lam_p);
+    for (solver, options) in solvers() {
+        let s = ac_opf_with_options(&case, &options).unwrap();
+        assert_optimal(&case, &s);
+        // Losses make the far bus dearer than the generator bus
+        assert!(s.lam_p[1] > s.lam_p[0], "{solver}: {:?}", s.lam_p);
+    }
 }
 
 #[test]
@@ -208,17 +219,19 @@ fn a_binding_apparent_power_limit_raises_the_price_beyond_it() {
     let mut case = three_bus();
     case.branch[0].rate_a_mva = 40.0;
     case.branch[2].rate_a_mva = 60.0;
-    let s = ac_opf(&case).unwrap();
-    assert_optimal(&case, &s);
-    let binding = (0..case.branch.len()).find(|&k| s.mu_sf[k] > PRICE || s.mu_st[k] > PRICE);
-    assert!(
-        binding.is_some(),
-        "no flow limit binds: {:?} {:?}",
-        s.mu_sf,
-        s.mu_st
-    );
-    let unconstrained = ac_opf(&three_bus()).unwrap();
-    assert!(s.objective > unconstrained.objective);
+    for (solver, options) in solvers() {
+        let s = ac_opf_with_options(&case, &options).unwrap();
+        assert_optimal(&case, &s);
+        let binding = (0..case.branch.len()).find(|&k| s.mu_sf[k] > PRICE || s.mu_st[k] > PRICE);
+        assert!(
+            binding.is_some(),
+            "{solver}: no flow limit binds: {:?} {:?}",
+            s.mu_sf,
+            s.mu_st
+        );
+        let unconstrained = ac_opf_with_options(&three_bus(), &options).unwrap();
+        assert!(s.objective > unconstrained.objective, "{solver}");
+    }
 }
 
 #[test]
@@ -228,10 +241,12 @@ fn voltage_limits_bind_with_their_multipliers() {
     case.bus[1].qd_mvar = 80.0;
     case.bus[1].vmin_pu = 0.99;
     case.bus[1].vmax_pu = 1.01;
-    let s = ac_opf(&case).unwrap();
-    assert_optimal(&case, &s);
-    let binding = (0..case.bus.len()).any(|i| s.mu_vmin[i] > PRICE || s.mu_vmax[i] > PRICE);
-    assert!(binding, "no voltage limit binds: {:?}", s.vm_pu);
+    for (solver, options) in solvers() {
+        let s = ac_opf_with_options(&case, &options).unwrap();
+        assert_optimal(&case, &s);
+        let binding = (0..case.bus.len()).any(|i| s.mu_vmin[i] > PRICE || s.mu_vmax[i] > PRICE);
+        assert!(binding, "{solver}: no voltage limit binds: {:?}", s.vm_pu);
+    }
 }
 
 #[test]
@@ -241,10 +256,12 @@ fn reactive_power_costs_set_the_reactive_prices() {
         .as_mut()
         .unwrap()
         .extend([quadratic(0.01, 1.0), quadratic(0.02, 2.0)]);
-    let s = ac_opf(&case).unwrap();
-    assert_optimal(&case, &s);
-    let without = ac_opf(&three_bus()).unwrap();
-    assert!(s.objective > without.objective);
+    for (solver, options) in solvers() {
+        let s = ac_opf_with_options(&case, &options).unwrap();
+        assert_optimal(&case, &s);
+        let without = ac_opf_with_options(&three_bus(), &options).unwrap();
+        assert!(s.objective > without.objective, "{solver}");
+    }
 }
 
 #[test]
@@ -259,11 +276,13 @@ fn a_dispatchable_load_keeps_its_power_factor() {
     (load.pmin_mw, load.pmax_mw) = (-50.0, 0.0);
     (load.qmin_mvar, load.qmax_mvar) = (-20.0, 0.0);
     case.gencost.as_mut().unwrap().push(quadratic(0.0, 40.0));
-    let s = ac_opf(&case).unwrap();
-    assert_optimal(&case, &s);
-    let (p, q) = (s.pg_mw[2], s.qg_mvar[2]);
-    assert!(p < -1.0, "the load takes power: {p} MW");
-    assert!((q - 0.4 * p).abs() < MW, "{q} MVAr at {p} MW");
+    for (solver, options) in solvers() {
+        let s = ac_opf_with_options(&case, &options).unwrap();
+        assert_optimal(&case, &s);
+        let (p, q) = (s.pg_mw[2], s.qg_mvar[2]);
+        assert!(p < -1.0, "{solver}: the load takes power: {p} MW");
+        assert!((q - 0.4 * p).abs() < MW, "{solver}: {q} MVAr at {p} MW");
+    }
 }
 
 #[test]

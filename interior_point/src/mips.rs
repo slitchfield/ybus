@@ -90,17 +90,10 @@ impl Default for MipsOptions {
     }
 }
 
-/// How MIPS ended (`exitflag`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MipsStatus {
-    /// Every termination test passed (`exitflag` 1)
-    Converged,
-    /// `max_it` iterations passed without converging (0)
-    MaxIterations,
-    /// A step was NaN or too long, a step length or the barrier parameter left its range
-    /// (−1)
-    NumericalFailure,
-}
+/// How MIPS ended (`exitflag`), the status the solvers share. For MIPS, `NumericalFailure` is
+/// a NaN or too long a step, a step length below `alpha_min`, or the barrier parameter outside
+/// `[ε, 1/ε]`.
+pub use crate::solution::Status as MipsStatus;
 
 /// The multipliers at the solution, as MIPS reports them (shared with the other solvers).
 pub use crate::solution::Multipliers;

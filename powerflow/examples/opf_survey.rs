@@ -3,7 +3,10 @@
 //! this once per case and model, each in its own process, so that it can limit time and memory
 //! and record peak memory.
 //!
-//! Usage: `opf_survey --model dc|ac <case.m> [<reference-dir>]`, or `opf_survey --header`.
+//! Usage: `opf_survey --model dc|ac [--solver mips|mehrotra] <case.m> [<reference-dir>]`, or
+//! `opf_survey --header`. The solver is MIPS by default, as in MATPOWER, or the
+//! predictor-corrector method, each at MATPOWER's OPF settings (`DcOpfOptions::mehrotra`,
+//! `AcOpfOptions::mehrotra`).
 //!
 //! Prints one CSV line, with the columns in `HEADER`. Parsing and the OPF (model and solve
 //! together, as MATPOWER's elapsed time covers its setup and solve) are each timed by their median
@@ -20,10 +23,10 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use interior_point::mips::MipsStatus;
+use interior_point::solution::{KktResiduals, Status};
 use powerflow::case::Case;
-use powerflow::opf::ac::{ac_opf, AcOpfSolution};
-use powerflow::opf::dc::{dc_opf, DcOpfSolution};
+use powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
+use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
 use reference::{AcOpfReference, DcOpfReference};
 
 /// The columns.
@@ -39,13 +42,17 @@ use reference::{AcOpfReference, DcOpfReference};
 ///   them non-unique.
 /// - **Against the legacy implementation,** where its results were generated: its outcome,
 ///   iterations and time, and the same differences of ours from it and of it from MP-Core.
+/// - **The solver and its KKT residuals** (last): `mips` or `mehrotra`, and the residuals at its
+///   point and multipliers on the OPF's own problem, unscaled (`DcOpfSolution::residuals`),
+///   empty for an error.
 const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_runs,outcome,\
                       iterations,matpower_success,matpower_iterations,singular,matpower_ms,\
                       objective_rel,lam_p_rel,lam_q_rel,primal_abs,multiplier_abs,\
                       legacy_success,legacy_iterations,legacy_ms,\
                       legacy_objective_rel,legacy_lam_p_rel,legacy_lam_q_rel,legacy_primal_abs,\
                       legacy_multiplier_abs,cores_objective_rel,cores_lam_p_rel,cores_lam_q_rel,\
-                      cores_primal_abs,cores_multiplier_abs";
+                      cores_primal_abs,cores_multiplier_abs,solver,kkt_stationarity,\
+                      kkt_feasibility,kkt_complementarity,kkt_dual_feasibility";
 
 /// How long to keep repeating a step for its median time
 const BUDGET: Duration = Duration::from_secs(1);
@@ -56,6 +63,12 @@ const MAX_RUNS: usize = 101;
 enum Model {
     Dc,
     Ac,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Solver {
+    Mips,
+    Mehrotra,
 }
 
 fn main() -> ExitCode {
@@ -69,12 +82,20 @@ fn main() -> ExitCode {
         [flag, model, rest @ ..] if flag == "--model" && model == "ac" => (Model::Ac, rest),
         _ => return usage(),
     };
+    let (solver, rest) = match rest {
+        [flag, solver, rest @ ..] if flag == "--solver" && solver == "mips" => (Solver::Mips, rest),
+        [flag, solver, rest @ ..] if flag == "--solver" && solver == "mehrotra" => {
+            (Solver::Mehrotra, rest)
+        }
+        [flag, ..] if flag == "--solver" => return usage(),
+        rest => (Solver::Mips, rest),
+    };
     let (case, references) = match rest {
         [case] => (case, None),
         [case, references] => (case, Some(Path::new(references))),
         _ => return usage(),
     };
-    match survey(Path::new(case), references, model) {
+    match survey(Path::new(case), references, model, solver) {
         Ok(line) => {
             println!("{line}");
             ExitCode::SUCCESS
@@ -87,7 +108,10 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: opf_survey --model dc|ac <case.m> [<reference-dir>] | --header");
+    eprintln!(
+        "usage: opf_survey --model dc|ac [--solver mips|mehrotra] <case.m> [<reference-dir>] \
+         | --header"
+    );
     ExitCode::from(2)
 }
 
@@ -95,6 +119,9 @@ fn usage() -> ExitCode {
 struct Fields {
     objective: f64,
     success: bool,
+    /// How our solve ended, and its KKT residuals (none for a reference)
+    status: Option<Status>,
+    residuals: Option<KktResiduals>,
     iterations: usize,
     lam_p: Vec<f64>,
     /// `LAM_Q`, for AC only
@@ -107,7 +134,9 @@ impl Fields {
     fn dc(s: &DcOpfSolution) -> Fields {
         Fields {
             objective: s.objective,
-            success: s.status == MipsStatus::Converged,
+            success: s.converged(),
+            status: Some(s.status),
+            residuals: Some(s.residuals),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: None,
@@ -127,6 +156,8 @@ impl Fields {
         Fields {
             objective: r.objective,
             success: r.success,
+            status: None,
+            residuals: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: None,
@@ -145,7 +176,9 @@ impl Fields {
     fn ac(s: &AcOpfSolution) -> Fields {
         Fields {
             objective: s.objective,
-            success: s.status == MipsStatus::Converged,
+            success: s.converged(),
+            status: Some(s.status),
+            residuals: Some(s.residuals),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: Some(s.lam_q.clone()),
@@ -178,6 +211,8 @@ impl Fields {
         Fields {
             objective: r.objective,
             success: r.success,
+            status: None,
+            residuals: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: Some(r.lam_q.clone()),
@@ -247,7 +282,12 @@ fn differences(a: &Fields, b: &Fields) -> String {
 
 /// The CSV line for the case at `path`. Errors only if the case can't be read; an OPF that fails
 /// is reported in the line.
-fn survey(path: &Path, references: Option<&Path>, model: Model) -> Result<String, String> {
+fn survey(
+    path: &Path,
+    references: Option<&Path>,
+    model: Model,
+    solver: Solver,
+) -> Result<String, String> {
     let name = path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -256,22 +296,28 @@ fn survey(path: &Path, references: Option<&Path>, model: Model) -> Result<String
     let case = case.map_err(|err| err.to_string())?;
     let (opf, runs, ours) = match model {
         Model::Dc => {
-            let (t, n, s) = time(|| dc_opf(&case));
+            let options = match solver {
+                Solver::Mips => DcOpfOptions::default(),
+                Solver::Mehrotra => DcOpfOptions::mehrotra(),
+            };
+            let (t, n, s) = time(|| dc_opf_with_options(&case, &options));
             (t, n, s.map(|s| Fields::dc(&s)))
         }
         Model::Ac => {
-            let (t, n, s) = time(|| ac_opf(&case));
+            let options = match solver {
+                Solver::Mips => AcOpfOptions::default(),
+                Solver::Mehrotra => AcOpfOptions::mehrotra(),
+            };
+            let (t, n, s) = time(|| ac_opf_with_options(&case, &options));
             (t, n, s.map(|s| Fields::ac(&s)))
         }
     };
     let (outcome, iterations) = match &ours {
-        Ok(fields) if fields.success => ("converged".to_string(), fields.iterations.to_string()),
         Ok(fields) => (
-            // Not converged: MIPS's iteration limit, or a numerical failure before it
-            if fields.iterations >= 150 {
-                "max iterations"
-            } else {
-                "numerical failure"
+            match fields.status.expect("our own solve has a status") {
+                Status::Converged => "converged",
+                Status::MaxIterations => "max iterations",
+                Status::NumericalFailure => "numerical failure",
             }
             .to_string(),
             fields.iterations.to_string(),
@@ -351,8 +397,20 @@ fn survey(path: &Path, references: Option<&Path>, model: Model) -> Result<String
         Model::Dc => "dc",
         Model::Ac => "ac",
     };
+    let solver_name = match solver {
+        Solver::Mips => "mips",
+        Solver::Mehrotra => "mehrotra",
+    };
+    let kkt = match ours.as_ref().ok().and_then(|fields| fields.residuals) {
+        Some(r) => format!(
+            "{:e},{:e},{:e},{:e}",
+            r.stationarity, r.feasibility, r.complementarity, r.dual_feasibility
+        ),
+        None => ",,,".to_string(),
+    };
     Ok(format!(
-        "{name},{},{},{},{model_name},{:.3},{:.3},{runs},{outcome},{iterations},{core},{legacy}",
+        "{name},{},{},{},{model_name},{:.3},{:.3},{runs},{outcome},{iterations},{core},{legacy},\
+         {solver_name},{kkt}",
         case.bus.len(),
         case.branch.len(),
         case.generator.len(),
