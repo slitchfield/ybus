@@ -495,6 +495,19 @@ with legacy results generated locally to explain differences.
       fixed; a symmetric indefinite LDLᵀ factorization in `sparse_mat`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
       augmented KKT systems.
+      - [x] **The analysis kept while the pattern holds** (target 1;
+        [`kkt-analysis-2026-11-07.md`](benchmarks/kkt-analysis-2026-11-07.md)):
+        - **The change:** both solvers share `KktAnalysis`, which analyzes the KKT matrix once
+          and reanalyzes only when `SymbolicLu::factor` reports a different pattern.
+        - **Bit for bit the same:** a snapshot of 72 cases, and every result column of the full
+          OPF survey, match.
+        - **Reuse held everywhere:** all 292 survey solves analyzed once.
+        - **Faster, median:** DC 2.15× (MIPS) and 1.66× (the predictor-corrector method), AC
+          1.38× and 1.33×. The largest AC cases gain 1.05–1.16×, where the factorization
+          dominates.
+        - **More than the profile's bound on DC,** whose innermost-frame rule had counted the
+          analysis's own allocation as allocation.
+      - [ ] **A symmetric indefinite LDLᵀ** (target 2), with its inertia.
 - [ ] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
       compare against. MIPS's LU switched from AMD to COLAMD in O1's PR 2: with zero diagonals
       in the equality block, AMD's factors filled 14 million entries on `case_ACTIVSg10k`
