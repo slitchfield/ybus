@@ -468,7 +468,29 @@ with legacy results generated locally to explain differences.
 
 ## Phase O4: accelerating the interior-point solvers
 
-- [ ] **Decide** what to accelerate, from profiles: the KKT solve is the expected hot spot.
+- [x] **Decide** what to accelerate, from profiles: the KKT solve is the expected hot spot.
+      - **Recorded** in [`ipm-profile-2026-11-07.md`](benchmarks/ipm-profile-2026-11-07.md): samply
+        profiles of both solvers on the DC and AC OPF, three DC and five AC cases, folded into
+        stages, with the KKT matrices' size and fill.
+      - **What it found:**
+        - **The numeric LU factorization of the KKT matrix dominates,** at 38–80%, growing with
+          size, with fill of 5.5–9.1×.
+        - **The analysis (COLAMD and the symbolic LU) comes second:** 27–35% on mid-size DC and
+          5–15% on AC. It's redone every iteration, though the pattern is fixed.
+        - **Then allocation (5–18%) and the OPF's evaluation** (7–19% on AC). The second solve
+          costs 0.6–2.2%.
+        - **Both solvers share these hot spots.**
+      - **Decided with the maintainer (2026-11-07):**
+        - **The rule on results:** MIPS's default path stays bit for bit the same, keeping its
+          MATPOWER parity. Arithmetic changes come as options, or as the predictor-corrector
+          solver's default, judged by O3's bar.
+        - **The targets, in order:**
+          1. analyze the KKT matrix once per solve, bit for bit the same (up to 1.5× on
+             mid-size DC);
+          2. a symmetric indefinite LDLᵀ with Bunch–Kaufman pivoting, with its inertia (up to
+             1.7× on the largest cases if it halves the factorization);
+          3. allocation in the KKT assembly and the loops;
+          4. the OPF's evaluation.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `sparse_mat`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
