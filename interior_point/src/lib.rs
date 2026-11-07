@@ -7,6 +7,11 @@
 //!   linear constraints and bounds.
 //! - [`mips`]: MIPS, the MATPOWER Interior Point Solver, reimplemented step for step from
 //!   MATPOWER's `mips.m`, so that its iterations and results can be checked against MATPOWER's.
+//! - [`solution`]: what the solvers' results share: the multipliers, and
+//!   [`solution::kkt_residuals`], a check of the KKT conditions at a point that doesn't depend
+//!   on the solver.
+//! - [`mehrotra`]: a primal-dual method with Mehrotra's predictor-corrector, written from the
+//!   literature, for the same programs (so far, those without nonlinear constraints).
 //! - [`interior_point_error`]: why a solver couldn't start.
 //!
 //! The linear algebra is [`sparse_mat`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
@@ -16,6 +21,8 @@
 #![forbid(unsafe_code)]
 
 pub mod interior_point_error;
+pub mod mehrotra;
 pub mod mips;
 pub mod problem;
+pub mod solution;
 mod vector;
