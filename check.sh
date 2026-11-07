@@ -12,13 +12,22 @@ cargo test --workspace --all-targets
 #   features, and the clippy runs still build them with every feature set.
 targets=(--lib --bins --tests --examples)
 cargo test --workspace "${targets[@]}" --all-features
-# Each optional feature on its own, to catch code that only builds or lints cleanly when
-#   another feature is also enabled. Keep this list in sync with [features] in
+# The API docs, with broken intra-doc links as errors: by default, with every feature, and (in
+#   the loop below) with each feature on its own, since a link to an item behind a feature
+#   breaks only in the builds without it
+doc() {
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace "$@"
+}
+doc
+doc --all-features
+# Each optional feature on its own, to catch code that only builds, lints or documents cleanly
+#   when another feature is also enabled. Keep this list in sync with [features] in
 #   sparse_mat/Cargo.toml and powerflow/Cargo.toml. The workspace root has no features of its
 #   own, so each one is named with its crate. The GPU tests skip on a machine without CUDA;
 #   YBUS_REQUIRE_CUDA=1 makes that a failure instead.
 for feature in sparse_mat/serde sparse_mat/rayon powerflow/rayon powerflow/cuda; do
     cargo clippy --workspace --all-targets --features "$feature" -- -D warnings -W clippy::all
     cargo test --workspace "${targets[@]}" --features "$feature"
+    doc --features "$feature"
 done
 cargo test --workspace --doc
