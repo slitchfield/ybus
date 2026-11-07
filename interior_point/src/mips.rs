@@ -8,7 +8,8 @@
 //! (MIPS 1.5.2, in MATPOWER 8.1) so that its iterations, results and multipliers match
 //! MATPOWER's (Wang, Murillo-Sánchez, Zimmerman and Thomas, 2007).
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering};
+use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, Lu, LuOptions, Ordering, SymbolicLu};
+use sparse_mat::sparse_error::SparseError;
 
 use crate::interior_point_error::InteriorPointError;
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
@@ -25,7 +26,44 @@ use crate::vector::{dot, norm_inf};
 /// where COLAMD takes 44 to MATPOWER's 45 and AMD 45. Neither is UMFPACK's own ordering, which
 /// MATPOWER uses under Octave; a fuller study of the KKT solve is a follow-up in
 /// `docs/OptimizationChecklist.md`.
+///
+/// The solvers analyze the KKT matrix (this ordering, and the symbolic LU) once, and keep the
+/// analysis for every later iteration whose KKT matrix has the same pattern, which is all of
+/// them when the problem's Jacobians and Hessians keep theirs: the ordering is chosen from the
+/// pattern alone, so a kept analysis factors exactly as a fresh one would.
 pub const KKT_ORDERING: Ordering = Ordering::Colamd;
+
+/// The KKT matrix's analysis, kept across a solve's iterations while its pattern holds (see
+/// [`KKT_ORDERING`]), with the number of analyses made.
+#[derive(Default)]
+pub(crate) struct KktAnalysis {
+    symbolic: Option<SymbolicLu>,
+    analyses: usize,
+}
+
+impl KktAnalysis {
+    /// Factors `kkt` with the kept analysis, or, if there is none yet or `kkt`'s pattern
+    /// differs from the one it was made for, with a fresh one, which is then kept. Returns
+    /// `analyze_lu`'s and `factor`'s errors.
+    pub(crate) fn factor(&mut self, kkt: &CscMatrix<f64>) -> Result<Lu<f64>, SparseError> {
+        if let Some(symbolic) = &self.symbolic {
+            match symbolic.factor(kkt, LuOptions::default()) {
+                Err(SparseError::PatternMismatch) => {}
+                factored => return factored,
+            }
+        }
+        let symbolic = kkt.analyze_lu(KKT_ORDERING)?;
+        self.analyses += 1;
+        let factored = symbolic.factor(kkt, LuOptions::default());
+        self.symbolic = Some(symbolic);
+        factored
+    }
+
+    /// The analyses made so far.
+    pub(crate) fn analyses(&self) -> usize {
+        self.analyses
+    }
+}
 
 /// MIPS's options, with its defaults.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -137,6 +175,9 @@ pub struct MipsSolution {
     pub multipliers: Multipliers,
     /// One record for the starting point and one per iteration
     pub history: Vec<IterationRecord>,
+    /// How many times the KKT matrix was analyzed: 1 if its pattern held from the first
+    /// iteration to the last (see [`KKT_ORDERING`]), 0 if no iteration factored it
+    pub analyses: usize,
 }
 
 impl MipsSolution {
@@ -439,6 +480,7 @@ pub fn mips<P: Problem>(
     let mut converged = tolerances_met(feascond, gradcond, compcond, costcond);
     let mut failed = false;
     let mut i = 0;
+    let mut analysis = KktAnalysis::default();
 
     while !converged && i < opt.max_it {
         i += 1;
@@ -484,10 +526,7 @@ pub fn mips<P: Problem>(
         }
         let kkt = CscMatrix::from_triplets(size, size, triplets).expect("indices in range");
         let rhs: Vec<f64> = n_vec.iter().chain(&e.g).map(|v| -v).collect();
-        let solved = kkt
-            .analyze_lu(KKT_ORDERING)
-            .and_then(|symbolic| symbolic.factor(&kkt, LuOptions::default()))
-            .and_then(|lu| lu.solve(&rhs));
+        let solved = analysis.factor(&kkt).and_then(|lu| lu.solve(&rhs));
         let dxdlam = match solved {
             Ok(step) => step,
             // MATLAB's backslash returns NaN or Inf for a singular system, which MIPS treats
@@ -660,6 +699,7 @@ pub fn mips<P: Problem>(
         iterations: i,
         multipliers,
         history,
+        analyses: analysis.analyses(),
     })
 }
 

@@ -79,6 +79,12 @@ fn check<P: Problem>(
     let field = |key: &str| reference.0.get(key);
     assert_eq!(field("eflag").unwrap()[0], 1.0, "{name}: MIPS converges");
     assert!(solution.converged(), "{name}: {:?}", solution.status);
+    // One analysis serves the whole solve where the KKT pattern holds. nonlinear3 builds its
+    //   Jacobian with from_dense, which stores no zeros, and starts at x₃ = 0, so an entry
+    //   appears once x₃ moves (nonlinear2's x₂ = 0 is a bound, which this method moves off
+    //   first, so its pattern holds)
+    let expected = if name == "nonlinear3" { 2 } else { 1 };
+    assert_eq!(solution.analyses, expected, "{name}: analyses");
     close_within(
         &[solution.f],
         field("f").unwrap(),
