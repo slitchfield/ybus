@@ -1,18 +1,25 @@
 // Tests the predictor-corrector method (interior_point::mehrotra) on the test problems of
-//   MATPOWER's MIPS tests that have no nonlinear constraints (tests/common): it must converge
+//   MATPOWER's MIPS tests (tests/common), with and without nonlinear constraints: it must converge
 //   wherever MATPOWER's MIPS does, with the objective within 1e-6 (relative) of MIPS's, the
 //   solution and multipliers close to MIPS's and to each problem's known answer, and small KKT
-//   residuals; and fail where MIPS fails. Its iteration counts are printed beside MIPS's.
+//   residuals; and fail where MIPS fails. On a nonconvex problem where the two may stop at
+//   different local optima, it must reach a verified KKT point at a known one. Its iteration
+//   counts are printed beside MIPS's.
 
 mod common;
 
 use common::{
-    dense, known, qp4_constraints, qp4_hessian, references, Banana, Nonlinear2, Quadratic3,
+    dense, known, qp4_constraints, qp4_hessian, references, Banana, Hs71, Nonlinear2, Nonlinear3,
+    Quadratic3,
 };
-use interior_point::interior_point_error::InteriorPointError;
-use interior_point::mehrotra::{mehrotra, qps_mehrotra, MehrotraOptions, MehrotraSolution};
-use interior_point::problem::{Constraints, Problem, QuadraticProblem};
+use interior_point::mehrotra::{
+    mehrotra, qps_mehrotra, MehrotraOptions, MehrotraSolution, MehrotraStatus,
+};
+use interior_point::problem::{
+    Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
+};
 use interior_point::solution::kkt_residuals;
+use sparse_mat::compressed_matrix::CsrMatrix;
 
 /// The bar for the objective, relative to the larger magnitude (at least 1)
 const OBJECTIVE: f64 = 1e-6;
@@ -35,6 +42,9 @@ fn expected_iterations(name: &str) -> usize {
         "qp4" | "qps_qp4" => 13,
         "lp3" => 10,
         "qp2" => 8,
+        "nonlinear2" => 12,
+        "nonlinear3" => 6,
+        "hs71" => 11,
         _ => panic!("no expected iteration count for {name}"),
     }
 }
@@ -67,11 +77,6 @@ fn check<P: Problem>(
     let field = |key: &str| reference.0.get(key);
     assert_eq!(field("eflag").unwrap()[0], 1.0, "{name}: MIPS converges");
     assert!(solution.converged(), "{name}: {:?}", solution.status);
-    assert_eq!(
-        solution.iterations,
-        expected_iterations(name),
-        "{name}: iterations"
-    );
     close_within(
         &[solution.f],
         field("f").unwrap(),
@@ -86,18 +91,21 @@ fn check<P: Problem>(
     );
     let m = &solution.multipliers;
     for (key, ours) in [
+        ("eqnonlin", &m.eq_nonlin),
+        ("ineqnonlin", &m.ineq_nonlin),
         ("mu_l", &m.mu_l),
         ("mu_u", &m.mu_u),
         ("lower", &m.lower),
         ("upper", &m.upper),
     ] {
-        let theirs = field(key).unwrap();
-        worst = worst.max(close_within(
-            ours,
-            theirs,
-            AGREEMENT,
-            &format!("{name}: {key}"),
-        ));
+        match field(key) {
+            Some(theirs) => {
+                let what = format!("{name}: {key}");
+                worst = worst.max(close_within(ours, theirs, AGREEMENT, &what));
+            }
+            // MIPS leaves out the nonlinear multipliers when there are no such constraints
+            None => assert!(ours.is_empty(), "{name}: {key} should be empty"),
+        }
     }
     let residuals = kkt_residuals(problem, constraints, &solution.x, m).unwrap();
     assert!(residuals.max() < RESIDUAL, "{name}: {residuals:?}");
@@ -106,6 +114,11 @@ fn check<P: Problem>(
         solution.iterations,
         field("iterations").unwrap()[0],
         residuals.max()
+    );
+    assert_eq!(
+        solution.iterations,
+        expected_iterations(name),
+        "{name}: iterations"
     );
 }
 
@@ -277,22 +290,198 @@ fn fixed_variables_and_two_sided_bounds_are_handled() {
     assert!(residuals.max() < RESIDUAL, "{residuals:?}");
 }
 
+/// hs71's bounds, 1 ≤ x ≤ 5
+fn hs71_bounds() -> Constraints {
+    Constraints {
+        xmin: Some(vec![1.0; 4]),
+        xmax: Some(vec![5.0; 4]),
+        ..Constraints::default()
+    }
+}
+
+/// hs71's known local optima: MIPS without step control stops at the first from
+/// (4.5, 4.5, 4.5, 4.5), and the second is the optimum Hock and Schittkowski give
+const HS71_OPTIMA: [(&str, f64); 2] = [
+    ("the local point", 35.278_137_612_159_04),
+    ("the optimum", 17.0140173),
+];
+
+/// Which of hs71's known optima `f` is, within the objective bar
+fn hs71_optimum(f: f64) -> Option<&'static str> {
+    HS71_OPTIMA
+        .iter()
+        .find(|(_, optimum)| (f - optimum).abs() <= OBJECTIVE * optimum.abs())
+        .map(|(name, _)| *name)
+}
+
 #[test]
-fn nonlinear_constraints_are_not_supported_yet() {
+fn nonlinear_programs_match_mips() {
+    let options = MehrotraOptions::default();
     let bounds = Constraints {
         xmin: Some(vec![0.0; 2]),
         ..Constraints::default()
     };
-    assert_eq!(
-        mehrotra(
-            &Nonlinear2,
-            &[1.1, 0.0],
-            &bounds,
-            &MehrotraOptions::default()
-        )
-        .unwrap_err(),
-        InteriorPointError::Unsupported {
-            what: "nonlinear constraints"
-        }
+    let s = mehrotra(&Nonlinear2, &[1.1, 0.0], &bounds, &options).unwrap();
+    check("nonlinear2", &Nonlinear2, &bounds, &s);
+    known(&s.x, &[1.0, 1.0], 6, "nonlinear2 x");
+    known(&s.multipliers.ineq_nonlin, &[0.0, 0.5], 6, "nonlinear2 mu");
+
+    let none = Constraints::default();
+    let s = mehrotra(&Nonlinear3, &[1.0, 1.0, 0.0], &none, &options).unwrap();
+    check("nonlinear3", &Nonlinear3, &none, &s);
+    known(
+        &s.x,
+        &[1.58113883, 2.23606798, 1.58113883],
+        6,
+        "nonlinear3 x",
     );
+    known(&[s.f], &[-5.0 * 2f64.sqrt()], 6, "nonlinear3 f");
+    known(
+        &s.multipliers.ineq_nonlin,
+        &[0.0, 2f64.sqrt() / 2.0],
+        7,
+        "nonlinear3 mu",
+    );
+
+    let s = mehrotra(&Hs71, &[1.0, 5.0, 5.0, 1.0], &hs71_bounds(), &options).unwrap();
+    check("hs71", &Hs71, &hs71_bounds(), &s);
+    known(&s.x, &[1.0, 4.7429994, 3.8211503, 1.3794082], 6, "hs71 x");
+    known(&[s.f], &[17.0140173], 6, "hs71 f");
+    known(&s.multipliers.eq_nonlin, &[0.1614686], 5, "hs71 lambda");
+    known(&s.multipliers.ineq_nonlin, &[0.55229366], 5, "hs71 mu");
+    known(
+        &s.multipliers.lower,
+        &[1.08787121024, 0.0, 0.0, 0.0],
+        5,
+        "hs71 lower",
+    );
+}
+
+/// What this method does on hs71 from each other start (2026-11-07), pinned as the iteration
+/// counts are: the status, the iterations, and which known optimum it reached
+fn expected_hs71(label: &str) -> (MehrotraStatus, usize, Option<&'static str>) {
+    match label {
+        // MIPS without step control stops at the local point (11 iterations)
+        "4.5" => (MehrotraStatus::Converged, 13, Some("the optimum")),
+        // MIPS reaches its iteration limit (150)
+        "2" => (MehrotraStatus::Converged, 13, Some("the optimum")),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn hs71_from_other_starts_reaches_a_known_kkt_point() {
+    let options = MehrotraOptions::default();
+    for (x0, label) in [([4.5; 4], "4.5"), ([2.0; 4], "2")] {
+        let s = mehrotra(&Hs71, &x0, &hs71_bounds(), &options).unwrap();
+        let runs = references();
+        let mips = &runs[&(format!("hs71_from_{label}"), false)];
+        let optimum = if s.converged() {
+            hs71_optimum(s.f)
+        } else {
+            None
+        };
+        eprintln!(
+            "hs71 from {label}: {:?} after {} iterations, f = {}, {} (MIPS: eflag {}, {} \
+             iterations, f = {})",
+            s.status,
+            s.iterations,
+            s.f,
+            optimum.unwrap_or("not a known optimum"),
+            mips.0["eflag"][0],
+            mips.0["iterations"][0],
+            mips.0["f"][0],
+        );
+        if s.converged() {
+            let residuals = kkt_residuals(&Hs71, &hs71_bounds(), &s.x, &s.multipliers).unwrap();
+            assert!(
+                residuals.max() < RESIDUAL,
+                "hs71 from {label}: {residuals:?}"
+            );
+            assert!(
+                optimum.is_some(),
+                "hs71 from {label}: f = {} is no known optimum",
+                s.f
+            );
+        }
+        // Where MIPS converges, so must this method
+        if mips.0["eflag"][0] == 1.0 {
+            assert!(s.converged(), "hs71 from {label}: {:?}", s.status);
+        }
+        assert_eq!(
+            (s.status, s.iterations, optimum),
+            expected_hs71(label),
+            "hs71 from {label}"
+        );
+    }
+}
+
+#[test]
+fn the_cost_scale_comes_off_the_multipliers() {
+    // The AC OPF solves with cost_mult 1e-4: the same point, objective and multipliers
+    let x0 = [1.0, 5.0, 5.0, 1.0];
+    let plain = mehrotra(&Hs71, &x0, &hs71_bounds(), &MehrotraOptions::default()).unwrap();
+    let mut options = MehrotraOptions::default();
+    options.cost_mult = 1e-2;
+    let scaled = mehrotra(&Hs71, &x0, &hs71_bounds(), &options).unwrap();
+    assert!(scaled.converged(), "{:?}", scaled.status);
+    let tolerance = 1e-6;
+    close_within(&scaled.x, &plain.x, tolerance, "x");
+    close_within(&[scaled.f], &[plain.f], tolerance, "f");
+    let (a, b) = (&scaled.multipliers, &plain.multipliers);
+    close_within(&a.eq_nonlin, &b.eq_nonlin, tolerance, "eq_nonlin");
+    close_within(&a.ineq_nonlin, &b.ineq_nonlin, tolerance, "ineq_nonlin");
+    close_within(&a.lower, &b.lower, tolerance, "lower");
+    close_within(&a.upper, &b.upper, tolerance, "upper");
+}
+
+/// min x₂ − x₁ subject to x₁² − x₂ = 0 and 0 ≤ x₁ ≤ 2: on the parabola, x₁² − x₁ is least at
+/// x₁ = 1/2, so the optimum is (1/2, 1/4) with f = −1/4 and λ = 1 (∇f + λ ∇g = (−1 + 2λx₁,
+/// 1 − λ) = 0). λ starts at 0, so the Lagrangian's Hessian λ ∇²g is zero at first, though the
+/// constraint's Jacobian still couples x to λ
+struct Parabola;
+
+impl Problem for Parabola {
+    fn dimension(&self) -> usize {
+        2
+    }
+    fn objective(&self, x: &[f64]) -> (f64, Vec<f64>) {
+        (x[1] - x[0], vec![-1.0, 1.0])
+    }
+    fn objective_hessian(&self, _: &[f64]) -> CsrMatrix<f64> {
+        CsrMatrix::from_triplets(2, 2, vec![]).unwrap()
+    }
+    fn has_nonlinear_constraints(&self) -> bool {
+        true
+    }
+    fn constraints(&self, x: &[f64]) -> NonlinearConstraints {
+        NonlinearConstraints {
+            h: vec![],
+            g: vec![x[0] * x[0] - x[1]],
+            dh: CsrMatrix::from_triplets(0, 2, vec![]).unwrap(),
+            dg: dense(&[&[2.0 * x[0], -1.0]]),
+        }
+    }
+    fn lagrangian_hessian(&self, _: &[f64], m: NonlinearMultipliers<'_>, _: f64) -> CsrMatrix<f64> {
+        CsrMatrix::from_triplets(2, 2, vec![(0, 0, 2.0 * m.eq[0])]).unwrap()
+    }
+}
+
+#[test]
+fn a_nonlinear_equality_couples_the_steps_from_the_start() {
+    let bounds = Constraints {
+        xmin: Some(vec![0.0, f64::NEG_INFINITY]),
+        xmax: Some(vec![2.0, f64::INFINITY]),
+        ..Constraints::default()
+    };
+    let s = mehrotra(&Parabola, &[1.5, 0.0], &bounds, &MehrotraOptions::default()).unwrap();
+    eprintln!("parabola: {:?} after {} iterations", s.status, s.iterations);
+    assert!(s.converged(), "{:?}", s.status);
+    // Pinned (2026-11-07): with separate step lengths while the Hessian is zero, it takes 5
+    assert_eq!(s.iterations, 6, "iterations");
+    known(&s.x, &[0.5, 0.25], 6, "x");
+    known(&[s.f], &[-0.25], 6, "f");
+    known(&s.multipliers.eq_nonlin, &[1.0], 6, "lambda");
+    let residuals = kkt_residuals(&Parabola, &bounds, &s.x, &s.multipliers).unwrap();
+    assert!(residuals.max() < RESIDUAL, "{residuals:?}");
 }

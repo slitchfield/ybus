@@ -11,7 +11,7 @@
 //!   [`solution::kkt_residuals`], a check of the KKT conditions at a point that doesn't depend
 //!   on the solver.
 //! - [`mehrotra`]: a primal-dual method with Mehrotra's predictor-corrector, written from the
-//!   literature, for the same programs (so far, those without nonlinear constraints).
+//!   literature, for the same programs.
 //! - [`interior_point_error`]: why a solver couldn't start.
 //!
 //! The linear algebra is [`sparse_mat`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
