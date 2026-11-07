@@ -14,8 +14,8 @@ rust-version.workspace = true
 #   DcSensitivity::par_ptdf_columns and par_lodf_columns)
 rayon = ["sparse_mat/rayon", "dep:rayon"]
 # The GPU path, through ybus_cuda (which needs a CUDA 13 driver and cuSPARSE at run time, not to
-#   build): so far, the cuda_survey example and tests that B′ and Jacobian factors solve alike
-#   on the GPU
+#   build): DcStudy::gpu's batched DC solves and single-branch outages, DcSensitivity::gpu's
+#   PTDF columns and transfers, the cuda_survey and cuda_dc_survey examples, and their tests
 cuda = ["dep:ybus_cuda"]
 
 [dependencies]
@@ -31,6 +31,10 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 
 [[example]]
 name = "cuda_survey"
+required-features = ["cuda", "rayon"]
+
+[[example]]
+name = "cuda_dc_survey"
 required-features = ["cuda", "rayon"]
 
 [[bench]]

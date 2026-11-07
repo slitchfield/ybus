@@ -9,6 +9,8 @@
 //!   the generator costs ([`opf::cost`]).
 //! - [`islands`]: a network's islands and bridges ([`islands::find_islands`],
 //!   [`islands::find_bridges`]), as MATPOWER's `find_islands` and `find_bridges` define them.
+//! - With the `cuda` feature, the DC power flow's batched solves on the GPU
+//!   ([`dc::DcStudy::gpu`]), on a [`Gpu`] from `ybus_cuda`.
 //!
 //! Both power flows are validated against MATPOWER's own results; see the roadmap in
 //! `docs/PowerFlowChecklist.md`.
@@ -24,3 +26,7 @@ pub mod islands;
 pub mod opf;
 pub mod powerflow_error;
 mod topology;
+
+/// The CUDA device the GPU path runs on (feature `cuda`).
+#[cfg(feature = "cuda")]
+pub use ybus_cuda::Gpu;

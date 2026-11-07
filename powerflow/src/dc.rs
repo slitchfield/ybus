@@ -31,9 +31,13 @@ use crate::powerflow_error::PowerflowError;
 use crate::topology::Topology;
 use reach::Reachability;
 
+#[cfg(feature = "cuda")]
+mod gpu;
 mod outage;
 mod reach;
 mod sensitivity;
+#[cfg(feature = "cuda")]
+pub use gpu::{DcGpuSensitivity, DcGpuStudy, OutageLoading};
 pub use sensitivity::{DcSensitivity, PtdfSlack};
 
 /// The DC model of a case: the B matrices and phase-shifter injections in per unit, over the
@@ -502,11 +506,20 @@ impl DcStudy<'_> {
 
     /// dcpf's right-hand side over the unknowns: `P[pv, pq] − B[pv, pq; ref] · θ[ref]`.
     fn rhs(&self, pbus: &[f64], theta: &[f64]) -> Vec<f64> {
-        let model = self.model;
-        let b_ref = model
+        self.rhs_with(&self.reference_coupling(), pbus, theta)
+    }
+
+    /// `B[pv, pq; ref]`, which couples the unknowns to the reference buses' fixed angles.
+    fn reference_coupling(&self) -> CsrMatrix<f64> {
+        self.model
             .bbus
-            .select(&self.unknown, &model.topology.ref_buses)
-            .expect("indices in range");
+            .select(&self.unknown, &self.model.topology.ref_buses)
+            .expect("indices in range")
+    }
+
+    /// [`DcStudy::rhs`] with [`DcStudy::reference_coupling`] already made, for many solves.
+    fn rhs_with(&self, b_ref: &CsrMatrix<f64>, pbus: &[f64], theta: &[f64]) -> Vec<f64> {
+        let model = self.model;
         let theta_ref: Vec<f64> = model
             .topology
             .ref_buses

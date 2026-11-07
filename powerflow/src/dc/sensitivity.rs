@@ -50,14 +50,14 @@ pub enum PtdfSlack {
 /// row. A branch that's out of service, or a bus that isn't connected, gets zeros.
 #[derive(Debug, Clone)]
 pub struct DcSensitivity<'a> {
-    model: &'a DcModel,
+    pub(super) model: &'a DcModel,
     /// The single slack bus (internal) the factorization leaves out
     slack: usize,
     /// For a distributed slack, each internal bus's normalized weight
     weights: Option<Vec<f64>>,
     /// Each internal bus's position among the factorization's unknowns, `None` for the slack
-    position: Vec<Option<usize>>,
-    factor: Option<Cow<'a, Factor>>,
+    pub(super) position: Vec<Option<usize>>,
+    pub(super) factor: Option<Cow<'a, Factor>>,
     /// Whether each internal branch is a bridge of the model's graph
     bridge: Vec<bool>,
 }
@@ -255,7 +255,7 @@ impl DcSensitivity<'_> {
 
     /// With a distributed slack, the flows the weighted withdrawal causes, `H w`, which every
     /// column loses.
-    fn distributed_shift(&self) -> Option<Vec<f64>> {
+    pub(super) fn distributed_shift(&self) -> Option<Vec<f64>> {
         self.weights.as_ref().map(|weights| {
             let injections: Vec<(usize, f64)> = weights.iter().copied().enumerate().collect();
             self.flows(&self.solve(&injections))
@@ -406,7 +406,10 @@ impl DcSensitivity<'_> {
 
     /// The internal bus of each case bus row, `None` if it isn't connected, checking the rows
     /// are in range.
-    fn internal_buses(&self, rows: &[usize]) -> Result<Vec<Option<usize>>, PowerflowError> {
+    pub(super) fn internal_buses(
+        &self,
+        rows: &[usize],
+    ) -> Result<Vec<Option<usize>>, PowerflowError> {
         let topology = &self.model.topology;
         let len = topology.case_shape.0;
         rows.iter()

@@ -95,7 +95,7 @@ impl DcStudy<'_> {
     /// The base solve the outages share: the scheduled injections, the base angles (radians),
     /// the base unknowns, and each internal bus's position among the unknowns.
     #[allow(clippy::type_complexity)]
-    fn outage_base(
+    pub(super) fn outage_base(
         &self,
         case: &Case,
     ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<Option<usize>>), PowerflowError> {
@@ -134,29 +134,7 @@ impl DcStudy<'_> {
     ) -> Result<DcSolution, PowerflowError> {
         let model = self.model;
         let topology = &model.topology;
-        let mut outaged = Vec::with_capacity(rows.len());
-        for &row in rows {
-            if row >= topology.case_shape.2 {
-                return Err(PowerflowError::RowOutOfRange {
-                    table: "branch",
-                    row,
-                    len: topology.case_shape.2,
-                });
-            }
-            let k = topology
-                .branch_rows
-                .binary_search(&row)
-                .map_err(|_| PowerflowError::BranchOutOfService { row })?;
-            outaged.push(k);
-        }
-        outaged.sort_unstable();
-        outaged.dedup();
-        let reachability = model.reachability();
-        if let Some(stranded) = reachability.stranded(topology, &outaged, &mut workspace.reach) {
-            return Err(PowerflowError::IslandWithoutReference {
-                bus_label: model.bus_labels[stranded],
-            });
-        }
+        let outaged = self.outaged_branches(rows, &mut workspace.reach)?;
 
         // The outaged phase shifters' injections leave the scheduled injections
         let OutageWorkspace {
@@ -167,14 +145,7 @@ impl DcStudy<'_> {
             solve,
             ..
         } = workspace;
-        outage_pbus.clear();
-        outage_pbus.extend_from_slice(pbus);
-        let pbus = outage_pbus;
-        for &k in &outaged {
-            let (from, to) = topology.ends[k];
-            pbus[from] += model.pfinj_pu[k];
-            pbus[to] -= model.pfinj_pu[k];
-        }
+        let pbus = self.outage_injections(pbus, &outaged, outage_pbus);
         outage_theta.clear();
         outage_theta.extend_from_slice(theta);
         let theta = outage_theta;
@@ -266,5 +237,60 @@ impl DcStudy<'_> {
             self.place(case, theta, x)?;
         }
         Ok(self.finish(case, theta, pbus, &outaged))
+    }
+
+    /// The internal branches of the case branch rows `rows`, sorted and without repeats,
+    /// checking that each is in range and in the model and that taking them all out leaves
+    /// every bus reaching a reference bus.
+    pub(super) fn outaged_branches(
+        &self,
+        rows: &[usize],
+        reach: &mut ReachScratch,
+    ) -> Result<Vec<usize>, PowerflowError> {
+        let model = self.model;
+        let topology = &model.topology;
+        let mut outaged = Vec::with_capacity(rows.len());
+        for &row in rows {
+            if row >= topology.case_shape.2 {
+                return Err(PowerflowError::RowOutOfRange {
+                    table: "branch",
+                    row,
+                    len: topology.case_shape.2,
+                });
+            }
+            let k = topology
+                .branch_rows
+                .binary_search(&row)
+                .map_err(|_| PowerflowError::BranchOutOfService { row })?;
+            outaged.push(k);
+        }
+        outaged.sort_unstable();
+        outaged.dedup();
+        let reachability = model.reachability();
+        if let Some(stranded) = reachability.stranded(topology, &outaged, reach) {
+            return Err(PowerflowError::IslandWithoutReference {
+                bus_label: model.bus_labels[stranded],
+            });
+        }
+        Ok(outaged)
+    }
+
+    /// The scheduled injections `pbus` without the outaged phase shifters' injections, written
+    /// into `out`.
+    pub(super) fn outage_injections<'w>(
+        &self,
+        pbus: &[f64],
+        outaged: &[usize],
+        out: &'w mut Vec<f64>,
+    ) -> &'w mut Vec<f64> {
+        let model = self.model;
+        out.clear();
+        out.extend_from_slice(pbus);
+        for &k in outaged {
+            let (from, to) = model.topology.ends[k];
+            out[from] += model.pfinj_pu[k];
+            out[to] -= model.pfinj_pu[k];
+        }
+        out
     }
 }
