@@ -387,7 +387,10 @@ with legacy results generated locally to explain differences.
           - **Steps:** at most `xi` of the way to the boundary. A linear program takes
             separate primal and dual lengths. With curvature in the objective, both take the
             shorter one, as in Nocedal and Wright's §16.6: there the dual residual depends on
-            x, and separate lengths left a small QP with two-sided bounds oscillating.
+            x, and separate lengths left a small QP with two-sided bounds oscillating. With
+            nonlinear constraints, they always share one length (decided 2026-11-07, for PR 2),
+            since the Jacobians couple x to the multipliers too. MIPS takes separate lengths
+            there.
           - **What MIPS does instead:** it fixes σ at 0.1 and solves once per iteration.
           - **References:** Mehrotra (1992); Nocedal and Wright, ch. 14 (Algorithm 14.3), 16.6
             and 19; S. J. Wright (1997). Torres and Quintana (1998) used a predictor-corrector
@@ -417,7 +420,23 @@ with legacy results generated locally to explain differences.
           2. nonlinear constraints;
           3. the OPF's choice of solver, with MIPS staying the default;
           4. the survey and the record.
-- [ ] **The solver,** written from the literature, tested on the MIPS test problems.
+- [x] **The solver,** written from the literature, tested on the MIPS test problems.
+      - **`interior_point::mehrotra`** (`mehrotra`, `qps_mehrotra`), for MIPS's whole problem
+        class. It reports MIPS's multipliers and is checked by the solver-independent
+        `interior_point::solution::kkt_residuals`.
+      - **On MIPS's test problems:** every problem converges where MATPOWER's MIPS does.
+        - **The bar:** the objective within 1e-6 of MIPS's, x and the multipliers within 1e-4,
+          t_mips's known answers, and KKT residuals below 1e-5.
+        - **Iterations against MIPS:** fewer on qp2 (8 to 11), lp3 (10 to 11) and nonlinear3
+          (6 to 8); more on qp4 (13 to 10), nonlinear2 (12 to 8) and hs71 (11 to 8); equal on
+          the rest.
+        - **Pinned:** the counts are fixed in the tests, so any change to the method shows.
+      - **On nonconvex starts** (decided 2026-11-07), the bar is a verified KKT point at a known
+        optimum wherever MIPS converges.
+        - **From (4.5, 4.5, 4.5, 4.5):** hs71 reaches the optimum (f = 17.014, 13 iterations),
+          where MIPS stops at a local point (35.28).
+        - **From (2, 2, 2, 2):** it reaches the optimum in 13, where MIPS reaches its iteration
+          limit.
 - [ ] **Verified and benchmarked** against phase O1's MIPS and against MATPOWER, on DC and AC OPF
       over every case with costs: objective, KKT residuals, iterations and time. Recorded.
 
