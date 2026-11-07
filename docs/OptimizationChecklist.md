@@ -375,9 +375,48 @@ with legacy results generated locally to explain differences.
 
 ## Phase O3: a naive interior-point solver
 
-- [ ] **Decide** the method, for example a textbook primal-dual interior-point method, possibly
+- [x] **Decide** the method, for example a textbook primal-dual interior-point method, possibly
       with Mehrotra's predictor-corrector, and its references (Nocedal and Wright; Mehrotra
       1992). It takes the same problem interface as the MIPS crate.
+      - **Decided with the maintainer (2026-11-07):**
+        - **Method:** a primal-dual method with Mehrotra's predictor-corrector
+          (`interior_point::mehrotra`).
+          - **Predictor:** an affine step (σ = 0) sets the centering σ = (μ_aff/μ)³.
+          - **Corrector:** adds the predictor's second-order term.
+          - **Per iteration:** one KKT factorization serves both solves.
+          - **Steps:** at most `xi` of the way to the boundary. A linear program takes
+            separate primal and dual lengths. With curvature in the objective, both take the
+            shorter one, as in Nocedal and Wright's §16.6: there the dual residual depends on
+            x, and separate lengths left a small QP with two-sided bounds oscillating.
+          - **What MIPS does instead:** it fixes σ at 0.1 and solves once per iteration.
+          - **References:** Mehrotra (1992); Nocedal and Wright, ch. 14 (Algorithm 14.3), 16.6
+            and 19; S. J. Wright (1997). Torres and Quintana (1998) used a predictor-corrector
+            method on the AC OPF.
+        - **Interface:** MIPS's `Problem` and `Constraints`, unchanged, so the comparison is
+          fair. Any extension (warm starts, fixed sparsity patterns) is additive, with
+          defaults, and left for phase O4.
+        - **Bounds:** `xmin ≤ x ≤ xmax` are kept apart from the linear rows, with their own
+          multipliers. x stays strictly inside them, and they add only diagonal terms to the
+          KKT matrix. MIPS stacks them as identity rows of its inequality Jacobian, which comes
+          to the same diagonal. So the KKT matrix's size and fill don't change; what's saved is
+          forming it, and the vectors over the bounds. A variable with `xmin = xmax` stays an
+          equality row, as in MIPS.
+        - **Globalization:** none at first, like MIPS. A merit function with backtracking is
+          added only if AC cases fail where MIPS converges, decided from those failures.
+        - **Termination:** MIPS's four measures, defined the same way (with the bounds' slacks
+          and multipliers counted as MIPS counts its bound rows), so iteration counts compare
+          fairly.
+        - **The bar:**
+          - **Must:** converge wherever MIPS converges, with the objective within 1e-6
+            (relative) of MIPS's and MATPOWER's; KKT residuals below the tolerances; prices
+            matching where they're unique, as in phase O1.
+          - **Reported, not required:** iterations and time.
+          - **Later:** the bar tightens after measuring.
+        - **PRs:**
+          1. this decision, and the solver for problems without nonlinear constraints;
+          2. nonlinear constraints;
+          3. the OPF's choice of solver, with MIPS staying the default;
+          4. the survey and the record.
 - [ ] **The solver,** written from the literature, tested on the MIPS test problems.
 - [ ] **Verified and benchmarked** against phase O1's MIPS and against MATPOWER, on DC and AC OPF
       over every case with costs: objective, KKT residuals, iterations and time. Recorded.
@@ -412,3 +451,10 @@ Each was checked online (Crossref) on 2026-11-03.
   [doi:10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5)
 - S. Mehrotra, "On the implementation of a primal-dual interior point method," *SIAM J. Optim.*
   2(4):575–601, 1992. [doi:10.1137/0802028](https://doi.org/10.1137/0802028)
+- S. J. Wright, *Primal-Dual Interior-Point Methods*, SIAM, 1997.
+  [doi:10.1137/1.9781611971453](https://doi.org/10.1137/1.9781611971453) (checked on Crossref
+  on 2026-11-07)
+- G. L. Torres and V. H. Quintana, "An interior-point method for nonlinear optimal power flow
+  using voltage rectangular coordinates," *IEEE Trans. Power Syst.* 13(4):1211–1218, 1998.
+  [doi:10.1109/59.736231](https://doi.org/10.1109/59.736231) (checked on Crossref on
+  2026-11-07)
