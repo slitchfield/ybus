@@ -22,6 +22,11 @@ pub enum InteriorPointError {
     /// A linear program (no objective Hessian) has no constraints or bounds, which MATPOWER's
     /// `qps_mips` refuses.
     UnboundedLinearProgram,
+    /// The solver doesn't handle this kind of problem.
+    Unsupported {
+        /// What it doesn't handle
+        what: &'static str,
+    },
 }
 
 impl fmt::Display for InteriorPointError {
@@ -36,6 +41,9 @@ impl fmt::Display for InteriorPointError {
                     f,
                     "a linear program must include constraints or variable bounds"
                 )
+            }
+            InteriorPointError::Unsupported { what } => {
+                write!(f, "the solver doesn't handle {what}")
             }
         }
     }
