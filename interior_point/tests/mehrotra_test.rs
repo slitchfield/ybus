@@ -42,9 +42,11 @@ fn expected_iterations(name: &str) -> usize {
         "qp4" | "qps_qp4" => 13,
         "lp3" => 10,
         "qp2" => 8,
-        "nonlinear2" => 12,
+        // With nonlinear constraints the corrector's second-order term is damped (phase O3's
+        //   PR 4), which changed nonlinear2 from 12 and hs71 from 11
+        "nonlinear2" => 8,
         "nonlinear3" => 6,
-        "hs71" => 11,
+        "hs71" => 9,
         _ => panic!("no expected iteration count for {name}"),
     }
 }
@@ -299,14 +301,23 @@ fn hs71_bounds() -> Constraints {
     }
 }
 
-/// hs71's known local optima: MIPS without step control stops at the first from
-/// (4.5, 4.5, 4.5, 4.5), and the second is the optimum Hock and Schittkowski give
-const HS71_OPTIMA: [(&str, f64); 2] = [
+/// hs71's known KKT points:
+///
+/// - **the local point:** where MIPS without step control stops, from (4.5, 4.5, 4.5, 4.5);
+/// - **the optimum:** the one Hock and Schittkowski give;
+/// - **a constrained local maximum:** x ≈ (5, 1.388, 1.472, 3.303), with x₁ at its upper bound
+///   and the product constraint slack. The Lagrangian's Hessian, reduced to the tangent space
+///   of the active constraints (the sphere and x₁'s bound), has eigenvalues −18.2 and −11.9.
+///   The method converges to it from (2, 2, 2, 2) since its corrector was damped (phase O3's
+///   PR 4): with no inertia correction, an interior-point method can't tell a maximum from a
+///   minimum (left to phase O4's LDLᵀ). MIPS reaches its iteration limit from there.
+const HS71_OPTIMA: [(&str, f64); 3] = [
     ("the local point", 35.278_137_612_159_04),
     ("the optimum", 17.0140173),
+    ("a constrained local maximum", 131.261_236_977_572_6),
 ];
 
-/// Which of hs71's known optima `f` is, within the objective bar
+/// Which of hs71's known KKT points `f` is, within the objective bar
 fn hs71_optimum(f: f64) -> Option<&'static str> {
     HS71_OPTIMA
         .iter()
@@ -362,9 +373,15 @@ fn nonlinear_programs_match_mips() {
 fn expected_hs71(label: &str) -> (MehrotraStatus, usize, Option<&'static str>) {
     match label {
         // MIPS without step control stops at the local point (11 iterations)
-        "4.5" => (MehrotraStatus::Converged, 13, Some("the optimum")),
-        // MIPS reaches its iteration limit (150)
-        "2" => (MehrotraStatus::Converged, 13, Some("the optimum")),
+        "4.5" => (MehrotraStatus::Converged, 11, Some("the optimum")),
+        // MIPS reaches its iteration limit (150). With the damped corrector this method
+        //   converges to a constrained local maximum (see HS71_OPTIMA); with the full one, it
+        //   reached the optimum in 13
+        "2" => (
+            MehrotraStatus::Converged,
+            8,
+            Some("a constrained local maximum"),
+        ),
         _ => unreachable!(),
     }
 }
@@ -400,7 +417,7 @@ fn hs71_from_other_starts_reaches_a_known_kkt_point() {
             );
             assert!(
                 optimum.is_some(),
-                "hs71 from {label}: f = {} is no known optimum",
+                "hs71 from {label}: f = {} is no known KKT point",
                 s.f
             );
         }

@@ -437,8 +437,34 @@ with legacy results generated locally to explain differences.
           where MIPS stops at a local point (35.28).
         - **From (2, 2, 2, 2):** it reaches the optimum in 13, where MIPS reaches its iteration
           limit.
-- [ ] **Verified and benchmarked** against phase O1's MIPS and against MATPOWER, on DC and AC OPF
+- [x] **Verified and benchmarked** against phase O1's MIPS and against MATPOWER, on DC and AC OPF
       over every case with costs: objective, KKT residuals, iterations and time. Recorded.
+      - **Recorded** in [`mehrotra-opf-2026-11-07.md`](benchmarks/mehrotra-opf-2026-11-07.md):
+        both solvers, all 73 cases with costs, DC and AC.
+      - **The bar:** the new solver converges wherever MATPOWER's MIPS does (58 DC, 46 AC
+        cases). It has no unexplained misses: the 24 AC checks over the bar are
+        tolerance-limited reference prices, two non-unique optima (case8387pegase and
+        case9241pegase), and residuals that the termination measures' normalization allows.
+      - **Beyond MATPOWER:** it also converges on 5 DC cases where MIPS fails (matching GLPK's
+        optimum to 1e-12 where GLPK has one), and on 3 AC cases.
+      - **Iterations against MIPS,** median: 0.43× on DC, 0.80× on AC.
+      - **Time against MIPS,** median: 0.47× on DC, 0.79× on AC. The second solve per
+        factorization costs little (time per iteration 1.08× on DC, 0.99× on AC).
+      - **Decided with the maintainer (2026-11-07):** on problems with nonlinear constraints,
+        the corrector's second-order term is damped by the affine step lengths.
+        - **Why:** the full term failed 5 AC cases where MIPS converges, with steps blocked
+          from the first iteration. Merit backtracking couldn't help, since the steps were
+          already short.
+        - **Its origin:** this form is the crate's own safeguard, chosen from the experiments
+          in the record.
+        - **Its cost:** hs71 from (2, 2, 2, 2) now converges to a constrained local maximum.
+          With no inertia correction, a maximum can't be told from a minimum; inertia is
+          phase O4's.
+      - **Left for O4:** the KKT solve (factored once, solved twice), inertia through LDLᵀ, the
+        AC cases both solvers fail (case_ACTIVSg10k, case13659pegase, case_SyntheticUSA), and
+        warm starts.
+
+**Phase O3 is complete** (PRs #49–#51 and this one, 2026-11-07).
 
 ## Phase O4: accelerating the interior-point solvers
 
