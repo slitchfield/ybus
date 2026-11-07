@@ -1,5 +1,5 @@
-//! The DC power flow's GPU path (feature `cuda`) against the CPU's: batched solves and PTDF
-//! columns and transfers. The results
+//! The DC power flow's GPU path (feature `cuda`) against the CPU's: batched solves, PTDF
+//! columns and transfers, and single-branch outages, solved whole and screened. The results
 //! must agree to within `BAR`, relative to the largest magnitude of each quantity, and errors
 //! must be the same. The tests skip, saying so, on a machine without CUDA unless
 //! `YBUS_REQUIRE_CUDA=1`, and without a case unless `YBUS_REQUIRE_CASES=1`.
@@ -8,8 +8,10 @@
 
 mod common;
 
+use common::dc_fixture::{fixture, B, G, L};
+
 use powerflow::case::{BusType, Case};
-use powerflow::dc::{DcModel, DcSolution, DcSolver, PtdfSlack};
+use powerflow::dc::{DcModel, DcSolution, DcSolver, OutageLoading, PtdfSlack};
 use powerflow::powerflow_error::PowerflowError;
 use powerflow::Gpu;
 
@@ -256,5 +258,150 @@ fn an_isolated_bus_gets_the_cpus_ptdf() {
             &on_gpu.ptdf_transfers(&transfers).unwrap(),
             &sensitivity.ptdf_transfers(&transfers).unwrap(),
         );
+    }
+}
+
+/// The most loaded rated branch of a CPU solution, as `OutageLoading` defines it, computed here
+/// independently: (case branch row, |Pf| / rate_a)
+fn cpu_loading(case: &Case, solution: &DcSolution) -> (Option<usize>, f64) {
+    let mut best = (None, 0.0);
+    for (row, branch) in case.branch.iter().enumerate() {
+        if branch.rate_a_mva > 0.0 {
+            let loading = solution.pf_mw[row].abs() / branch.rate_a_mva;
+            if loading > best.1 {
+                best = (Some(row), loading);
+            }
+        }
+    }
+    best
+}
+
+/// Panics unless the GPU's screening of an outage agrees with the CPU's solution: the same
+/// loading to within rounding, and the same branch unless another's loading is as close
+fn assert_loading_agrees(what: &str, case: &Case, gpu: &OutageLoading, cpu: &DcSolution) {
+    let (branch, loading) = cpu_loading(case, cpu);
+    let tolerance = BAR * loading.max(1.0);
+    assert!(
+        (gpu.loading - loading).abs() <= tolerance,
+        "{what}: loading {} against {loading}",
+        gpu.loading
+    );
+    if gpu.branch != branch {
+        let row = gpu
+            .branch
+            .unwrap_or_else(|| panic!("{what}: no branch, CPU {branch:?}"));
+        let theirs = cpu.pf_mw[row].abs() / case.branch[row].rate_a_mva;
+        assert!(
+            (theirs - loading).abs() <= tolerance,
+            "{what}: branch {row} ({theirs}) against {branch:?} ({loading})"
+        );
+    }
+}
+
+/// Every single-branch outage of `case` (and a row past the table) on the GPU, solved whole
+/// and screened, against the CPU's `solve_outages`. Returns how many solved and how many
+/// were errors in both.
+fn check_outages(what: &str, gpu: &Gpu, case: &Case, width: usize) -> (usize, usize) {
+    let model = DcModel::new(case).unwrap();
+    let study = model.study().unwrap();
+    let mut rows: Vec<usize> = (0..case.branch.len()).collect();
+    rows.insert(rows.len() / 2, case.branch.len());
+    let sets: Vec<Vec<usize>> = rows.iter().map(|&row| vec![row]).collect();
+    let cpu = study.solve_outages(case, &sets).unwrap();
+    let mut on_gpu = study.gpu(gpu).unwrap();
+    on_gpu.set_block_width(width);
+    let solved = on_gpu.solve_outages(case, &rows).unwrap();
+    let screened = on_gpu.outage_loadings(case, &rows).unwrap();
+    assert_eq!((solved.len(), screened.len()), (rows.len(), rows.len()));
+    let (mut ok, mut errors) = (0, 0);
+    for (((row, cpu), solved), screened) in rows.iter().zip(&cpu).zip(&solved).zip(&screened) {
+        let what = format!("{what}, outage of row {row}");
+        match (cpu, solved, screened) {
+            (Ok(cpu), Ok(solved), Ok(screened)) => {
+                assert_agree(&what, solved, cpu);
+                assert_eq!(solved.pf_mw[*row], 0.0, "{what}");
+                assert_loading_agrees(&what, case, screened, cpu);
+                ok += 1;
+            }
+            (Err(cpu), Err(solved), Err(screened)) => {
+                assert_eq!((solved, screened), (cpu, cpu), "{what}");
+                errors += 1;
+            }
+            (cpu, solved, screened) => {
+                panic!("{what}: CPU {cpu:?}, GPU {solved:?}, screened {screened:?}")
+            }
+        }
+    }
+    (ok, errors)
+}
+
+#[test]
+fn outages_match_the_cpu() {
+    let Some(gpu) = gpu("outages_match_the_cpu") else {
+        return;
+    };
+    for &(name, _) in CASES {
+        let Some(path) = common::matpower_case(name) else {
+            continue;
+        };
+        let case = Case::from_path(&path).unwrap();
+        let shifters = case.branch.iter().filter(|b| b.shift_deg != 0.0).count();
+        let (ok, errors) = check_outages(name, &gpu, &case, 16);
+        assert!(ok > 0, "{name}");
+        eprintln!("{name}: {ok} outages solved and {errors} errors agree ({shifters} shifters)");
+    }
+}
+
+#[test]
+fn outages_between_two_references_match_the_cpu() {
+    let Some(gpu) = gpu("outages_between_two_references_match_the_cpu") else {
+        return;
+    };
+    let Some(path) = common::matpower_case("case14") else {
+        return;
+    };
+    // Bus 2 (with a generator) as a second reference: branch 1–2 then touches no unknown, and
+    //   the branches from bus 2 couple to a reference end
+    let mut case = Case::from_path(&path).unwrap();
+    let row = case.bus.iter().position(|bus| bus.bus_label == 2).unwrap();
+    case.bus[row].bus_type = BusType::Ref;
+    case.bus[row].va_deg = -3.0;
+    // Width 1, the smallest block
+    let (ok, errors) = check_outages("case14 with two references", &gpu, &case, 1);
+    eprintln!("case14 with two references: {ok} solved and {errors} errors agree");
+}
+
+#[test]
+fn a_singular_outage_is_left_to_the_cpu() {
+    let Some(gpu) = gpu("a_singular_outage_is_left_to_the_cpu") else {
+        return;
+    };
+    // Lines 1–2 and 2–3, a series capacitor on 1–3 that cancels them exactly, and a last line
+    //   1–3: without the last, B′ is singular though every bus still reaches the reference.
+    //   With b = 10, 10 and −5 the GPU's update has w exactly zero, which it flags; with
+    //   x = 0.1, 0.11 and −(0.1 + 0.11) the reciprocals round, so w is tiny instead and the
+    //   angles come out near 1e14 radians
+    for (x12, x23, x13) in [(0.1, 0.1, -0.2), (0.1, 0.11, -(0.1 + 0.11))] {
+        let buses = [
+            B(1, 3, 0.0, 0.0, 0.0),
+            B(2, 1, 50.0, 0.0, 0.0),
+            B(3, 1, 50.0, 0.0, 0.0),
+        ];
+        let branches = [
+            L(1, 2, x12, 0.0, 0.0, true),
+            L(2, 3, x23, 0.0, 0.0, true),
+            L(1, 3, x13, 0.0, 0.0, true),
+            L(1, 3, 0.1, 0.0, 0.0, true),
+        ];
+        let case = fixture(&buses, &[G(1, 100.0, true)], &branches);
+        let model = DcModel::new(&case).unwrap();
+        let study = model.study().unwrap();
+        assert!(matches!(
+            study.solve_outage(&case, &[3]),
+            Err(PowerflowError::SingularNetwork { .. })
+        ));
+        let what = format!("singular fixture {x12}, {x23}, {x13}");
+        let (ok, errors) = check_outages(&what, &gpu, &case, 4);
+        assert!(ok > 0 && errors > 0, "{what}: {ok} solved, {errors} errors");
     }
 }
