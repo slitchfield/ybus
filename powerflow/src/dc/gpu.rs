@@ -7,9 +7,24 @@
 //!   sides are built on the device and whose flows are computed there.
 //!
 //! The results agree with the CPU's to within rounding, not bit for bit: the GPU's triangular
-//! solves order their arithmetic differently. Everything else (the right-hand sides, the checks
-//! and the flows and slack of each solution) is computed on the host exactly as the CPU path
-//! computes it.
+//! solves, products and reductions order their arithmetic differently. The checks, and whatever
+//! a method returns whole (each solution's flows and slack, a PTDF column's placement by case
+//! row), are computed on the host as the CPU path computes them.
+//!
+//! # When the GPU pays
+//!
+//! Measured in `docs/benchmarks/cuda-spike-2026-11-07.md` against rayon's 28 threads on the
+//! CPU path's `par_` methods:
+//!
+//! - **N-1 screening wins on large cases.** [`DcGpuStudy::outage_loadings`] keeps the flows on
+//!   the device and brings back one value per outage. It was even with 28 threads around
+//!   9,000–14,000 buses, and 1.3–2.1× faster from 25,000 up.
+//! - **Whole results lose.** [`DcGpuStudy::solve_many`], [`DcGpuStudy::solve_outages`] and
+//!   [`DcGpuSensitivity::ptdf_columns`] did each result's O(buses + branches) host work on one
+//!   thread, so they ran at 0.1–0.3× of the CPU's parallel methods. Prefer those methods for
+//!   whole results.
+//! - **Pass multiples of the block width.** A block always solves its full width, so a call
+//!   with fewer items than `block_width()` (or a remainder) pays for the padding.
 
 use sparse_mat::compressed_matrix::CsrMatrix;
 use ybus_cuda::{CudaError, Gpu, GpuFactor, GpuOperator, Pair, PairUpdate};
@@ -57,6 +72,10 @@ fn flow_operator(
 
 /// A [`DcStudy`]'s factorization of B′ on the GPU, from [`DcStudy::gpu`], for solving many
 /// cases at once. It borrows the study and the [`Gpu`].
+///
+/// Its screening ([`DcGpuStudy::outage_loadings`]) is what beats the CPU on large cases; for
+/// whole solutions, the CPU's parallel methods are faster (see the module's "When the GPU
+/// pays").
 pub struct DcGpuStudy<'s, 'g> {
     study: &'s DcStudy<'s>,
     /// `None` when the study has nothing to solve (every connected bus is a reference bus)
@@ -413,6 +432,9 @@ impl DcGpuStudy<'_, '_> {
 /// A [`DcSensitivity`]'s factorization on the GPU, from [`DcSensitivity::gpu`], with Bf as an
 /// operator on its solutions, so PTDF columns are built, solved and turned into flows on the
 /// device. It borrows the sensitivity and the [`Gpu`].
+///
+/// Whole PTDF columns come back to the host, so the CPU's `par_ptdf_columns` (feature
+/// `rayon`) was faster in the survey (see the module's "When the GPU pays").
 pub struct DcGpuSensitivity<'s, 'g> {
     sensitivity: &'s DcSensitivity<'s>,
     /// The factorization and Bf; `None` when there is nothing to solve (a single bus)
