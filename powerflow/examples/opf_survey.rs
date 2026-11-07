@@ -44,7 +44,8 @@ use reference::{AcOpfReference, DcOpfReference};
 ///   iterations and time, and the same differences of ours from it and of it from MP-Core.
 /// - **The solver and its KKT residuals** (last): `mips` or `mehrotra`, and the residuals at its
 ///   point and multipliers on the OPF's own problem, unscaled (`DcOpfSolution::residuals`),
-///   empty for an error.
+///   empty for an error; then `analyses`, how many times the solver analyzed the KKT matrix
+///   (1 when its pattern held for the whole solve).
 const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_runs,outcome,\
                       iterations,matpower_success,matpower_iterations,singular,matpower_ms,\
                       objective_rel,lam_p_rel,lam_q_rel,primal_abs,multiplier_abs,\
@@ -52,7 +53,8 @@ const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_r
                       legacy_objective_rel,legacy_lam_p_rel,legacy_lam_q_rel,legacy_primal_abs,\
                       legacy_multiplier_abs,cores_objective_rel,cores_lam_p_rel,cores_lam_q_rel,\
                       cores_primal_abs,cores_multiplier_abs,solver,kkt_stationarity,\
-                      kkt_feasibility,kkt_complementarity,kkt_dual_feasibility";
+                      kkt_feasibility,kkt_complementarity,kkt_dual_feasibility,\
+                      analyses";
 
 /// How long to keep repeating a step for its median time
 const BUDGET: Duration = Duration::from_secs(1);
@@ -122,6 +124,7 @@ struct Fields {
     /// How our solve ended, and its KKT residuals (none for a reference)
     status: Option<Status>,
     residuals: Option<KktResiduals>,
+    analyses: Option<usize>,
     iterations: usize,
     lam_p: Vec<f64>,
     /// `LAM_Q`, for AC only
@@ -137,6 +140,7 @@ impl Fields {
             success: s.converged(),
             status: Some(s.status),
             residuals: Some(s.residuals),
+            analyses: Some(s.solver.analyses()),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: None,
@@ -158,6 +162,7 @@ impl Fields {
             success: r.success,
             status: None,
             residuals: None,
+            analyses: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: None,
@@ -179,6 +184,7 @@ impl Fields {
             success: s.converged(),
             status: Some(s.status),
             residuals: Some(s.residuals),
+            analyses: Some(s.solver.analyses()),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: Some(s.lam_q.clone()),
@@ -213,6 +219,7 @@ impl Fields {
             success: r.success,
             status: None,
             residuals: None,
+            analyses: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: Some(r.lam_q.clone()),
@@ -408,9 +415,14 @@ fn survey(
         ),
         None => ",,,".to_string(),
     };
+    let analyses = ours
+        .as_ref()
+        .ok()
+        .and_then(|fields| fields.analyses)
+        .map_or(String::new(), |n| n.to_string());
     Ok(format!(
         "{name},{},{},{},{model_name},{:.3},{:.3},{runs},{outcome},{iterations},{core},{legacy},\
-         {solver_name},{kkt}",
+         {solver_name},{kkt},{analyses}",
         case.bus.len(),
         case.branch.len(),
         case.generator.len(),

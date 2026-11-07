@@ -52,6 +52,15 @@ fn check(name: &str, step_control: bool, solution: &MipsSolution) {
     };
     let what = format!("{name} (step control {step_control})");
     assert_eq!(solution.status, status, "{what}: status");
+    // One analysis serves the whole solve where the KKT pattern holds (none if it never
+    //   iterates). nonlinear2 and nonlinear3 build their Jacobians with from_dense, which
+    //   stores no zeros, and start with a coordinate at 0 (x₂ = 0, x₃ = 0), so an entry of
+    //   their Jacobian appears once that coordinate moves, and MIPS analyzes again
+    let expected = match name {
+        "nonlinear2" | "nonlinear3" => 2,
+        _ => usize::from(solution.iterations > 0),
+    };
+    assert_eq!(solution.analyses, expected, "{what}: analyses");
     assert_eq!(
         solution.iterations,
         field("iterations").unwrap()[0] as usize,

@@ -85,6 +85,15 @@ impl SolverResult {
         }
     }
 
+    /// How many times the solver analyzed the KKT matrix: 1 when its pattern held for the
+    /// whole solve (see [`KKT_ORDERING`](interior_point::mips::KKT_ORDERING)).
+    pub fn analyses(&self) -> usize {
+        match self {
+            SolverResult::Mips(s) => s.analyses,
+            SolverResult::Mehrotra(s) => s.analyses,
+        }
+    }
+
     /// The multipliers, in MIPS's convention.
     pub fn multipliers(&self) -> &Multipliers {
         match self {

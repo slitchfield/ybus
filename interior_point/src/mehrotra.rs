@@ -28,7 +28,8 @@
 //! - `r_z`, `r_l` and `r_u` are the right-hand sides of the linearized complementarity
 //!   conditions.
 //!
-//! The matrix is factored once (LU ordered by [`KKT_ORDERING`]) and solved twice:
+//! The matrix is factored once (LU ordered by [`KKT_ORDERING`](crate::mips::KKT_ORDERING),
+//! analyzed at the first iteration and kept while the pattern holds) and solved twice:
 //!
 //! 1. **The predictor**, an affine step towards complementarity zero (`r_z = −Z μ`, and so on),
 //!    whose longest feasible step lengths give the complementarity it would reach, `μ_aff`.
@@ -70,10 +71,10 @@
 //! - It converges by MIPS's four measures, defined alike, with the bounds' slacks and
 //!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions};
+use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
 
 use crate::interior_point_error::InteriorPointError;
-use crate::mips::KKT_ORDERING;
+use crate::mips::KktAnalysis;
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
 use crate::solution::Multipliers;
 use crate::vector::{dot, norm_inf};
@@ -178,6 +179,10 @@ pub struct MehrotraSolution {
     pub multipliers: Multipliers,
     /// One record for the starting point and one per iteration
     pub history: Vec<MehrotraIteration>,
+    /// How many times the KKT matrix was analyzed: 1 if its pattern held from the first
+    /// iteration to the last (see [`KKT_ORDERING`](crate::mips::KKT_ORDERING)), 0 if no iteration
+    /// factored it
+    pub analyses: usize,
 }
 
 impl MehrotraSolution {
@@ -655,6 +660,7 @@ pub fn mehrotra<P: Problem>(
     let mut converged = tolerances_met(feascond, gradcond, compcond, costcond);
     let mut failed = false;
     let mut i = 0;
+    let mut analysis = KktAnalysis::default();
 
     while !converged && i < opt.max_it {
         i += 1;
@@ -697,10 +703,7 @@ pub fn mehrotra<P: Problem>(
         }
         let size = nx + neq;
         let kkt = CscMatrix::from_triplets(size, size, triplets).expect("indices in range");
-        let Ok(lu) = kkt
-            .analyze_lu(KKT_ORDERING)
-            .and_then(|symbolic| symbolic.factor(&kkt, LuOptions::default()))
-        else {
+        let Ok(lu) = analysis.factor(&kkt) else {
             failed = true;
             break;
         };
@@ -948,6 +951,7 @@ pub fn mehrotra<P: Problem>(
             upper,
         },
         history,
+        analyses: analysis.analyses(),
     })
 }
 

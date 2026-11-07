@@ -233,6 +233,21 @@ fn the_defaults_run_mips() {
 }
 
 #[test]
+fn mips_analyzes_the_opf_once() {
+    // MIPS's OPF keeps its KKT pattern too, so its analysis is kept for the whole solve
+    for name in ["case14", "case30", "case118"] {
+        let Some(path) = common::matpower_case(name) else {
+            continue;
+        };
+        let case = Case::from_path(&path).unwrap();
+        let dc = dc_opf_with_options(&case, &DcOpfOptions::default()).unwrap();
+        let ac = ac_opf_with_options(&case, &AcOpfOptions::default()).unwrap();
+        assert_eq!(dc.solver.analyses(), 1, "{name} DC");
+        assert_eq!(ac.solver.analyses(), 1, "{name} AC");
+    }
+}
+
+#[test]
 fn dc_residuals_are_small_on_both_solvers() {
     // Both solvers' residuals come from the OPF's own kkt_residuals, so the bar relative to
     //   MIPS can't catch a fault there; the DC OPF (cost_mult 1) has small absolute residuals
@@ -261,10 +276,13 @@ fn committed_cases_meet_the_bar() {
         report(name, "DC", &c);
         found.extend(problems(name, "DC", s.converged(), success, &c));
         assert_eq!(c.iterations, dc, "{name} DC: iterations");
+        // The OPF's matrices keep their patterns, so one analysis serves the whole solve
+        assert_eq!(s.solver.analyses(), 1, "{name} DC: analyses");
         let (s, c, success) = compare_ac(name, &path, &committed_dir());
         report(name, "AC", &c);
         found.extend(problems(name, "AC", s.converged(), success, &c));
         assert_eq!(c.iterations, ac, "{name} AC: iterations");
+        assert_eq!(s.solver.analyses(), 1, "{name} AC: analyses");
     }
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
