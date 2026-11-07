@@ -10,7 +10,14 @@ Usage: profile_summary.py <profile.json> [<profile.json> ...]
   samples of their own and in total.
 
 A sample's stage is decided by the innermost frame on its stack that matches one of STAGES, in
-their order within a frame; samples matching none are "other".
+their order within a frame; samples matching none are "other". Two refinements apply to the
+optimal power flows, and leave the power flows' stages as they were:
+
+- A sample with a frame of the OPF's own evaluation (CONTEXT_STAGES: the costs, the
+  constraints, and their derivatives) anywhere on its stack counts as that, unless it's
+  allocation, so a sparse product inside the Hessian isn't counted as the solver's.
+- Sparse products and sums, and assembly from triplets, called from the interior-point solvers
+  (a frame of `interior_point::` on the stack) count as KKT assembly.
 """
 
 import bisect
@@ -41,6 +48,8 @@ STAGES = [
                              "Admittances>::new"]),
     ("model build", ["AcModel>::new", "DcModel>::new", "Topology", "Network>::new",
                      "bustypes"]),
+    ("sparse products and sums", ["::matmul", "::scale_entries", "::scale_rows", "ops::merge",
+                                  "::try_add", "::transpose", "::vstack"]),
     ("mismatch and flows", ["mismatch", "dot_kernel", "mul_vec", "vec_mul", "pfsoln",
                             "share_reactive", "hypot", "sbus"]),
     ("parallel runtime", ["rayon", "crossbeam"]),
@@ -65,12 +74,38 @@ def symbolizer(syms):
     return name
 
 
-def stage_of(names):
+# (stage, patterns): a sample with any frame matching a pattern counts as the stage, whatever
+#   its innermost frame (except allocation)
+CONTEXT_STAGES = [
+    # The problem's own methods, by their trait: a solver's frame names the problem too, as
+    #   mehrotra::<AcOpfProblem>, so the type's name alone would match every sample
+    ("OPF evaluation and derivatives", ["opf::derivatives::", "Problem>::objective",
+                                        "Problem>::constraints",
+                                        "Problem>::lagrangian_hessian"]),
+]
+
+# The innermost stages that count as KKT assembly when an interior-point solver called them
+KKT_ASSEMBLY = {"assembly and refill", "sparse products and sums"}
+
+
+def innermost_stage(names):
     for frame in names:
         for stage, patterns in STAGES:
             if any(pattern in frame for pattern in patterns):
                 return stage
     return "other"
+
+
+def stage_of(names):
+    stage = innermost_stage(names)
+    if stage == "allocation and copying":
+        return stage
+    for context, patterns in CONTEXT_STAGES:
+        if any(pattern in frame for frame in names for pattern in patterns):
+            return context
+    if stage in KKT_ASSEMBLY and any("interior_point::" in frame for frame in names):
+        return "KKT assembly"
+    return stage
 
 
 def summarize(path):
