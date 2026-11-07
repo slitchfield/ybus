@@ -342,9 +342,36 @@ with legacy results generated locally to explain differences.
           case 1.54× faster over all cases (median 1.51× from 20 KB up), DC runs 1.17–1.30×.
         - **Left:** float parsing is now its largest part (about 28%). A fused single pass or
           our own float parser were not tried.
-- [ ] **A CUDA spike** behind a `cuda` feature (through `cudarc`). Batched DC and N-1 solves and
+- [x] **A CUDA spike** behind a `cuda` feature (through `cudarc`). Batched DC and N-1 solves and
       the Jacobian refill on the GPU, with transfers counted, against the CPU path. The CUDA
       toolkit gets installed only when cuSPARSE or cuSOLVER is needed. Record the outcome.
+      - **Recorded** in [`cuda-spike-2026-11-07.md`](benchmarks/cuda-spike-2026-11-07.md).
+      - **Built:**
+        - **#46:** the `ybus_cuda` crate, the workspace's only `unsafe` code, and SpSM
+          solves against CPU factorizations.
+        - **#47:** `DcStudy::gpu` (batched solves, single-branch outages solved whole or
+          screened with `outage_loadings`) and `DcSensitivity::gpu` (PTDF columns and
+          transfers).
+      - **Results:**
+        - **N-1 screening:** 1.3–2.1× faster than 28 threads from 25,000 buses up, and even
+          around 9,000–14,000.
+        - **Whole results:** batched DC, outage solutions and PTDF columns run at 0.1–0.3× of
+          28 threads from 1,354 buses up, since their per-result host work runs on one thread.
+        - **The solves alone:** they beat 28 threads only on the two largest Jacobians
+          (1.8–1.9×).
+        - **Agreement:** to within 9.7e-13, with identical errors.
+      - **Decided with the maintainer (2026-11-07):**
+        - The CPU path stays the default, and `cuda` stays opt-in.
+        - **The Jacobian refill is descoped,** with Newton on the GPU (cuDSS): one right-hand
+          side per factorization, a latency-bound refactorization, and a new dependency. A GPU
+          factorization comes back in phase O4's GPU KKT item.
+        - The whole-result workloads are recorded as they are.
+      - **Left:**
+        - parallel host work around the device's solves;
+        - rank-k updates for sets of branches, and LODF columns on the device;
+        - alternatives to SpSM.
+
+**Phase O2 is complete** (PRs #42–#47 and this one, 2026-11-07).
 
 ## Phase O3: a naive interior-point solver
 
