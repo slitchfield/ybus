@@ -1,49 +1,65 @@
 //! A primal-dual interior-point method with Mehrotra's predictor-corrector, written from the
 //! literature (Mehrotra 1992; Nocedal and Wright, *Numerical Optimization*, 2nd ed., Algorithm
-//! 14.3 and §16.6; S. J. Wright, *Primal-Dual Interior-Point Methods*, 1997) for the same
-//! programs as [`mips`](crate::mips):
+//! 14.3, §16.6 and ch. 19; S. J. Wright, *Primal-Dual Interior-Point Methods*, 1997) for the
+//! same programs as [`mips`](crate::mips):
 //!
-//! minimize `f(x)` subject to `l ≤ A x ≤ u` and `xmin ≤ x ≤ xmax`.
-//!
-//! So far it takes problems without nonlinear constraints: unconstrained ones, linear and
-//! quadratic programs, and any smooth objective under linear constraints and bounds.
+//! minimize `f(x)` subject to `g(x) = 0`, `h(x) ≤ 0`, `l ≤ A x ≤ u` and `xmin ≤ x ≤ xmax`.
 //!
 //! # The method
 //!
-//! The linear rows are split as MIPS splits them: an equality `Ae x = be` for `|u − l| ≤ ε`, and
-//! otherwise one or two inequalities `Ai x − bi ≤ 0`, each with a slack `z > 0` and a multiplier
-//! `μ > 0`. A bound side within ±1e10 is kept apart: `x` stays strictly inside the bounds, whose
-//! slacks are `s_l = x − xmin` and `s_u = xmax − x`, with multipliers `π_l` and `π_u`. A
-//! variable with `xmin = xmax` is an equality row, as in MIPS. Each iteration takes a Newton step
-//! on the perturbed KKT conditions, reduced to
+//! **The constraints.** The linear rows are split as MIPS splits them: an equality `Ae x = be`
+//! for `|u − l| ≤ ε`, and otherwise one or two inequalities `Ai x − bi ≤ 0`. The nonlinear
+//! constraints come first, as in MIPS: the equalities are `[g(x); Ae x − be] = 0`, with Jacobian
+//! `Jg = [∂g/∂x; Ae]`, and the inequalities `[h(x); Ai x − bi] + z = 0`, with Jacobian `Jh` and
+//! a slack `z > 0` and multiplier `μ > 0` each. A bound side within ±1e10 is kept apart: `x`
+//! stays strictly inside the bounds, whose slacks are `s_l = x − xmin` and `s_u = xmax − x`,
+//! with multipliers `π_l` and `π_u`. A variable with `xmin = xmax` is an equality row, as in
+//! MIPS.
+//!
+//! **Each iteration** takes a Newton step on the perturbed KKT conditions, reduced to
 //!
 //! `[W Jgᵀ; Jg 0] [dx; dλ] = [−r_d − Jhᵀ Z⁻¹ (r_z + M (h + z)) + S_l⁻¹ r_l − S_u⁻¹ r_u; −g]`
 //!
-//! with `W = ∇²f + Jhᵀ Z⁻¹ M Jh + S_l⁻¹ Π_l + S_u⁻¹ Π_u`: the bounds add only diagonal terms. Here
-//! `r_d` is the Lagrangian's gradient, and `r_z`, `r_l` and `r_u` are the right-hand sides of
-//! the linearized complementarity conditions. The matrix is factored once (LU ordered by
-//! [`KKT_ORDERING`]) and solved twice:
+//! with `W = ∇²L + Jhᵀ Z⁻¹ M Jh + S_l⁻¹ Π_l + S_u⁻¹ Π_u`. Here:
+//!
+//! - `∇²L` is the Lagrangian's Hessian, or the objective's without nonlinear constraints;
+//! - the bounds add only diagonal terms;
+//! - `r_d` is the Lagrangian's gradient;
+//! - `r_z`, `r_l` and `r_u` are the right-hand sides of the linearized complementarity
+//!   conditions.
+//!
+//! The matrix is factored once (LU ordered by [`KKT_ORDERING`]) and solved twice:
 //!
 //! 1. **The predictor**, an affine step towards complementarity zero (`r_z = −Z μ`, and so on),
 //!    whose longest feasible step lengths give the complementarity it would reach, `μ_aff`.
 //! 2. **The corrector**, aiming at `σ μ` with `σ = (μ_aff / μ)³`, `μ` being the average
 //!    complementarity, and adding the predictor's second-order term
-//!    (`r_z = −Z μ − ΔZ_aff Δμ_aff + σ μ e`). Its primal and dual steps are each at most `xi` of the way to the boundary. A
-//!    linear program takes them with separate lengths. Where the objective has curvature, both
-//!    take the shorter of the two (Nocedal and Wright, §16.6): the dual residual `∇f(x) − …`
-//!    depends on `x`, so separate lengths can let complementarity grow, as they did on a small
-//!    QP with two-sided bounds, which failed to converge with them.
+//!    (`r_z = −Z μ − ΔZ_aff Δμ_aff + σ μ e`).
 //!
-//! A problem with no inequalities or bounds takes plain Newton steps. There is no merit function
-//! or line search, as in MIPS. It converges by MIPS's four measures, defined alike, with the
-//! bounds' slacks and multipliers counted as MIPS counts its bound rows, so iteration counts
-//! compare fairly.
+//! **Step lengths.** The primal and dual steps are each at most `xi` of the way to the boundary.
+//!
+//! - **A linear program** takes them with separate lengths.
+//! - **Otherwise both take the shorter of the two:** wherever the objective has curvature
+//!   (Nocedal and Wright, §16.6), and wherever there are nonlinear constraints.
+//! - **Why:** there the dual residual depends on `x`, through `∇f(x)` or the constraints'
+//!   Jacobians. Separate lengths can then let complementarity grow, as they did on a small QP
+//!   with two-sided bounds, which failed to converge with them.
+//!
+//! **Otherwise:**
+//!
+//! - A problem with no inequalities or bounds takes plain Newton steps.
+//! - There is no merit function or line search, as in MIPS.
+//! - There's no inertia correction either: on a nonconvex problem, an indefinite `∇²L` can give
+//!   a poor step, as it can in MIPS. A symmetric indefinite factorization that would expose it
+//!   is phase O4's.
+//! - It converges by MIPS's four measures, defined alike, with the bounds' slacks and
+//!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
 
 use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions};
 
 use crate::interior_point_error::InteriorPointError;
 use crate::mips::KKT_ORDERING;
-use crate::problem::{Constraints, Problem, QuadraticProblem};
+use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
 use crate::solution::Multipliers;
 use crate::vector::{dot, norm_inf};
 
@@ -381,15 +397,52 @@ impl Step {
     }
 }
 
-/// The predictor-corrector method: minimizes `problem`'s objective from `x0` subject to
-/// `constraints` (see the [module](self) for the method).
+/// The objective (times `cost_mult`), its gradient and the constraints' values at a point, with
+/// the Jacobians when there are nonlinear constraints: without them, the Jacobians are the
+/// constant `Ai` and `Ae`, and `Aiᵀ` is made once.
+struct Evaluation {
+    f: f64,
+    df: Vec<f64>,
+    /// `[h(x); Ai x − bi]`
+    h: Vec<f64>,
+    /// `[g(x); Ae x − be]`
+    g: Vec<f64>,
+    jacobians: Option<Jacobians>,
+}
+
+/// The constraints' Jacobians at a point with nonlinear constraints, nonlinear rows first
+struct Jacobians {
+    /// `[∂h/∂x; Ai]`
+    jh: CsrMatrix<f64>,
+    /// `[∂g/∂x; Ae]`
+    jg: CsrMatrix<f64>,
+    /// `jh`'s transpose
+    jh_t: CsrMatrix<f64>,
+}
+
+impl Evaluation {
+    fn jh<'a>(&'a self, split: &'a Split) -> &'a CsrMatrix<f64> {
+        self.jacobians.as_ref().map_or(&split.ai, |j| &j.jh)
+    }
+
+    fn jg<'a>(&'a self, split: &'a Split) -> &'a CsrMatrix<f64> {
+        self.jacobians.as_ref().map_or(&split.ae, |j| &j.jg)
+    }
+
+    fn jh_t<'a>(&'a self, ai_t: &'a CsrMatrix<f64>) -> &'a CsrMatrix<f64> {
+        self.jacobians.as_ref().map_or(ai_t, |j| &j.jh_t)
+    }
+}
+
+/// The predictor-corrector method: minimizes `problem`'s objective from `x0` subject to its
+/// nonlinear constraints and to `constraints` (see the [module](self) for the method).
 ///
 /// `x0` is moved strictly inside its bounds first: at least `bound_push · max(1, |bound|)`
 /// inside each, and at most `bound_frac` of the distance between two bounds. The slacks start
 /// at `max(z0, −h(x0))` and the multipliers at `max(z0, 1/slack)`, as MIPS starts them.
 ///
-/// Returns `InteriorPointError::Unsupported` for a problem with nonlinear constraints,
-/// `InvalidOption` for `xi` outside `[0.5, 1)`, and `Dimension` for inputs of the wrong length.
+/// Returns `InteriorPointError::InvalidOption` for `xi` outside `[0.5, 1)`, and `Dimension` for
+/// inputs of the wrong length.
 pub fn mehrotra<P: Problem>(
     problem: &P,
     x0: &[f64],
@@ -404,15 +457,23 @@ pub fn mehrotra<P: Problem>(
     if problem.dimension() != nx {
         return Err(InteriorPointError::Dimension { what: "x0" });
     }
-    if problem.has_nonlinear_constraints() {
-        return Err(InteriorPointError::Unsupported {
-            what: "nonlinear constraints",
-        });
-    }
     let split = Split::new(constraints, nx)?;
-    let (neq, niq) = (split.be.len(), split.bi.len());
+    // The nonlinear constraints' counts, from the starting point, as MIPS takes them
+    let nonlinear = problem.has_nonlinear_constraints();
+    let (neqnln, niqnln) = if nonlinear {
+        let c = problem.constraints(x0);
+        if c.dh.shape() != (c.h.len(), nx) || c.dg.shape() != (c.g.len(), nx) {
+            return Err(InteriorPointError::Dimension {
+                what: "the nonlinear constraints' Jacobians",
+            });
+        }
+        (c.g.len(), c.h.len())
+    } else {
+        (0, 0)
+    };
+    let (neq, niq) = (neqnln + split.be.len(), niqnln + split.bi.len());
     let (nlo, nup) = (split.lo.len(), split.up.len());
-    // `Ai` and `Ae` are constant, so their transposes are made once
+    // `Ai` is constant, so its transpose is made once
     let ai_t = split.ai.clone().transpose().to_csr();
 
     // The starting point, strictly inside the bounds
@@ -450,32 +511,55 @@ pub fn mehrotra<P: Problem>(
                 .collect(),
         )
     };
-    let evaluate = |x: &[f64]| -> (f64, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let evaluate = |x: &[f64]| -> Evaluation {
         let (f, df) = problem.objective(x);
         let df = df.iter().map(|d| d * opt.cost_mult).collect();
-        let h: Vec<f64> = split
+        let linear_h = split
             .ai
             .mul_vec(x)
             .expect("Ai has nx columns")
             .iter()
             .zip(&split.bi)
             .map(|(ax, b)| ax - b)
-            .collect();
-        let g: Vec<f64> = split
+            .collect::<Vec<f64>>();
+        let linear_g = split
             .ae
             .mul_vec(x)
             .expect("Ae has nx columns")
             .iter()
             .zip(&split.be)
             .map(|(ax, b)| ax - b)
-            .collect();
-        (f * opt.cost_mult, df, h, g)
+            .collect::<Vec<f64>>();
+        match nonlinear.then(|| problem.constraints(x)) {
+            None => Evaluation {
+                f: f * opt.cost_mult,
+                df,
+                h: linear_h,
+                g: linear_g,
+                jacobians: None,
+            },
+            Some(c) => {
+                let jh = CsrMatrix::vstack([&c.dh, &split.ai]).expect("∂h/∂x has nx columns");
+                let jg = CsrMatrix::vstack([&c.dg, &split.ae]).expect("∂g/∂x has nx columns");
+                Evaluation {
+                    f: f * opt.cost_mult,
+                    df,
+                    h: c.h.iter().copied().chain(linear_h).collect(),
+                    g: c.g.iter().copied().chain(linear_g).collect(),
+                    jacobians: Some(Jacobians {
+                        jh_t: jh.clone().transpose().to_csr(),
+                        jh,
+                        jg,
+                    }),
+                }
+            }
+        }
     };
 
-    let (mut f, mut df, mut h, mut g) = evaluate(&x);
+    let mut e = evaluate(&x);
     let (s_l, s_u) = slacks(&x);
     let start = |slack: f64| opt.z0.max(slack);
-    let z: Vec<f64> = h.iter().map(|&h| start(-h)).collect();
+    let z: Vec<f64> = e.h.iter().map(|&h| start(-h)).collect();
     let multiplier = |slack: f64| opt.z0.max(1.0 / slack);
     let mut p = Pairs {
         mu: z.iter().map(|&z| multiplier(z)).collect(),
@@ -488,19 +572,22 @@ pub fn mehrotra<P: Problem>(
     let mut lam = vec![0.0; neq];
     let pairs = p.count();
 
-    // The Lagrangian's gradient, r_d = ∇f + Aeᵀλ + Aiᵀμ − π_l + π_u
-    let lagrangian_gradient = |df: &[f64], lam: &[f64], p: &Pairs| -> Vec<f64> {
-        let mut r: Vec<f64> = df
-            .iter()
-            .zip(split.ae.vec_mul(lam).expect("one multiplier per equality"))
-            .zip(
-                split
-                    .ai
-                    .vec_mul(&p.mu)
-                    .expect("one multiplier per inequality"),
-            )
-            .map(|((d, a), b)| d + a + b)
-            .collect();
+    // The Lagrangian's gradient, r_d = ∇f + Jgᵀλ + Jhᵀμ − π_l + π_u
+    let lagrangian_gradient = |e: &Evaluation, lam: &[f64], p: &Pairs| -> Vec<f64> {
+        let mut r: Vec<f64> =
+            e.df.iter()
+                .zip(
+                    e.jg(&split)
+                        .vec_mul(lam)
+                        .expect("one multiplier per equality"),
+                )
+                .zip(
+                    e.jh(&split)
+                        .vec_mul(&p.mu)
+                        .expect("one multiplier per inequality"),
+                )
+                .map(|((d, a), b)| d + a + b)
+                .collect();
         for (&k, pi) in split.lo.iter().zip(&p.pi_l) {
             r[k] -= pi;
         }
@@ -541,9 +628,9 @@ pub fn mehrotra<P: Problem>(
         }
     };
 
-    let mut rd = lagrangian_gradient(&df, &lam, &p);
-    let (mut feascond, mut gradcond, mut compcond) = conditions(&x, &g, &h, &lam, &p, &rd);
-    let mut f0 = f;
+    let mut rd = lagrangian_gradient(&e, &lam, &p);
+    let (mut feascond, mut gradcond, mut compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
+    let mut f0 = e.f;
     let mut costcond = 0.0;
     let mut history = vec![MehrotraIteration {
         feascond,
@@ -551,7 +638,7 @@ pub fn mehrotra<P: Problem>(
         compcond,
         costcond,
         mu: average(&p),
-        obj: f / opt.cost_mult,
+        obj: e.f / opt.cost_mult,
         ..MehrotraIteration::default()
     }];
     let tolerances_met = |feas: f64, grad: f64, comp: f64, cost: f64| {
@@ -564,20 +651,30 @@ pub fn mehrotra<P: Problem>(
     while !converged && i < opt.max_it {
         i += 1;
 
-        // The reduced KKT matrix, [W Aeᵀ; Ae 0] with W = ∇²f + Aiᵀ Z⁻¹ M Ai + Σ_l + Σ_u
-        let hessian = problem.objective_hessian(&x).scale(opt.cost_mult);
-        // With curvature, the dual residual H x + c − … couples x to the multipliers, so the
-        //   primal and dual steps share one length (Nocedal and Wright, §16.6); a linear
-        //   program keeps separate ones
-        let curved = hessian.values().iter().any(|&v| v != 0.0);
+        // The reduced KKT matrix, [W Jgᵀ; Jg 0] with W = ∇²L + Jhᵀ Z⁻¹ M Jh + Σ_l + Σ_u
+        let (jh, jg, jh_t) = (e.jh(&split), e.jg(&split), e.jh_t(&ai_t));
+        let hessian = if nonlinear {
+            problem.lagrangian_hessian(
+                &x,
+                NonlinearMultipliers {
+                    eq: &lam[..neqnln],
+                    ineq: &p.mu[..niqnln],
+                },
+                opt.cost_mult,
+            )
+        } else {
+            problem.objective_hessian(&x).scale(opt.cost_mult)
+        };
+        // With curvature, the dual residual ∇f(x) + … couples x to the multipliers, so the
+        //   primal and dual steps share one length (Nocedal and Wright, §16.6), and so do they
+        //   with nonlinear constraints, whose Jacobians couple them too; a linear program keeps
+        //   separate ones
+        let curved = nonlinear || hessian.values().iter().any(|&v| v != 0.0);
         let zinv: Vec<f64> = p.z.iter().map(|z| 1.0 / z).collect();
         let weights: Vec<f64> = p.mu.iter().zip(&zinv).map(|(m, zi)| m * zi).collect();
-        let ai_weighted = split
-            .ai
-            .scale_rows(&weights)
-            .expect("one weight per inequality");
+        let jh_weighted = jh.scale_rows(&weights).expect("one weight per inequality");
         let w = hessian
-            .try_add(&ai_t.matmul(&ai_weighted).expect("nx × niq times niq × nx"))
+            .try_add(&jh_t.matmul(&jh_weighted).expect("nx × niq times niq × nx"))
             .expect("both nx × nx");
         let mut triplets: Vec<(usize, usize, f64)> = w.iter().collect();
         for (j, &k) in split.lo.iter().enumerate() {
@@ -586,7 +683,7 @@ pub fn mehrotra<P: Problem>(
         for (j, &k) in split.up.iter().enumerate() {
             triplets.push((k, k, p.pi_u[j] / p.s_u[j]));
         }
-        for (r, c, v) in split.ae.iter() {
+        for (r, c, v) in jg.iter() {
             triplets.push((c, nx + r, v));
             triplets.push((nx + r, c, v));
         }
@@ -601,15 +698,15 @@ pub fn mehrotra<P: Problem>(
         };
 
         // A step for complementarity right-hand sides r_z, r_l and r_u
-        let hz: Vec<f64> = h.iter().zip(&p.z).map(|(h, z)| h + z).collect();
+        let hz: Vec<f64> = e.h.iter().zip(&p.z).map(|(h, z)| h + z).collect();
         let solve = |r_z: &[f64], r_l: &[f64], r_u: &[f64]| -> Option<Step> {
-            // −r_d − Aiᵀ Z⁻¹ (r_z + M (h + z)) + S_l⁻¹ r_l − S_u⁻¹ r_u, then −g
+            // −r_d − Jhᵀ Z⁻¹ (r_z + M (h + z)) + S_l⁻¹ r_l − S_u⁻¹ r_u, then −g
             let inner: Vec<f64> = (0..niq)
                 .map(|k| zinv[k] * (r_z[k] + p.mu[k] * hz[k]))
                 .collect();
             let mut rhs: Vec<f64> = rd
                 .iter()
-                .zip(ai_t.mul_vec(&inner).expect("one entry per inequality"))
+                .zip(jh_t.mul_vec(&inner).expect("one entry per inequality"))
                 .map(|(r, a)| -r - a)
                 .collect();
             for (j, &k) in split.lo.iter().enumerate() {
@@ -618,15 +715,15 @@ pub fn mehrotra<P: Problem>(
             for (j, &k) in split.up.iter().enumerate() {
                 rhs[k] -= r_u[j] / p.s_u[j];
             }
-            rhs.extend(g.iter().map(|g| -g));
+            rhs.extend(e.g.iter().map(|g| -g));
             let solved = lu.solve(&rhs).ok()?;
             if solved.iter().any(|v| !v.is_finite()) {
                 return None;
             }
             let dx = solved[..nx].to_vec();
             let dlam = solved[nx..].to_vec();
-            let ai_dx = split.ai.mul_vec(&dx).expect("one entry per variable");
-            let dz: Vec<f64> = (0..niq).map(|k| -hz[k] - ai_dx[k]).collect();
+            let jh_dx = jh.mul_vec(&dx).expect("one entry per variable");
+            let dz: Vec<f64> = (0..niq).map(|k| -hz[k] - jh_dx[k]).collect();
             let dmu = (0..niq)
                 .map(|k| zinv[k] * (r_z[k] - p.mu[k] * dz[k]))
                 .collect();
@@ -716,10 +813,10 @@ pub fn mehrotra<P: Problem>(
         (p.s_l, p.s_u) = slacks(&x);
 
         // The new point
-        (f, df, h, g) = evaluate(&x);
-        rd = lagrangian_gradient(&df, &lam, &p);
-        (feascond, gradcond, compcond) = conditions(&x, &g, &h, &lam, &p, &rd);
-        costcond = (f - f0).abs() / (1.0 + f0.abs());
+        e = evaluate(&x);
+        rd = lagrangian_gradient(&e, &lam, &p);
+        (feascond, gradcond, compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
+        costcond = (e.f - f0).abs() / (1.0 + f0.abs());
         let mu_new = average(&p);
         history.push(MehrotraIteration {
             feascond,
@@ -729,7 +826,7 @@ pub fn mehrotra<P: Problem>(
             mu: mu_new,
             sigma,
             stepsize: dot(&step.dx, &step.dx).sqrt(),
-            obj: f / opt.cost_mult,
+            obj: e.f / opt.cost_mult,
             alphap,
             alphad,
         });
@@ -746,7 +843,7 @@ pub fn mehrotra<P: Problem>(
                 failed = true;
                 break;
             }
-            f0 = f;
+            f0 = e.f;
         }
     }
     let status = if failed {
@@ -759,7 +856,7 @@ pub fn mehrotra<P: Problem>(
 
     // Constraints well inside their limits lose a small multiplier, as in MIPS; then the scale
     //   comes off
-    for (mu, &h) in p.mu.iter_mut().zip(&h) {
+    for (mu, &h) in p.mu.iter_mut().zip(&e.h) {
         if h < -opt.feastol && *mu < opt.mu_threshold {
             *mu = 0.0;
         }
@@ -782,27 +879,29 @@ pub fn mehrotra<P: Problem>(
         unscale(&p.pi_u),
     );
 
-    // The multipliers in MIPS's convention: per row of A, and per variable
+    // The multipliers in MIPS's convention: the nonlinear constraints', then per row of A, and
+    //   per variable
+    let (lam_lin, mu_lin) = (&lam[neqnln..], &mu[niqnln..]);
     let na = split.na;
     let mut mu_l = vec![0.0; na];
     let mut mu_u = vec![0.0; na];
     let (nlt, ngt, nbx) = (split.ilt.len(), split.igt.len(), split.ibx.len());
     for (k, &r) in split.ieq.iter().enumerate() {
-        if lam[k] < 0.0 {
-            mu_l[r] = -lam[k];
-        } else if lam[k] > 0.0 {
-            mu_u[r] = lam[k];
+        if lam_lin[k] < 0.0 {
+            mu_l[r] = -lam_lin[k];
+        } else if lam_lin[k] > 0.0 {
+            mu_u[r] = lam_lin[k];
         }
     }
     for (k, &r) in split.ilt.iter().enumerate() {
-        mu_u[r] = mu[k];
+        mu_u[r] = mu_lin[k];
     }
     for (k, &r) in split.igt.iter().enumerate() {
-        mu_l[r] = mu[nlt + k];
+        mu_l[r] = mu_lin[nlt + k];
     }
     for (k, &r) in split.ibx.iter().enumerate() {
-        mu_u[r] = mu[nlt + ngt + k];
-        mu_l[r] = mu[nlt + ngt + nbx + k];
+        mu_u[r] = mu_lin[nlt + ngt + k];
+        mu_l[r] = mu_lin[nlt + ngt + nbx + k];
     }
     let mut lower = vec![0.0; nx];
     let mut upper = vec![0.0; nx];
@@ -813,7 +912,7 @@ pub fn mehrotra<P: Problem>(
         upper[k] = pi;
     }
     for (j, &k) in split.fixed.iter().enumerate() {
-        let lam = lam[split.ieq.len() + j];
+        let lam = lam_lin[split.ieq.len() + j];
         if lam < 0.0 {
             lower[k] = -lam;
         } else if lam > 0.0 {
@@ -822,12 +921,12 @@ pub fn mehrotra<P: Problem>(
     }
     Ok(MehrotraSolution {
         x,
-        f: f / opt.cost_mult,
+        f: e.f / opt.cost_mult,
         status,
         iterations: i,
         multipliers: Multipliers {
-            eq_nonlin: vec![],
-            ineq_nonlin: vec![],
+            eq_nonlin: lam[..neqnln].to_vec(),
+            ineq_nonlin: mu[..niqnln].to_vec(),
             mu_l,
             mu_u,
             lower,
