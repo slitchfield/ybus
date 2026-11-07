@@ -173,6 +173,13 @@ pub enum PowerflowError {
         /// What is wrong with it.
         reason: &'static str,
     },
+    /// The GPU path (feature `cuda`) failed: the CUDA driver or cuSPARSE reported an error,
+    /// or the kernels didn't compile.
+    #[cfg(feature = "cuda")]
+    Gpu {
+        /// The GPU's error, as `ybus_cuda` describes it.
+        reason: String,
+    },
 }
 
 impl fmt::Display for PowerflowError {
@@ -281,6 +288,8 @@ impl fmt::Display for PowerflowError {
             PowerflowError::UnsupportedGenerator { row, reason } => {
                 write!(f, "generator row {row} can't be used: {reason}")
             }
+            #[cfg(feature = "cuda")]
+            PowerflowError::Gpu { reason } => write!(f, "the GPU path failed: {reason}"),
         }
     }
 }
