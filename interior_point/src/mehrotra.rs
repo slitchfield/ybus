@@ -36,6 +36,21 @@
 //!    complementarity, and adding the predictor's second-order term
 //!    (`r_z = −Z μ − ΔZ_aff Δμ_aff + σ μ e`).
 //!
+//! **With nonlinear constraints,** the second-order term is damped by the affine step lengths,
+//! `r_z = −Z μ − α_p,aff α_d,aff ΔZ_aff Δμ_aff + σ μ e`.
+//!
+//! - **Why:** the affine step can be enormous on a nonconvex problem far from its solution.
+//!   With the full term, the corrector's step reached 2e12 at the AC OPF's first iteration on
+//!   `case_ACTIVSg10k`, past `max_stepsize`. On `case_ACTIVSg2000`, `case3012wp`, `case3120sp`,
+//!   `case3375wp` and `case8387pegase`, the steps were blocked at lengths of 1e-4 from the
+//!   start, and the solve failed where MIPS converges.
+//! - **The effect:** damped, all five converge. Merit-function backtracking couldn't help, since
+//!   the steps were already short.
+//! - **Its origin:** this form is the crate's own safeguard, chosen from those experiments (phase
+//!   O3's record), not a method from the literature.
+//! - **Unchanged elsewhere:** linear and quadratic programs take the full term, as Mehrotra
+//!   describes it.
+//!
 //! **Step lengths.** The primal and dual steps are each at most `xi` of the way to the boundary.
 //!
 //! - **A linear program** takes them with separate lengths.
@@ -754,17 +769,24 @@ pub fn mehrotra<P: Problem>(
                     let (ap, ad) = affine.lengths(&split, &p, 1.0);
                     let mu_aff = affine.complementarity_after(&split, &p, ap, ad) / pairs as f64;
                     let sigma = (mu_aff / mu_now).powi(3).clamp(0.0, 1.0);
-                    // The corrector: centering at σμ, with the predictor's second-order term
+                    // The corrector: centering at σμ, with the predictor's second-order term,
+                    //   damped by the affine step lengths when there are nonlinear constraints
+                    //   (see the module docs)
                     let target = sigma * mu_now;
+                    let damping = if nonlinear { ap * ad } else { 1.0 };
                     let r_z: Vec<f64> = (0..niq)
-                        .map(|k| r_z[k] - affine.dz[k] * affine.dmu[k] + target)
+                        .map(|k| r_z[k] - damping * affine.dz[k] * affine.dmu[k] + target)
                         .collect();
                     let r_l: Vec<f64> = (0..nlo)
-                        .map(|j| r_l[j] - affine.dx[split.lo[j]] * affine.dpi_l[j] + target)
+                        .map(|j| {
+                            r_l[j] - damping * affine.dx[split.lo[j]] * affine.dpi_l[j] + target
+                        })
                         .collect();
                     // s_u's step is −dx
                     let r_u: Vec<f64> = (0..nup)
-                        .map(|j| r_u[j] + affine.dx[split.up[j]] * affine.dpi_u[j] + target)
+                        .map(|j| {
+                            r_u[j] + damping * affine.dx[split.up[j]] * affine.dpi_u[j] + target
+                        })
                         .collect();
                     (solve(&r_z, &r_l, &r_u), sigma)
                 }

@@ -77,12 +77,13 @@ fn largest_multiplier(m: &interior_point::solution::Multipliers) -> f64 {
 }
 
 /// This solver's iterations on the committed cases (2026-11-07), pinned as in
-/// `interior_point`'s tests: DC, then AC
+/// `interior_point`'s tests: DC, then AC. The AC counts follow the damped corrector (phase O3's
+/// PR 4); with the full one they were 7, 11 and 9.
 fn expected_iterations(name: &str) -> (usize, usize) {
     match name {
-        "case14" => (6, 7),
+        "case14" => (6, 9),
         "case30" => (3, 11),
-        "case118" => (5, 9),
+        "case118" => (5, 11),
         _ => panic!("no expected iterations for {name}"),
     }
 }
