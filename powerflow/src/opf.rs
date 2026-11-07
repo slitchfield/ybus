@@ -1,5 +1,6 @@
 //! Optimal power flow, following MATPOWER's `runopf` with its default solver, MIPS (from the
-//! `interior_point` crate).
+//! `interior_point` crate), or with the predictor-corrector method from the same crate
+//! ([`OpfSolver`]).
 //!
 //! - [`cost`]: the generator costs, evaluated as MATPOWER's `totcost` evaluates them and
 //!   prepared for the solver as `opf_setup` and `makeAy` prepare them.
@@ -17,12 +18,81 @@ pub mod derivatives;
 
 use std::f64::consts::PI;
 
+use interior_point::mehrotra::{MehrotraOptions, MehrotraSolution};
+use interior_point::mips::{MipsOptions, MipsSolution};
+use interior_point::solution::{Multipliers, Status};
 use sparse_mat::compressed_matrix::CsrMatrix;
 
 use crate::case::{BusType, Case};
 use crate::opf::cost::{CostVariable, OpfCosts};
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Network;
+
+/// Which interior-point solver an optimal power flow runs, with its options.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum OpfSolver {
+    /// MIPS, ported step for step from MATPOWER's `mips.m`: MATPOWER's default, and this
+    /// crate's, whose results match MATPOWER's
+    Mips(MipsOptions),
+    /// The primal-dual method with Mehrotra's predictor-corrector
+    /// ([`interior_point::mehrotra`]), on the same problem, constraints and starting point
+    Mehrotra(MehrotraOptions),
+}
+
+/// The solver's own result, on the model's variables and constraints, with each iteration's
+/// record.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum SolverResult {
+    /// MIPS's
+    Mips(MipsSolution),
+    /// The predictor-corrector method's
+    Mehrotra(MehrotraSolution),
+}
+
+impl SolverResult {
+    /// How the solve ended.
+    pub fn status(&self) -> Status {
+        match self {
+            SolverResult::Mips(s) => s.status,
+            SolverResult::Mehrotra(s) => s.status,
+        }
+    }
+
+    /// The iterations taken.
+    pub fn iterations(&self) -> usize {
+        match self {
+            SolverResult::Mips(s) => s.iterations,
+            SolverResult::Mehrotra(s) => s.iterations,
+        }
+    }
+
+    /// The final point, on the model's variables.
+    pub fn x(&self) -> &[f64] {
+        match self {
+            SolverResult::Mips(s) => &s.x,
+            SolverResult::Mehrotra(s) => &s.x,
+        }
+    }
+
+    /// The objective the solver minimized there (for the DC OPF, without the costs' constant
+    /// terms).
+    pub fn f(&self) -> f64 {
+        match self {
+            SolverResult::Mips(s) => s.f,
+            SolverResult::Mehrotra(s) => s.f,
+        }
+    }
+
+    /// The multipliers, in MIPS's convention.
+    pub fn multipliers(&self) -> &Multipliers {
+        match self {
+            SolverResult::Mips(s) => &s.multipliers,
+            SolverResult::Mehrotra(s) => &s.multipliers,
+        }
+    }
+}
 
 /// The connected buses of type REF (internal indices), whose angles the OPF fixes, as
 /// `opf_setup` finds them after `ext2int`, with no `bustypes`: a REF bus needs no generator.
