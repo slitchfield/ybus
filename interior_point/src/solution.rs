@@ -1,9 +1,21 @@
-//! What the solvers' results share: the multipliers, in MIPS's convention, and a check of the
-//! KKT conditions at a point that doesn't depend on which solver found it.
+//! What the solvers' results share: how a solve ended, the multipliers in MIPS's convention, and
+//! a check of the KKT conditions at a point that doesn't depend on which solver found it.
 
 use crate::interior_point_error::InteriorPointError;
 use crate::problem::{Constraints, Problem};
 use crate::vector::norm_inf;
+
+/// How a solve ended, for either solver: MIPS calls it [`MipsStatus`](crate::mips::MipsStatus)
+/// and the predictor-corrector method [`MehrotraStatus`](crate::mehrotra::MehrotraStatus).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// Every termination test passed (MIPS's `exitflag` 1)
+    Converged,
+    /// `max_it` iterations passed without converging (0)
+    MaxIterations,
+    /// The solve failed numerically (−1); each solver's docs list the ways it can
+    NumericalFailure,
+}
 
 /// The multipliers at a solution, as MIPS reports them. Each is nonnegative at a KKT point except
 /// the equality constraints', and each is 0 for a constraint that's absent or unbounded that way.
