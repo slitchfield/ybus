@@ -102,22 +102,8 @@ pub enum MipsStatus {
     NumericalFailure,
 }
 
-/// The multipliers at the solution, as MIPS reports them.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Multipliers {
-    /// One per nonlinear equality constraint (`eqnonlin`)
-    pub eq_nonlin: Vec<f64>,
-    /// One per nonlinear inequality constraint (`ineqnonlin`)
-    pub ineq_nonlin: Vec<f64>,
-    /// One per linear constraint, for its lower bound `l` (`mu_l`)
-    pub mu_l: Vec<f64>,
-    /// One per linear constraint, for its upper bound `u` (`mu_u`)
-    pub mu_u: Vec<f64>,
-    /// One per variable, for `xmin` (`lower`)
-    pub lower: Vec<f64>,
-    /// One per variable, for `xmax` (`upper`)
-    pub upper: Vec<f64>,
-}
+/// The multipliers at the solution, as MIPS reports them (shared with the other solvers).
+pub use crate::solution::Multipliers;
 
 /// One iteration's record (`output.hist`): the termination measures, the barrier parameter,
 /// the step's 2-norm, the objective and the step lengths.
