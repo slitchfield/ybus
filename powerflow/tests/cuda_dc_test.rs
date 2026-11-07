@@ -1,4 +1,5 @@
-//! The DC power flow's GPU path (feature `cuda`) against the CPU's: batched solves. The results
+//! The DC power flow's GPU path (feature `cuda`) against the CPU's: batched solves and PTDF
+//! columns and transfers. The results
 //! must agree to within `BAR`, relative to the largest magnitude of each quantity, and errors
 //! must be the same. The tests skip, saying so, on a machine without CUDA unless
 //! `YBUS_REQUIRE_CUDA=1`, and without a case unless `YBUS_REQUIRE_CASES=1`.
@@ -7,8 +8,8 @@
 
 mod common;
 
-use powerflow::case::Case;
-use powerflow::dc::{DcModel, DcSolution, DcSolver};
+use powerflow::case::{BusType, Case};
+use powerflow::dc::{DcModel, DcSolution, DcSolver, PtdfSlack};
 use powerflow::powerflow_error::PowerflowError;
 use powerflow::Gpu;
 
@@ -143,4 +144,117 @@ fn a_network_of_reference_buses_needs_no_gpu_solve() {
     assert_eq!(on_gpu.block_width(), 0);
     let results = on_gpu.solve_many(&[&case]).unwrap();
     assert_eq!(results[0].as_ref().unwrap(), &study.solve(&case).unwrap());
+}
+
+/// Panics unless every GPU column agrees with the CPU's, relative to the CPU column's largest
+/// magnitude (a column of zeros must be zeros)
+fn assert_columns_agree(what: &str, gpu: &[Vec<f64>], cpu: &[Vec<f64>]) {
+    assert_eq!(gpu.len(), cpu.len(), "{what}: columns");
+    for (j, (g, c)) in gpu.iter().zip(cpu).enumerate() {
+        let difference = relative_difference(g, c);
+        assert!(
+            difference < BAR,
+            "{what}: column {j} differs by {difference:e}"
+        );
+    }
+}
+
+/// The slacks to test on `case`: MATPOWER's, another bus (so the sensitivity factors its own
+/// reduced Bbus), and one distributed in proportion to the loads
+fn slacks(case: &Case, model: &DcModel) -> Vec<(&'static str, PtdfSlack)> {
+    let other = model.bus_rows()[model.bus_rows().len() / 2];
+    let loads: Vec<f64> = case.bus.iter().map(|bus| bus.pd_mw.max(0.0)).collect();
+    vec![
+        ("reference", PtdfSlack::Reference),
+        ("another bus", PtdfSlack::Bus(other)),
+        ("distributed", PtdfSlack::Weights(loads)),
+    ]
+}
+
+#[test]
+fn ptdf_columns_and_transfers_match_the_cpu() {
+    let Some(gpu) = gpu("ptdf_columns_and_transfers_match_the_cpu") else {
+        return;
+    };
+    for &(name, _) in CASES {
+        let Some(path) = common::matpower_case(name) else {
+            continue;
+        };
+        let case = Case::from_path(&path).unwrap();
+        let model = DcModel::new(&case).unwrap();
+        let study = model.study().unwrap();
+        let nbus = case.bus.len();
+        let all: Vec<usize> = (0..nbus).collect();
+        for (slack_name, slack) in slacks(&case, &model) {
+            let what = format!("{name}, {slack_name} slack");
+            let sensitivity = study.sensitivity(slack).unwrap();
+            let mut on_gpu = sensitivity.gpu(&gpu).unwrap();
+            // Several blocks, the last one partial
+            on_gpu.set_block_width(64);
+            assert_columns_agree(
+                &format!("{what} columns"),
+                &on_gpu.ptdf_columns(&all).unwrap(),
+                &sensitivity.ptdf_columns(&all).unwrap(),
+            );
+            let slack_bus = sensitivity.slack_bus();
+            let mut transfers: Vec<(usize, usize)> =
+                (0..nbus).map(|i| (i, (i * 7 + 3) % nbus)).collect();
+            transfers.extend([
+                (0, 0),
+                (slack_bus, 1),
+                (1, slack_bus),
+                (slack_bus, slack_bus),
+            ]);
+            // Transfers, then columns again: the offset goes back and forth
+            assert_columns_agree(
+                &format!("{what} transfers"),
+                &on_gpu.ptdf_transfers(&transfers).unwrap(),
+                &sensitivity.ptdf_transfers(&transfers).unwrap(),
+            );
+            assert_columns_agree(
+                &format!("{what} columns again"),
+                &on_gpu.ptdf_columns(&all[..10]).unwrap(),
+                &sensitivity.ptdf_columns(&all[..10]).unwrap(),
+            );
+            assert_eq!(
+                on_gpu.ptdf_columns(&[nbus]).unwrap_err(),
+                sensitivity.ptdf_columns(&[nbus]).unwrap_err(),
+            );
+        }
+        eprintln!("{name}: PTDF columns and transfers agree");
+    }
+}
+
+#[test]
+fn an_isolated_bus_gets_the_cpus_ptdf() {
+    let Some(gpu) = gpu("an_isolated_bus_gets_the_cpus_ptdf") else {
+        return;
+    };
+    let Some(path) = common::matpower_case("case14") else {
+        return;
+    };
+    // Bus 8 hangs off bus 7 alone, so isolating it strands nothing
+    let mut case = Case::from_path(&path).unwrap();
+    let row = case.bus.iter().position(|bus| bus.bus_label == 8).unwrap();
+    case.bus[row].bus_type = BusType::Isolated;
+    let model = DcModel::new(&case).unwrap();
+    let study = model.study().unwrap();
+    let all: Vec<usize> = (0..case.bus.len()).collect();
+    let transfers = [(row, 0), (0, row), (row, row)];
+    for (slack_name, slack) in slacks(&case, &model) {
+        let sensitivity = study.sensitivity(slack).unwrap();
+        let mut on_gpu = sensitivity.gpu(&gpu).unwrap();
+        let columns = on_gpu.ptdf_columns(&all).unwrap();
+        assert!(columns[row].iter().all(|&v| v == 0.0), "{slack_name}");
+        assert_columns_agree(
+            slack_name,
+            &columns,
+            &sensitivity.ptdf_columns(&all).unwrap(),
+        );
+        assert_columns_agree(
+            slack_name,
+            &on_gpu.ptdf_transfers(&transfers).unwrap(),
+            &sensitivity.ptdf_transfers(&transfers).unwrap(),
+        );
+    }
 }

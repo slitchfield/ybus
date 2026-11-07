@@ -37,7 +37,7 @@ mod outage;
 mod reach;
 mod sensitivity;
 #[cfg(feature = "cuda")]
-pub use gpu::DcGpuStudy;
+pub use gpu::{DcGpuSensitivity, DcGpuStudy};
 pub use sensitivity::{DcSensitivity, PtdfSlack};
 
 /// The DC model of a case: the B matrices and phase-shifter injections in per unit, over the
