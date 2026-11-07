@@ -238,10 +238,12 @@ pub fn kkt_residuals<P: Problem>(
         }
     }
 
+    // Adding +0.0 turns a −0.0 (the maximum of 0 and the negation of a zero multiplier) into
+    //   0.0, so a satisfied condition reads as zero
     Ok(KktResiduals {
         stationarity: norm_inf(&gradient),
-        feasibility: r.feasibility,
-        complementarity: r.complementarity,
-        dual_feasibility: r.dual_feasibility,
+        feasibility: r.feasibility + 0.0,
+        complementarity: r.complementarity + 0.0,
+        dual_feasibility: r.dual_feasibility + 0.0,
     })
 }

@@ -7,13 +7,15 @@
 #
 # Usage: scripts/benchmark-opf.sh [<output.csv>]
 #   Writes one CSV line per case, smallest case file first, to <output.csv> (default
-#   target/opf-survey-<model>.csv) and to stdout as it goes. Needs GNU time (/usr/bin/time) and the
+#   target/opf-survey-<model>-<solver>.csv) and to stdout as it goes. Needs GNU time (/usr/bin/time) and the
 #   normalized cases (scripts/normalize-cases.sh, which needs Octave unless they're already made).
 #   MATPOWER's results are generated into testdata/ by scripts/generate-reference.sh, which needs
 #   Octave; without it, the comparison columns stay empty. Never commit those results
 #   (docs/PowerFlowChecklist.md, Phase 1.5).
 #
 #   YBUS_BENCH_MODEL    dc or ac (default dc)
+#   YBUS_BENCH_SOLVER   mips or mehrotra (default mips, MATPOWER's): the OPF's solver, at
+#                       MATPOWER's OPF settings
 #   YBUS_BENCH_TIMEOUT  the time limit per case, in seconds (default 3600)
 #   YBUS_BENCH_MEMORY   the address-space limit per case, in GiB (default 10)
 #   YBUS_BENCH_CASES    the cases to survey, separated by spaces (default: every case with costs)
@@ -27,7 +29,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NORMALIZED="$("${ROOT}/scripts/normalize-cases.sh")"
 REFERENCE="${NORMALIZED%-normalized}-reference"
 MODEL="${YBUS_BENCH_MODEL:-dc}"
-OUT="${1:-${ROOT}/target/opf-survey-${MODEL}.csv}"
+SOLVER="${YBUS_BENCH_SOLVER:-mips}"
+case "${SOLVER}" in
+    mips|mehrotra) ;;
+    *) echo "error: YBUS_BENCH_SOLVER must be mips or mehrotra" >&2; exit 2 ;;
+esac
+OUT="${1:-${ROOT}/target/opf-survey-${MODEL}-${SOLVER}.csv}"
 TIMEOUT="${YBUS_BENCH_TIMEOUT:-3600}"
 MEMORY_GIB="${YBUS_BENCH_MEMORY:-10}"
 case "${MODEL}" in
@@ -80,7 +87,7 @@ for name in "${CASES[@]}"; do
     # exec replaces the shell, so the limits and GNU time's measurement apply to the survey
     if line="$(/usr/bin/time -f %M -o "${LOG}/rss" timeout "${TIMEOUT}" \
         bash -c 'ulimit -v "$1" && exec "${@:2}"' _ "$((MEMORY_GIB * 1024 * 1024))" \
-        "${SURVEY}" --model "${MODEL}" "${NORMALIZED}/${name}.m" "${REFERENCE}" \
+        "${SURVEY}" --model "${MODEL}" --solver "${SOLVER}" "${NORMALIZED}/${name}.m" "${REFERENCE}" \
         2> "${LOG}/err")"; then
         status=ok
     else
