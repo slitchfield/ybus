@@ -192,10 +192,167 @@ pub struct SymbolicIndefinite {
     mirror: Vec<usize>,
 }
 
+/// How [`SymbolicIndefinite`] merges supernodes into larger fronts (relaxed amalgamation,
+/// Ashcraft and Grimes, "The influence of relaxed supernode partitions on the multifrontal
+/// method," *ACM Trans. Math. Softw.* 15(4):291–309, 1989, doi:10.1145/76909.76910).
+///
+/// A child merges into its parent when its columns come just before the parent's (as a parent's
+/// last child's do in a postorder), and the merged front, with `c` columns, of which a fraction
+/// `z` of its dense lower trapezoid's entries would be explicit zeros, passes the rule:
+///
+/// `c < columns[0]`, or `c < columns[1]` and `z < zeros[0]`, or `c < columns[2]` and
+/// `z < zeros[1]`, or `z < zeros[2]`.
+///
+/// Fewer, larger fronts cost fewer assemblies, allocations and kernel calls, for some
+/// arithmetic on the zeros. The pivots are chosen within fronts, so merging changes the pivot
+/// sequence, and with it the factorization's rounding.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Amalgamation {
+    /// The column thresholds
+    pub columns: [usize; 3],
+    /// The zero fractions allowed below each
+    pub zeros: [f64; 3],
+}
+
+impl Amalgamation {
+    /// No merging: the fronts are the fundamental supernodes on the analysis's own ordering.
+    pub const NONE: Amalgamation = Amalgamation {
+        columns: [0; 3],
+        zeros: [0.0; 3],
+    };
+
+    fn merges(&self, columns: usize, zero_fraction: f64) -> bool {
+        columns < self.columns[0]
+            || (columns < self.columns[1] && zero_fraction < self.zeros[0])
+            || (columns < self.columns[2] && zero_fraction < self.zeros[1])
+            || zero_fraction < self.zeros[2]
+    }
+}
+
+impl Default for Amalgamation {
+    /// CHOLMOD's defaults: merge into fronts of fewer than 4 columns always, of fewer than 16
+    /// with under 80% zeros, of fewer than 48 with under 10%, and any with under 5%.
+    fn default() -> Amalgamation {
+        Amalgamation {
+            columns: [4, 16, 48],
+            zeros: [0.8, 0.1, 0.05],
+        }
+    }
+}
+
+/// `cholesky` with its ordering postordered: the same elimination tree, renumbered so that each
+/// subtree's columns are contiguous and each parent comes right after its last child
+fn postordered(cholesky: SymbolicCholesky) -> SymbolicCholesky {
+    let order = cholesky.postorder();
+    if order.iter().enumerate().all(|(k, &node)| k == node) {
+        return cholesky;
+    }
+    let perm: Vec<usize> = order.iter().map(|&node| cholesky.perm[node]).collect();
+    let n = cholesky.dim();
+    let pattern: CsrMatrix<u8> = CompressedMatrix::from_parts_unchecked(
+        (n, n),
+        cholesky.a_ptr.clone(),
+        cholesky.a_idx.clone(),
+        vec![0; cholesky.a_idx.len()],
+    );
+    pattern.analyze_cholesky_permuted(perm)
+}
+
+/// The supernodes merged by `amalgamation`'s rule: children are taken from the last, so a chain
+/// of small supernodes merges into one, and each merge only into a parent whose columns its own
+/// come just before
+fn amalgamate(nodes: Vec<Supernode>, amalgamation: Amalgamation) -> Vec<Supernode> {
+    if amalgamation == Amalgamation::NONE {
+        return nodes;
+    }
+    let count = nodes.len();
+    // The front each supernode has merged into (itself if none), its start, and the entries of
+    //   L its columns hold, explicit zeros not counted
+    let mut into: Vec<usize> = (0..count).collect();
+    let mut start: Vec<usize> = nodes.iter().map(|node| node.start).collect();
+    let trapezoid = |columns: usize, below: usize| columns * (columns + 1) / 2 + columns * below;
+    // A fundamental supernode's L block is dense, so its entries are its trapezoid's
+    let mut entries: Vec<usize> = nodes
+        .iter()
+        .map(|node| trapezoid(node.end - node.start, node.below.len()))
+        .collect();
+    fn find(into: &mut [usize], mut s: usize) -> usize {
+        while into[s] != s {
+            into[s] = into[into[s]];
+            s = into[s];
+        }
+        s
+    }
+    for s in (0..count).rev() {
+        let Some(parent) = nodes[s].parent else {
+            continue;
+        };
+        let p = find(&mut into, parent);
+        if nodes[s].end != start[p] {
+            continue;
+        }
+        let columns = nodes[p].end - start[s];
+        let dense = trapezoid(columns, nodes[p].below.len());
+        let actual = entries[s] + entries[p];
+        let zero_fraction = (dense - actual) as f64 / dense as f64;
+        if amalgamation.merges(columns, zero_fraction) {
+            into[s] = p;
+            start[p] = start[s];
+            // The true entries, not the dense trapezoid: counting the merged front's explicit
+            //   zeros as entries would hide them from every later merge's zero fraction, and
+            //   merges would cascade into dense fronts
+            entries[p] = actual;
+        }
+    }
+    // The fronts left, in order of their columns, with their parents renumbered
+    let mut number = vec![usize::MAX; count];
+    let mut kept = Vec::new();
+    for (s, slot) in number.iter_mut().enumerate() {
+        if find(&mut into, s) == s {
+            *slot = kept.len();
+            kept.push(s);
+        }
+    }
+    let mut merged: Vec<Supernode> = kept
+        .iter()
+        .map(|&s| Supernode {
+            start: start[s],
+            end: nodes[s].end,
+            below: nodes[s].below.clone(),
+            parent: nodes[s].parent,
+        })
+        .collect();
+    for node in &mut merged {
+        node.parent = node.parent.map(|p| number[find(&mut into, p)]);
+    }
+    // The fronts' column ranges partition the columns, and their ends haven't moved, so they're
+    //   still in order of their columns, and a parent still follows its children
+    debug_assert!(merged.windows(2).all(|pair| pair[0].end == pair[1].start));
+    merged
+}
+
 impl SymbolicIndefinite {
     /// The analysis for the multifrontal LDLᵀ on `cholesky`'s ordering, elimination tree and
-    /// pattern.
+    /// pattern, with the default relaxed amalgamation ([`Amalgamation::default`]): the
+    /// ordering is postordered and small supernodes merged.
     pub fn new(cholesky: SymbolicCholesky) -> SymbolicIndefinite {
+        SymbolicIndefinite::with_amalgamation(cholesky, Amalgamation::default())
+    }
+
+    /// The analysis with the given amalgamation. With [`Amalgamation::NONE`] the fronts are the
+    /// fundamental supernodes on `cholesky`'s own ordering. Otherwise the ordering is first
+    /// postordered (the same elimination tree, renumbered so each subtree's columns are
+    /// contiguous and a parent follows its last child), so that a child can merge into its
+    /// parent, and the supernodes are merged by the rule `amalgamation` sets.
+    pub fn with_amalgamation(
+        cholesky: SymbolicCholesky,
+        amalgamation: Amalgamation,
+    ) -> SymbolicIndefinite {
+        let cholesky = if amalgamation == Amalgamation::NONE {
+            cholesky
+        } else {
+            postordered(cholesky)
+        };
         let n = cholesky.dim();
         let raw = supernodes(&cholesky);
         // Each column's supernode, to find a supernode's parent
@@ -204,7 +361,7 @@ impl SymbolicIndefinite {
             node_of[*start..*end].fill(s);
         }
         let parent = cholesky.elimination_tree();
-        let nodes = raw
+        let fundamental: Vec<Supernode> = raw
             .into_iter()
             .map(|(start, end, below)| Supernode {
                 start,
@@ -213,6 +370,7 @@ impl SymbolicIndefinite {
                 parent: parent[end - 1].map(|p| node_of[p]),
             })
             .collect();
+        let nodes = amalgamate(fundamental, amalgamation);
         // The gather map: the matrix whose values are their own positions, permuted as a
         //   factorization would permute A
         let (a_ptr, a_idx) = (&cholesky.a_ptr, &cholesky.a_idx);

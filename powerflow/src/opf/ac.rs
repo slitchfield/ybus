@@ -79,8 +79,8 @@ impl AcOpfOptions {
     /// by the pivoted LDLᵀ (`KktFactorization::Ldlt`, without the inertia correction). On the
     /// survey of every MATPOWER case with costs it met phase O3's bar wherever LU did, with the
     /// same outcomes and iterations, 1.12× faster in the median and 2.70× in total
-    /// (`docs/benchmarks/ldlt-opf-2026-11-08.md`). The DC OPF's settings keep LU, which is faster
-    /// on its many small cases.
+    /// (`docs/benchmarks/ldlt-opf-2026-11-08.md`), and more since the LDLᵀ's bookkeeping and
+    /// amalgamation (`docs/benchmarks/ldlt-amalgamation-2026-11-08.md`).
     pub fn mehrotra() -> Self {
         let mut mehrotra = MehrotraOptions::default();
         mehrotra.feastol = 5e-6;
