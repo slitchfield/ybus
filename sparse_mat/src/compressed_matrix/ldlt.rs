@@ -36,14 +36,18 @@ pub struct Inertia {
 /// with `D` positive on `H`'s rows and negative on `G`'s (R. J. Vanderbei, "Symmetric
 /// quasidefinite matrices," *SIAM J. Optim.* 5(1):100–113, 1995, doi:10.1137/0805005). An
 /// interior-point method's KKT matrix becomes one when regularized, which is the caller's
-/// choice: this factorization doesn't perturb small pivots. A matrix that needs pivoting, such
-/// as `[[0, 1], [1, 0]]`, fails with a zero pivot.
+/// choice: [`factor_ldlt`](SymbolicCholesky::factor_ldlt) doesn't perturb small pivots, and a
+/// matrix that needs pivoting, such as `[[0, 1], [1, 0]]`, fails with a zero pivot.
+/// [`factor_ldlt_replacing`](SymbolicCholesky::factor_ldlt_replacing) replaces tiny pivots
+/// instead, for matrices whose regularization is lost to rounding, and
+/// [`CsrMatrix::symmetric_scaling`] equilibrates a badly scaled matrix first.
 ///
 /// Static pivots lose accuracy as the regularization shrinks, since a small pivot early in the
 /// order makes large entries of `L`. On random quasi-definite matrices regularized by `δ`, the
 /// scaled residual grew as 1/δ: about 3e-10 at δ = 1e-8, and near machine precision from 1e-2
 /// up (see the crate's `ldlt_test`). Iterative refinement against the factorization recovers
-/// the lost accuracy where it matters.
+/// the lost accuracy where it matters
+/// ([`Ldlt::solve_refined`], [`Ldlt::solve_refined_normwise`]).
 ///
 /// By Sylvester's law of inertia, `D`'s signs are `A`'s eigenvalues' signs:
 /// [`Ldlt::inertia`].
@@ -57,6 +61,22 @@ pub struct Ldlt<T: Scalar = f64> {
     /// `D`'s entries, real (with zero imaginary part for a complex element type)
     d: Vec<T>,
     perm: Vec<usize>,
+    /// How many pivots [`SymbolicCholesky::factor_ldlt_replacing`] replaced
+    replaced: usize,
+}
+
+/// Which pivots [`SymbolicCholesky::factor_ldlt_replacing`] replaces, and with what: a pivot
+/// with `|d| ≤ threshold` becomes `value` (for a row expected positive) or `−value` (for one
+/// expected negative).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PivotReplacement<'a, R> {
+    /// For each row of `A`, in the original numbering, whether its pivot is expected positive
+    /// (as on a quasi-definite matrix's `H` block) rather than negative (its `−G` block)
+    pub positive: &'a [bool],
+    /// The largest magnitude replaced, at least 0
+    pub threshold: R,
+    /// The replacement's magnitude, positive
+    pub value: R,
 }
 
 impl SymbolicCholesky {
@@ -76,6 +96,52 @@ impl SymbolicCholesky {
     pub fn factor_ldlt<T: Scalar + ComplexFloat>(
         &self,
         matrix: &CsrMatrix<T>,
+    ) -> Result<Ldlt<T>, SparseError> {
+        self.factor_ldlt_with(matrix, None)
+    }
+
+    /// [`factor_ldlt`](Self::factor_ldlt), replacing each pivot whose magnitude is at most
+    /// `replacement.threshold` by `±replacement.value`, with the sign its row expects, rather
+    /// than failing on it or dividing by it. [`Ldlt::replaced`] counts the replacements.
+    ///
+    /// **What it's for:** static pivots on a regularized KKT-shaped matrix whose entries span
+    /// many orders of magnitude. There a pivot whose exact value is about the regularization
+    /// can be lost to rounding, become zero and fail the factorization. Replacing it is the
+    /// "dynamic" regularization of interior-point solvers for quadratic and conic programs
+    /// (Altman and Gondzio, "Regularized symmetric indefinite systems in interior point
+    /// methods for linear and quadratic optimization," *Optim. Methods Softw.* 11(1–4):275–302,
+    /// 1999, doi:10.1080/10556789908805754, regularize the pivots as they're computed). It
+    /// changes the matrix that's factored, so solve against the original with refinement
+    /// ([`Ldlt::solve_refined_normwise`]).
+    ///
+    /// **What it leaves alone:** a pivot larger than the threshold keeps its value even if its
+    /// sign isn't the expected one, so [`Ldlt::inertia`] still reports a matrix that isn't
+    /// quasi-definite, as when an optimization problem's Hessian is indefinite. Replacing such
+    /// a pivot by a small one of the expected sign would make `L`'s entries large, so that is
+    /// for the caller to correct, by regularizing more.
+    ///
+    /// Returns the errors of [`factor_ldlt`](Self::factor_ldlt), and
+    /// `SparseError::ShapeMismatch` unless `replacement.positive` has one entry per row.
+    /// A NaN pivot is still `SparseError::SingularMatrix`, and so is a zero one with a zero
+    /// threshold.
+    pub fn factor_ldlt_replacing<T: Scalar + ComplexFloat>(
+        &self,
+        matrix: &CsrMatrix<T>,
+        replacement: &PivotReplacement<'_, T::Real>,
+    ) -> Result<Ldlt<T>, SparseError> {
+        if replacement.positive.len() != self.dim() {
+            return Err(SparseError::ShapeMismatch {
+                left: (self.dim(), self.dim()),
+                right: (replacement.positive.len(), 1),
+            });
+        }
+        self.factor_ldlt_with(matrix, Some(replacement))
+    }
+
+    fn factor_ldlt_with<T: Scalar + ComplexFloat>(
+        &self,
+        matrix: &CsrMatrix<T>,
+        replacement: Option<&PivotReplacement<'_, T::Real>>,
     ) -> Result<Ldlt<T>, SparseError> {
         let n = self.dim();
         if matrix.shape != (n, n) || matrix.ptr != self.a_ptr || matrix.idx != self.a_idx {
@@ -107,6 +173,7 @@ impl SymbolicCholesky {
         let mut l_values = vec![T::zero(); self.l_idx.len()];
         let mut d = vec![T::zero(); n];
         let mut work = vec![T::zero(); n];
+        let mut replaced = 0;
         for i in 0..n {
             // Row i of P A Pᵀ: the part left of the diagonal into the work vector, and the
             //   (real) diagonal
@@ -139,6 +206,16 @@ impl SymbolicCholesky {
                 col_fill[j] += 1;
                 *l_value = l_ij;
                 remaining = remaining - (l_ij * z_j.conj()).re();
+            }
+            if let Some(replacement) = replacement {
+                if Float::abs(remaining) <= replacement.threshold {
+                    remaining = if replacement.positive[self.perm[i]] {
+                        replacement.value
+                    } else {
+                        -replacement.value
+                    };
+                    replaced += 1;
+                }
             }
             if Float::is_nan(remaining) || remaining == <T::Real as num_traits::Zero>::zero() {
                 return Err(SparseError::SingularMatrix {
@@ -177,6 +254,7 @@ impl SymbolicCholesky {
             l_adjoint: CompressedMatrix::from_parts_unchecked((n, n), lt_ptr, lt_idx, lt_values),
             d,
             perm: self.perm.clone(),
+            replaced,
         })
     }
 }
@@ -200,7 +278,14 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
         &self.perm
     }
 
-    /// `A`'s inertia, from `D`'s signs (Sylvester's law of inertia).
+    /// How many pivots [`SymbolicCholesky::factor_ldlt_replacing`] replaced: 0 from
+    /// [`SymbolicCholesky::factor_ldlt`].
+    pub fn replaced(&self) -> usize {
+        self.replaced
+    }
+
+    /// `A`'s inertia, from `D`'s signs (Sylvester's law of inertia). With replaced pivots, it's
+    /// the inertia of the matrix actually factored.
     pub fn inertia(&self) -> Inertia {
         let positive = self
             .d
@@ -318,5 +403,48 @@ impl<T: Scalar + ComplexFloat> CsrMatrix<T> {
     /// `SparseError::SingularMatrix` naming the row of `A` whose pivot was zero.
     pub fn ldlt(&self) -> Result<Ldlt<T>, SparseError> {
         self.analyze_cholesky(Ordering::Amd)?.factor_ldlt(self)
+    }
+
+    /// A symmetric scaling `s`, positive, such that `S A S` (`S = diag(s)`) has every row's and
+    /// column's largest magnitude near 1, by `sweeps` sweeps of Ruiz's algorithm: each divides
+    /// row and column `i` by the square root of row `i`'s largest magnitude (P. A. Knight,
+    /// D. Ruiz and B. Uçar, "A symmetry preserving algorithm for matrix scaling," *SIAM J.
+    /// Matrix Anal. Appl.* 35(3):931–955, 2014, doi:10.1137/110825753, which shows it converges
+    /// for a symmetric matrix and keeps it symmetric). An empty row keeps a factor of 1.
+    ///
+    /// Scale a matrix whose entries span many orders of magnitude before factoring it with
+    /// static pivots: solve `(S A S) y = S b`, then `x = S y`.
+    ///
+    /// Returns `SparseError::NotSquare` for a non-square matrix, and
+    /// `SparseError::NotSymmetric` unless `A = Aᴴ`.
+    pub fn symmetric_scaling(&self, sweeps: usize) -> Result<Vec<T::Real>, SparseError> {
+        if !self.is_square() {
+            return Err(SparseError::NotSquare { shape: self.shape });
+        }
+        if !self.is_hermitian() {
+            return Err(SparseError::NotSymmetric);
+        }
+        let one = <T::Real as num_traits::One>::one();
+        let zero = <T::Real as num_traits::Zero>::zero();
+        let n = self.shape.0;
+        let mut scale = vec![one; n];
+        let mut largest = vec![zero; n];
+        for _ in 0..sweeps {
+            largest.fill(zero);
+            for (row, largest) in largest.iter_mut().enumerate() {
+                for p in self.ptr[row]..self.ptr[row + 1] {
+                    let entry = self.data[p].abs() * scale[row] * scale[self.idx[p]];
+                    if entry > *largest {
+                        *largest = entry;
+                    }
+                }
+            }
+            for (scale, &largest) in scale.iter_mut().zip(&largest) {
+                if largest > zero {
+                    *scale = *scale / Float::sqrt(largest);
+                }
+            }
+        }
+        Ok(scale)
     }
 }

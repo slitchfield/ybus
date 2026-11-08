@@ -1,9 +1,11 @@
 // Tests for the static-pivot LDLᵀ factorization (SymbolicCholesky::factor_ldlt, CsrMatrix::ldlt):
 //   against the Cholesky on positive definite matrices, against a known D on matrices built as
 //   L₀ D₀ L₀ᵀ, on quasi-definite KKT-shaped matrices under every ordering, its inertia, a
-//   complex Hermitian matrix, and its errors.
+//   complex Hermitian matrix, and its errors; then the tools for solving with it on regularized
+//   matrices: refinement against the unregularized matrix (componentwise and normwise), pivot
+//   replacement (factor_ldlt_replacing) and symmetric scaling.
 
-use sparse_mat::compressed_matrix::{CsrMatrix, Inertia, Ordering};
+use sparse_mat::compressed_matrix::{CsrMatrix, Inertia, Ordering, PivotReplacement};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
 
@@ -384,4 +386,295 @@ fn a_larger_hermitian_quasi_definite_matrix_factors() {
             .fold(0.0f64, |w, (ax, b)| w.max((ax - b).norm()));
         assert!(worst < 1e-12, "{ordering:?}: residual {worst:e}");
     }
+}
+
+#[test]
+fn refinement_against_the_unregularized_matrix_recovers_its_solution() {
+    // A KKT-shaped matrix with a zero lower-right block, which static pivots can't factor under
+    //   every ordering, factored regularized and refined against itself
+    let unit_roundoff = f64::EPSILON / 2.0;
+    let (n, m) = (50, 20);
+    let exact = quasi_definite(n, m, 0.0, 41);
+    let b = right_hand_side(n + m, 42);
+    let reference = exact.to_csc().lu().unwrap().solve(&b).unwrap();
+    let distance = |x: &[f64]| {
+        x.iter()
+            .zip(&reference)
+            .fold(0.0f64, |d, (x, r)| d.max((x - r).abs()))
+            / reference.iter().fold(0.0f64, |d, r| d.max(r.abs()))
+    };
+    for delta in [1e-8, 1e-6, 1e-4] {
+        let regularized = quasi_definite(n, m, delta, 41);
+        let ldlt = regularized.ldlt().unwrap();
+        let first = ldlt.solve_refined(&exact, &b, 0).unwrap();
+        let refined = ldlt.solve_refined(&exact, &b, 10).unwrap();
+        eprintln!(
+            "δ = {delta:e}: backward error {:e} → {:e} in {} steps; distance from the exact \
+             solution {:e} → {:e}",
+            first.backward_error,
+            refined.backward_error,
+            refined.steps,
+            distance(&first.x),
+            distance(&refined.x)
+        );
+        assert_eq!(first.x, ldlt.solve(&b).unwrap());
+        assert!(refined.steps >= 1);
+        assert!(
+            refined.backward_error <= 4.0 * unit_roundoff,
+            "{:e}",
+            refined.backward_error
+        );
+        assert!(distance(&refined.x) < 1e-12, "{:e}", distance(&refined.x));
+        // Refining against the regularized matrix instead converges to its own solution,
+        //   which differs from the exact one by about δ
+        let own = ldlt.solve_refined(&regularized, &b, 10).unwrap();
+        assert!(distance(&own.x) > 0.1 * delta, "{:e}", distance(&own.x));
+    }
+    // Shapes are checked
+    let ldlt = quasi_definite(n, m, 1e-6, 41).ldlt().unwrap();
+    assert!(matches!(
+        ldlt.solve_refined(&exact, &b[..n], 3),
+        Err(SparseError::ShapeMismatch { .. })
+    ));
+}
+
+/// The relative residual `‖b − A x‖∞ / ‖b‖∞`
+fn relative_residual(a: &CsrMatrix<f64>, x: &[f64], b: &[f64]) -> f64 {
+    let ax = a.mul_vec(x).unwrap();
+    let norm = |v: &mut dyn Iterator<Item = f64>| v.fold(0.0f64, |m, v| m.max(v.abs()));
+    norm(&mut ax.iter().zip(b).map(|(a, b)| a - b)) / norm(&mut b.iter().copied())
+}
+
+#[test]
+fn normwise_refinement_reaches_its_tolerance_against_the_unregularized_matrix() {
+    let (n, m) = (50, 20);
+    let exact = quasi_definite(n, m, 0.0, 41);
+    let b = right_hand_side(n + m, 42);
+    for delta in [1e-8, 1e-6, 1e-4] {
+        let ldlt = quasi_definite(n, m, delta, 41).ldlt().unwrap();
+        let first = ldlt.solve_refined_normwise(&exact, &b, 0, 0.0).unwrap();
+        assert_eq!(first.x, ldlt.solve(&b).unwrap());
+        assert_eq!(
+            first.relative_residual,
+            relative_residual(&exact, &first.x, &b)
+        );
+        let refined = ldlt.solve_refined_normwise(&exact, &b, 20, 1e-14).unwrap();
+        eprintln!(
+            "δ = {delta:e}: relative residual {:e} → {:e} in {} steps",
+            first.relative_residual, refined.relative_residual, refined.steps
+        );
+        assert!(refined.steps >= 1);
+        assert!(
+            refined.relative_residual <= 1e-14,
+            "{:e}",
+            refined.relative_residual
+        );
+        assert_eq!(
+            refined.relative_residual,
+            relative_residual(&exact, &refined.x, &b)
+        );
+        // A tolerance already met takes no step
+        let loose = ldlt
+            .solve_refined_normwise(&exact, &b, 20, first.relative_residual)
+            .unwrap();
+        assert_eq!((loose.steps, loose.x), (0, first.x));
+    }
+    // Refinement against a matrix too far from the factored one diverges, and the best iterate,
+    //   the first, is returned: factored [0.25] against [1], each step's error is 3 times the
+    //   last (x = 4, then −8)
+    let far = CsrMatrix::from_triplets(1, 1, vec![(0, 0, 0.25)])
+        .unwrap()
+        .ldlt()
+        .unwrap();
+    let one = CsrMatrix::from_triplets(1, 1, vec![(0, 0, 1.0)]).unwrap();
+    let diverged = far.solve_refined_normwise(&one, &[1.0], 5, 0.0).unwrap();
+    assert_eq!(
+        (diverged.x, diverged.steps, diverged.relative_residual),
+        (vec![4.0], 0, 3.0)
+    );
+    let ldlt = quasi_definite(n, m, 1e-6, 41).ldlt().unwrap();
+    assert!(matches!(
+        ldlt.solve_refined_normwise(&exact, &b[..n], 3, 1e-14),
+        Err(SparseError::ShapeMismatch { .. })
+    ));
+}
+
+#[test]
+fn replaced_pivots_take_the_expected_sign_and_refinement_recovers_the_solution() {
+    // [[0, 1], [1, 0]] under the natural ordering: the first pivot is exactly zero, and is
+    //   replaced by +1e-6 (row 0 expected positive); the second is then 0 − 1/1e-6 = −1e6
+    let swap: CsrMatrix<f64> =
+        CsrMatrix::from_triplets(2, 2, vec![(0, 1, 1.0), (1, 0, 1.0)]).unwrap();
+    let symbolic = swap.analyze_cholesky(Ordering::Natural).unwrap();
+    let replacement = PivotReplacement {
+        positive: &[true, false],
+        threshold: 1e-13,
+        value: 1e-6,
+    };
+    let ldlt = symbolic.factor_ldlt_replacing(&swap, &replacement).unwrap();
+    assert_eq!(ldlt.replaced(), 1);
+    assert_eq!(ldlt.d(), &[1e-6, -1e6]);
+    assert_eq!(
+        ldlt.inertia(),
+        Inertia {
+            positive: 1,
+            negative: 1
+        }
+    );
+    let refined = ldlt
+        .solve_refined_normwise(&swap, &[1.0, 2.0], 10, 1e-15)
+        .unwrap();
+    assert!(
+        refined.relative_residual <= 1e-15,
+        "{:e}",
+        refined.relative_residual
+    );
+    assert!((refined.x[0] - 2.0).abs() < 1e-14 && (refined.x[1] - 1.0).abs() < 1e-14);
+
+    // A row expected negative takes −value
+    let flipped = PivotReplacement {
+        positive: &[false, true],
+        ..replacement
+    };
+    let ldlt = symbolic.factor_ldlt_replacing(&swap, &flipped).unwrap();
+    assert_eq!(ldlt.d(), &[-1e-6, 1e6]);
+
+    // Without replacement, factor_ldlt is unchanged, and counts none
+    let plain = quasi_definite(30, 10, 1e-6, 5);
+    let symbolic = plain.analyze_cholesky(Ordering::Amd).unwrap();
+    let positive: Vec<bool> = (0..40).map(|i| i < 30).collect();
+    let none_small = PivotReplacement {
+        positive: &positive,
+        threshold: 1e-13,
+        value: 1e-6,
+    };
+    let (a, b) = (
+        symbolic.factor_ldlt(&plain).unwrap(),
+        symbolic.factor_ldlt_replacing(&plain, &none_small).unwrap(),
+    );
+    assert_eq!((a.replaced(), b.replaced()), (0, 0));
+    assert_eq!(a.d(), b.d());
+    assert_eq!(a.l(), b.l());
+
+    // A large pivot of the unexpected sign is left alone: here every row is expected positive,
+    //   and the inertia still shows the negative block
+    let all_positive = vec![true; 40];
+    let unexpected = PivotReplacement {
+        positive: &all_positive,
+        ..none_small
+    };
+    let ldlt = symbolic.factor_ldlt_replacing(&plain, &unexpected).unwrap();
+    assert_eq!(ldlt.replaced(), 0);
+    assert_eq!(
+        ldlt.inertia(),
+        Inertia {
+            positive: 30,
+            negative: 10
+        }
+    );
+
+    // Errors: one sign per row, and a NaN still fails
+    assert!(matches!(
+        symbolic.factor_ldlt_replacing(
+            &plain,
+            &PivotReplacement {
+                positive: &[true],
+                ..none_small
+            }
+        ),
+        Err(SparseError::ShapeMismatch { .. })
+    ));
+    let nan = CsrMatrix::from_triplets(1, 1, vec![(0, 0, f64::NAN)]).unwrap();
+    let nan_symbolic = nan.analyze_cholesky(Ordering::Natural);
+    if let Ok(nan_symbolic) = nan_symbolic {
+        assert!(matches!(
+            nan_symbolic.factor_ldlt_replacing(
+                &nan,
+                &PivotReplacement {
+                    positive: &[true],
+                    ..none_small
+                }
+            ),
+            Err(SparseError::SingularMatrix { pivot: 0 } | SparseError::NotSymmetric)
+        ));
+    }
+}
+
+#[test]
+fn symmetric_scaling_equilibrates_and_keeps_the_solution() {
+    // A quasi-definite matrix with rows and columns scaled by powers of ten from 1e-6 to 1e6
+    let (n, m) = (40, 15);
+    let base = quasi_definite(n, m, 1e-6, 17);
+    let mut rng = Lcg(23);
+    let skew: Vec<f64> = (0..n + m)
+        .map(|_| 10f64.powi((rng.next() % 13) as i32 - 6))
+        .collect();
+    let skewed = CsrMatrix::from_triplets(
+        n + m,
+        n + m,
+        base.iter().map(|(r, c, v)| (r, c, v * (skew[r] * skew[c]))),
+    )
+    .unwrap();
+    let largest_per_row = |a: &CsrMatrix<f64>| -> Vec<f64> {
+        (0..a.shape().0)
+            .map(|r| {
+                a.outer(r)
+                    .unwrap()
+                    .1
+                    .iter()
+                    .fold(0.0f64, |m, v| m.max(v.abs()))
+            })
+            .collect()
+    };
+    let spread = |v: &[f64]| {
+        v.iter().fold(0.0f64, |m, v| m.max(*v)) / v.iter().fold(f64::MAX, |m, v| m.min(*v))
+    };
+    let s = skewed.symmetric_scaling(10).unwrap();
+    assert!(s.iter().all(|s| *s > 0.0));
+    let scaled = CsrMatrix::from_triplets(
+        n + m,
+        n + m,
+        skewed.iter().map(|(r, c, v)| (r, c, v * (s[r] * s[c]))),
+    )
+    .unwrap();
+    assert!(scaled.is_hermitian());
+    let before = spread(&largest_per_row(&skewed));
+    let after = largest_per_row(&scaled);
+    eprintln!(
+        "rows' largest magnitudes: spread {before:e} before, {:e} after, in [{:e}, {:e}]",
+        spread(&after),
+        after.iter().fold(f64::MAX, |m, v| m.min(*v)),
+        after.iter().fold(0.0f64, |m, v| m.max(*v))
+    );
+    assert!(before > 1e6);
+    // Each sweep about halves the logarithm's distance from 1: after 10, measured, the rows'
+    //   largest magnitudes are in [0.977, 1] (2026-11-07)
+    assert!(
+        after.iter().all(|v| (0.95..=1.0 + 1e-12).contains(v)),
+        "{after:?}"
+    );
+
+    // Solving the scaled system and unscaling gives the original's solution
+    let b = right_hand_side(n + m, 29);
+    let sb: Vec<f64> = b.iter().zip(&s).map(|(b, s)| b * s).collect();
+    let y = scaled.ldlt().unwrap().solve(&sb).unwrap();
+    let x: Vec<f64> = y.iter().zip(&s).map(|(y, s)| y * s).collect();
+    let reference = skewed.to_csc().lu().unwrap().solve(&b).unwrap();
+    let worst = x.iter().zip(&reference).fold(0.0f64, |w, (x, r)| {
+        w.max((x - r).abs() / r.abs().max(1e-300))
+    });
+    assert!(worst < 1e-6, "{worst:e}");
+
+    // Zero sweeps is the identity; errors as for the factorization
+    assert_eq!(skewed.symmetric_scaling(0).unwrap(), vec![1.0; n + m]);
+    let rectangular = CsrMatrix::from_triplets(2, 3, vec![(0, 0, 1.0)]).unwrap();
+    assert!(matches!(
+        rectangular.symmetric_scaling(3),
+        Err(SparseError::NotSquare { .. })
+    ));
+    let asymmetric = CsrMatrix::from_triplets(2, 2, vec![(0, 1, 1.0), (1, 0, 2.0)]).unwrap();
+    assert_eq!(
+        asymmetric.symmetric_scaling(3).unwrap_err(),
+        SparseError::NotSymmetric
+    );
 }

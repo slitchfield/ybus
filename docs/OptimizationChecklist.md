@@ -525,9 +525,37 @@ with legacy results generated locally to explain differences.
               that needs pivoting.
             - **Accuracy:** it degrades as 1/δ with the regularization (about 3e-10 at
               δ = 1e-8).
-          - [ ] the solvers' option to factor the KKT matrix by LDLᵀ, with regularization and,
-            in the predictor-corrector method, inertia correction;
-          - [ ] the survey, the record and the defaults.
+          - [x] **The tools from the static-pivot attempt in the solvers,** kept in `sparse_mat`:
+            `CsrMatrix::symmetric_scaling` (Ruiz), `SymbolicCholesky::factor_ldlt_replacing`
+            (tiny pivots replaced with their block's sign), and `Ldlt::solve_refined` and
+            `Ldlt::solve_refined_normwise`.
+            - **Why the static pivots were set aside (2026-11-07):** in the solvers they failed
+              where LU converges.
+              - **With δ = 1e-8 on the scaled matrix,** a test problem (nonlinear2) failed: the
+                scaling's factors, about 1e-7, made δ about 1e6 on the original matrix, far
+                above W's small eigenvalues.
+              - **With no static δ** (scaling and pivot replacement only), the test suites
+                passed. But AC case9241pegase failed on both solvers, and DC case_ACTIVSg25k
+                on the predictor-corrector method. About 9,700 of W's zero-diagonal pivots were
+                replaced per factorization, D's entries reached 7e12, and refinement couldn't
+                recover.
+              - **Where it worked,** it was fast: the same result 2.2× faster on AC
+                case_ACTIVSg25k, on the predictor-corrector method.
+            - **Refinement is normwise:** the componentwise backward error is 1.0 on every OPF
+              KKT system, even LU's. A row with a zero right-hand side and almost nothing in
+              |K||x| sets it.
+        - **Decided with the maintainer (2026-11-07): a pivoted factorization instead.** A
+          multifrontal LDLᵀ on the Cholesky's elimination tree, with threshold Bunch–Kaufman
+          1×1 and 2×2 pivots in each dense front. A pivot too small to take is delayed to the
+          parent front (Duff and Reid, 1983; MA57). It's written from the literature, for real
+          and Hermitian complex matrices.
+          - [ ] **The dense kernel:** threshold Bunch–Kaufman on a front, with a public dense
+            factorization to test it;
+          - [ ] **the multifrontal driver:** fronts, extend-add, delayed pivots, inertia,
+            solves, and the analysis reused;
+          - [ ] **the solvers' option,** on the pivoted factorization, with inertia correction
+            in the predictor-corrector method;
+          - [ ] **the survey, the record and the defaults.**
 - [ ] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
       compare against. MIPS's LU switched from AMD to COLAMD in O1's PR 2: with zero diagonals
       in the equality block, AMD's factors filled 14 million entries on `case_ACTIVSg10k`
@@ -557,6 +585,13 @@ Each was checked online (Crossref) on 2026-11-03.
   2026-11-07)
 - R. J. Vanderbei, "Symmetric quasidefinite matrices," *SIAM J. Optim.* 5(1):100–113, 1995.
   [doi:10.1137/0805005](https://doi.org/10.1137/0805005) (checked on Crossref on 2026-11-07)
+- P. A. Knight, D. Ruiz and B. Uçar, "A symmetry preserving algorithm for matrix scaling,"
+  *SIAM J. Matrix Anal. Appl.* 35(3):931–955, 2014.
+  [doi:10.1137/110825753](https://doi.org/10.1137/110825753) (checked on Crossref on 2026-11-07)
+- A. Altman and J. Gondzio, "Regularized symmetric indefinite systems in interior point methods
+  for linear and quadratic optimization," *Optim. Methods Softw.* 11(1–4):275–302, 1999.
+  [doi:10.1080/10556789908805754](https://doi.org/10.1080/10556789908805754) (checked on
+  Crossref on 2026-11-07)
 - S. J. Wright, *Primal-Dual Interior-Point Methods*, SIAM, 1997.
   [doi:10.1137/1.9781611971453](https://doi.org/10.1137/1.9781611971453) (checked on Crossref
   on 2026-11-07)
