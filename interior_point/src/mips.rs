@@ -8,10 +8,10 @@
 //! (MIPS 1.5.2, in MATPOWER 8.1) so that its iterations, results and multipliers match
 //! MATPOWER's (Wang, Murillo-Sánchez, Zimmerman and Thomas, 2007).
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, Lu, LuOptions, Ordering, SymbolicLu};
-use sparse_mat::sparse_error::SparseError;
+use sparse_mat::compressed_matrix::{CsrMatrix, Ordering};
 
 use crate::interior_point_error::InteriorPointError;
+use crate::kkt::{KktFactorization, KktSolver};
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
 use crate::vector::{dot, norm_inf};
 
@@ -32,38 +32,6 @@ use crate::vector::{dot, norm_inf};
 /// them when the problem's Jacobians and Hessians keep theirs: the ordering is chosen from the
 /// pattern alone, so a kept analysis factors exactly as a fresh one would.
 pub const KKT_ORDERING: Ordering = Ordering::Colamd;
-
-/// The KKT matrix's analysis, kept across a solve's iterations while its pattern holds (see
-/// [`KKT_ORDERING`]), with the number of analyses made.
-#[derive(Default)]
-pub(crate) struct KktAnalysis {
-    symbolic: Option<SymbolicLu>,
-    analyses: usize,
-}
-
-impl KktAnalysis {
-    /// Factors `kkt` with the kept analysis, or, if there is none yet or `kkt`'s pattern
-    /// differs from the one it was made for, with a fresh one, which is then kept. Returns
-    /// `analyze_lu`'s and `factor`'s errors.
-    pub(crate) fn factor(&mut self, kkt: &CscMatrix<f64>) -> Result<Lu<f64>, SparseError> {
-        if let Some(symbolic) = &self.symbolic {
-            match symbolic.factor(kkt, LuOptions::default()) {
-                Err(SparseError::PatternMismatch) => {}
-                factored => return factored,
-            }
-        }
-        let symbolic = kkt.analyze_lu(KKT_ORDERING)?;
-        self.analyses += 1;
-        let factored = symbolic.factor(kkt, LuOptions::default());
-        self.symbolic = Some(symbolic);
-        factored
-    }
-
-    /// The analyses made so far.
-    pub(crate) fn analyses(&self) -> usize {
-        self.analyses
-    }
-}
 
 /// MIPS's options, with its defaults.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,6 +71,10 @@ pub struct MipsOptions {
     pub mu_threshold: f64,
     /// The largest acceptable 2-norm of the reduced Newton step (`max_stepsize`)
     pub max_stepsize: f64,
+    /// How the KKT system is factored: LU by default, as MATPOWER's MIPS, whose results this
+    /// port matches; LDLᵀ only swaps the factorization, with no inertia correction (see
+    /// [`crate::kkt`])
+    pub kkt_factorization: KktFactorization,
 }
 
 impl Default for MipsOptions {
@@ -124,6 +96,7 @@ impl Default for MipsOptions {
             rho_max: 1.05,
             mu_threshold: 1e-5,
             max_stepsize: 1e10,
+            kkt_factorization: KktFactorization::Lu,
         }
     }
 }
@@ -178,6 +151,8 @@ pub struct MipsSolution {
     /// How many times the KKT matrix was analyzed: 1 if its pattern held from the first
     /// iteration to the last (see [`KKT_ORDERING`]), 0 if no iteration factored it
     pub analyses: usize,
+    /// The refinement steps taken over every KKT solve: 0 with LU, which isn't refined
+    pub refinement_steps: usize,
 }
 
 impl MipsSolution {
@@ -480,7 +455,7 @@ pub fn mips<P: Problem>(
     let mut converged = tolerances_met(feascond, gradcond, compcond, costcond);
     let mut failed = false;
     let mut i = 0;
-    let mut analysis = KktAnalysis::default();
+    let mut kkt = KktSolver::new(opt.kkt_factorization);
 
     while !converged && i < opt.max_it {
         i += 1;
@@ -518,15 +493,10 @@ pub fn mips<P: Problem>(
             )
             .map(|(lx, s)| lx + s)
             .collect();
-        let size = nx + neq;
-        let mut triplets: Vec<(usize, usize, f64)> = m.iter().collect();
-        for (k, j, v) in e.jg.iter() {
-            triplets.push((j, nx + k, v));
-            triplets.push((nx + k, j, v));
-        }
-        let kkt = CscMatrix::from_triplets(size, size, triplets).expect("indices in range");
         let rhs: Vec<f64> = n_vec.iter().chain(&e.g).map(|v| -v).collect();
-        let solved = analysis.factor(&kkt).and_then(|lu| lu.solve(&rhs));
+        let solved = kkt
+            .factor(nx, m.iter().collect(), &e.jg, 0.0)
+            .and_then(|factor| factor.solve(&rhs));
         let dxdlam = match solved {
             Ok(step) => step,
             // MATLAB's backslash returns NaN or Inf for a singular system, which MIPS treats
@@ -699,7 +669,8 @@ pub fn mips<P: Problem>(
         iterations: i,
         multipliers,
         history,
-        analyses: analysis.analyses(),
+        analyses: kkt.analyses(),
+        refinement_steps: kkt.refinement_steps(),
     })
 }
 

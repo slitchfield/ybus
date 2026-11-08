@@ -571,8 +571,25 @@ with legacy results generated locally to explain differences.
               zero-diagonal constraint rows that AMD makes leaves without a partner. An ordering
               that keeps each with a variable it touches would remove them (the KKT ordering
               study below).
-          - [ ] **the solvers' option,** on the pivoted factorization, with inertia correction
-            in the predictor-corrector method;
+          - [x] **The solvers' option** (`KktFactorization::Ldlt` on `MipsOptions` and
+            `MehrotraOptions`, `OpfSolver::with_kkt_factorization`, `opf_survey --kkt`), on the
+            pivoted factorization at u = 1e-4, with up to 3 steps of normwise refinement.
+            - **The predictor-corrector method corrects the inertia** (Wächter and Biegler,
+              2006, Algorithm IC, with their defaults).
+            - **The default is unchanged:** LU everywhere, bit for bit (a 72-case snapshot).
+            - **On the test problems:** both solvers end as they do with LU.
+            - **On the large cases:** both solvers end as with LU on DC and AC case9241pegase
+              and case_ACTIVSg25k, mostly in the same iterations, 1.2–2.3× faster per solve.
+            - **The correction:**
+              - **Where it helps:** on a nonconvex QP it reaches the minimum where LU converges
+                to a saddle.
+              - **Where it does nothing:** AC case_ACTIVSg25k on the predictor-corrector method
+                needs none, its W carrying the bounds' barrier terms.
+              - **Where it costs:** AC case9241pegase takes 37 corrections, 58 iterations
+                against 38, which costs LDLᵀ's speed there.
+              - **What it can't do:** without a line search, it refuses hs71 from 2's local
+                maximum but then fails, as MIPS does, and it fails near the minima of a
+                nonconvex problem with an equality. A globalization is a separate question.
           - [ ] **the survey, the record and the defaults.**
 - [ ] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
       compare against. MIPS's LU switched from AMD to COLAMD in O1's PR 2: with zero diagonals
@@ -606,6 +623,10 @@ Each was checked online (Crossref) on 2026-11-03.
 - P. A. Knight, D. Ruiz and B. Uçar, "A symmetry preserving algorithm for matrix scaling,"
   *SIAM J. Matrix Anal. Appl.* 35(3):931–955, 2014.
   [doi:10.1137/110825753](https://doi.org/10.1137/110825753) (checked on Crossref on 2026-11-07)
+- A. Wächter and L. T. Biegler, "On the implementation of an interior-point filter line-search
+  algorithm for large-scale nonlinear programming," *Math. Program.* 106(1):25–57, 2006.
+  [doi:10.1007/s10107-004-0559-y](https://doi.org/10.1007/s10107-004-0559-y) (checked on
+  Crossref on 2026-11-07)
 - A. Altman and J. Gondzio, "Regularized symmetric indefinite systems in interior point methods
   for linear and quadratic optimization," *Optim. Methods Softw.* 11(1–4):275–302, 1999.
   [doi:10.1080/10556789908805754](https://doi.org/10.1080/10556789908805754) (checked on
