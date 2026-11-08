@@ -44,10 +44,10 @@ mod properties;
 mod serde_impl;
 mod solvers;
 
-pub use accuracy::Refined;
+pub use accuracy::{NormwiseRefined, Refined};
 pub use assembly::AssemblyMap;
 pub use cholesky::{Cholesky, SymbolicCholesky};
-pub use ldlt::{Inertia, Ldlt};
+pub use ldlt::{Inertia, Ldlt, PivotReplacement};
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
 pub use ordering::Ordering;
 pub use solvers::SparseSolveWorkspace;
