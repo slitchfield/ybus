@@ -8,7 +8,9 @@
 //! - the bus prices close to MATPOWER's (`PRICE`, below);
 //! - the KKT residuals no worse than MIPS's on the same case (`RESIDUAL_FACTOR`, below).
 //!
-//! Iterations are reported, not required, and pinned on the committed cases. The primal solution
+//! Iterations are reported, not required, and pinned on the committed cases. With the KKT
+//! matrix factored by the pivoted LDLᵀ (`KktFactorization::Ldlt`), both solvers are held to the
+//! same bar on the committed cases, with their iterations reported only. The primal solution
 //! and the bound multipliers aren't compared, since degenerate optima leave them non-unique, as
 //! in the reference tests.
 
@@ -21,7 +23,7 @@ use interior_point::solution::KktResiduals;
 use powerflow::case::Case;
 use powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
-use powerflow::opf::OpfSolver;
+use powerflow::opf::{KktFactorization, OpfSolver};
 
 /// The objective's bar, relative to its magnitude (at least 1)
 const OBJECTIVE: f64 = 1e-6;
@@ -122,10 +124,15 @@ fn report(name: &str, model: &str, c: &Comparison) {
     );
 }
 
-fn compare_dc(name: &str, case_path: &Path, dir: &Path) -> (DcOpfSolution, Comparison, bool) {
+fn compare_dc(
+    name: &str,
+    case_path: &Path,
+    dir: &Path,
+    options: &DcOpfOptions,
+) -> (DcOpfSolution, Comparison, bool) {
     let case = Case::from_path(case_path).unwrap();
     let reference = read_dcopf(dir, name, "dcopf").unwrap();
-    let s = dc_opf_with_options(&case, &DcOpfOptions::mehrotra()).unwrap();
+    let s = dc_opf_with_options(&case, options).unwrap();
     let c = Comparison {
         iterations: s.iterations,
         matpower_iterations: reference.iterations,
@@ -145,10 +152,15 @@ fn compare_dc(name: &str, case_path: &Path, dir: &Path) -> (DcOpfSolution, Compa
     (s, c, reference.success)
 }
 
-fn compare_ac(name: &str, case_path: &Path, dir: &Path) -> (AcOpfSolution, Comparison, bool) {
+fn compare_ac(
+    name: &str,
+    case_path: &Path,
+    dir: &Path,
+    options: &AcOpfOptions,
+) -> (AcOpfSolution, Comparison, bool) {
     let case = Case::from_path(case_path).unwrap();
     let reference = read_acopf(dir, name, "opf").unwrap();
-    let s = ac_opf_with_options(&case, &AcOpfOptions::mehrotra()).unwrap();
+    let s = ac_opf_with_options(&case, options).unwrap();
     let c = Comparison {
         iterations: s.iterations,
         matpower_iterations: reference.iterations,
@@ -272,13 +284,13 @@ fn committed_cases_meet_the_bar() {
             continue;
         };
         let (dc, ac) = expected_iterations(name);
-        let (s, c, success) = compare_dc(name, &path, &committed_dir());
+        let (s, c, success) = compare_dc(name, &path, &committed_dir(), &DcOpfOptions::mehrotra());
         report(name, "DC", &c);
         found.extend(problems(name, "DC", s.converged(), success, &c));
         assert_eq!(c.iterations, dc, "{name} DC: iterations");
         // The OPF's matrices keep their patterns, so one analysis serves the whole solve
         assert_eq!(s.solver.analyses(), 1, "{name} DC: analyses");
-        let (s, c, success) = compare_ac(name, &path, &committed_dir());
+        let (s, c, success) = compare_ac(name, &path, &committed_dir(), &AcOpfOptions::mehrotra());
         report(name, "AC", &c);
         found.extend(problems(name, "AC", s.converged(), success, &c));
         assert_eq!(c.iterations, ac, "{name} AC: iterations");
@@ -317,10 +329,12 @@ fn local_cases_meet_the_bar() {
             let dir = local_dir(&path);
             let start = std::time::Instant::now();
             let (converged, success, c) = if model == "DC" {
-                let (s, c, success) = compare_dc(name, &path, Path::new(&dir));
+                let (s, c, success) =
+                    compare_dc(name, &path, Path::new(&dir), &DcOpfOptions::mehrotra());
                 (s.converged(), success, c)
             } else {
-                let (s, c, success) = compare_ac(name, &path, Path::new(&dir));
+                let (s, c, success) =
+                    compare_ac(name, &path, Path::new(&dir), &AcOpfOptions::mehrotra());
                 (s.converged(), success, c)
             };
             report(name, model, &c);
@@ -331,5 +345,45 @@ fn local_cases_meet_the_bar() {
             found.extend(problems(name, model, converged, success, &c));
         }
     }
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}
+
+#[test]
+fn committed_cases_meet_the_bar_with_ldlt() {
+    let mut found = vec![];
+    // Only LDLᵀ refines, so its solves show it was used: (MIPS, predictor-corrector)
+    let mut refinement_steps = (0, 0);
+    for name in ["case14", "case30", "case118"] {
+        let Some(path) = common::matpower_case(name) else {
+            continue;
+        };
+        for (solver, mut dc, mut ac) in [
+            ("MIPS", DcOpfOptions::default(), AcOpfOptions::default()),
+            (
+                "predictor-corrector",
+                DcOpfOptions::mehrotra(),
+                AcOpfOptions::mehrotra(),
+            ),
+        ] {
+            dc.solver = dc.solver.with_kkt_factorization(KktFactorization::Ldlt);
+            ac.solver = ac.solver.with_kkt_factorization(KktFactorization::Ldlt);
+            let (s, c, success) = compare_dc(name, &path, &committed_dir(), &dc);
+            report(name, &format!("DC, {solver}, LDLᵀ"), &c);
+            found.extend(problems(name, "DC", s.converged(), success, &c));
+            assert_eq!(s.solver.analyses(), 1, "{name} DC, {solver}: analyses");
+            let (s, c, success) = compare_ac(name, &path, &committed_dir(), &ac);
+            report(name, &format!("AC, {solver}, LDLᵀ"), &c);
+            found.extend(problems(name, "AC", s.converged(), success, &c));
+            assert_eq!(s.solver.analyses(), 1, "{name} AC, {solver}: analyses");
+            let steps = s.solver.refinement_steps();
+            if solver == "MIPS" {
+                refinement_steps.0 += steps;
+            } else {
+                refinement_steps.1 += steps;
+            }
+        }
+    }
+    eprintln!("refinement steps over the AC solves: {refinement_steps:?}");
+    assert!(refinement_steps.0 > 0 && refinement_steps.1 > 0);
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
