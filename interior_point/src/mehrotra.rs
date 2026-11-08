@@ -71,10 +71,10 @@
 //! - It converges by MIPS's four measures, defined alike, with the bounds' slacks and
 //!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
+use sparse_mat::compressed_matrix::CsrMatrix;
 
 use crate::interior_point_error::InteriorPointError;
-use crate::mips::KktAnalysis;
+use crate::kkt::{KktFactorization, KktSolver};
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
 use crate::solution::Multipliers;
 use crate::vector::{dot, norm_inf};
@@ -111,6 +111,8 @@ pub struct MehrotraOptions {
     pub mu_threshold: f64,
     /// The largest acceptable 2-norm of the reduced Newton step
     pub max_stepsize: f64,
+    /// How the KKT system is factored: LU by default, or LDLᵀ (see [`crate::kkt`])
+    pub kkt_factorization: KktFactorization,
 }
 
 impl Default for MehrotraOptions {
@@ -129,6 +131,7 @@ impl Default for MehrotraOptions {
             alpha_min: 1e-8,
             mu_threshold: 1e-5,
             max_stepsize: 1e10,
+            kkt_factorization: KktFactorization::Lu,
         }
     }
 }
@@ -183,6 +186,8 @@ pub struct MehrotraSolution {
     /// iteration to the last (see [`KKT_ORDERING`](crate::mips::KKT_ORDERING)), 0 if no iteration
     /// factored it
     pub analyses: usize,
+    /// The refinement steps taken over every KKT solve: 0 with LU, which isn't refined
+    pub refinement_steps: usize,
 }
 
 impl MehrotraSolution {
@@ -660,7 +665,7 @@ pub fn mehrotra<P: Problem>(
     let mut converged = tolerances_met(feascond, gradcond, compcond, costcond);
     let mut failed = false;
     let mut i = 0;
-    let mut analysis = KktAnalysis::default();
+    let mut kkt = KktSolver::new(opt.kkt_factorization);
 
     while !converged && i < opt.max_it {
         i += 1;
@@ -697,13 +702,7 @@ pub fn mehrotra<P: Problem>(
         for (j, &k) in split.up.iter().enumerate() {
             triplets.push((k, k, p.pi_u[j] / p.s_u[j]));
         }
-        for (r, c, v) in jg.iter() {
-            triplets.push((c, nx + r, v));
-            triplets.push((nx + r, c, v));
-        }
-        let size = nx + neq;
-        let kkt = CscMatrix::from_triplets(size, size, triplets).expect("indices in range");
-        let Ok(lu) = analysis.factor(&kkt) else {
+        let Ok(factor) = kkt.factor(nx, triplets, jg, 0.0) else {
             failed = true;
             break;
         };
@@ -727,7 +726,7 @@ pub fn mehrotra<P: Problem>(
                 rhs[k] -= r_u[j] / p.s_u[j];
             }
             rhs.extend(e.g.iter().map(|g| -g));
-            let solved = lu.solve(&rhs).ok()?;
+            let solved = factor.solve(&rhs).ok()?;
             if solved.iter().any(|v| !v.is_finite()) {
                 return None;
             }
@@ -951,7 +950,8 @@ pub fn mehrotra<P: Problem>(
             upper,
         },
         history,
-        analyses: analysis.analyses(),
+        analyses: kkt.analyses(),
+        refinement_steps: kkt.refinement_steps(),
     })
 }
 

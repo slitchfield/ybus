@@ -12,6 +12,7 @@
 //!   on the solver.
 //! - [`mehrotra`]: a primal-dual method with Mehrotra's predictor-corrector, written from the
 //!   literature, for the same programs.
+//! - [`kkt`]: how the solvers factor the KKT system, by LU (the default) or by LDLᵀ.
 //! - [`interior_point_error`]: why a solver couldn't start.
 //!
 //! The linear algebra is [`sparse_mat`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
@@ -21,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 pub mod interior_point_error;
+pub mod kkt;
 pub mod mehrotra;
 pub mod mips;
 pub mod problem;
