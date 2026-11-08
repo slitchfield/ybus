@@ -28,8 +28,9 @@
 //! - `r_z`, `r_l` and `r_u` are the right-hand sides of the linearized complementarity
 //!   conditions.
 //!
-//! The matrix is factored once (LU ordered by [`KKT_ORDERING`](crate::mips::KKT_ORDERING),
-//! analyzed at the first iteration and kept while the pattern holds) and solved twice:
+//! The matrix is factored once (by LU ordered by [`KKT_ORDERING`](crate::mips::KKT_ORDERING), or
+//! by LDLᵀ, see [`crate::kkt`]; analyzed at the first iteration and kept while the pattern holds)
+//! and solved twice:
 //!
 //! 1. **The predictor**, an affine step towards complementarity zero (`r_z = −Z μ`, and so on),
 //!    whose longest feasible step lengths give the complementarity it would reach, `μ_aff`.
@@ -65,15 +66,26 @@
 //!
 //! - A problem with no inequalities or bounds takes plain Newton steps.
 //! - There is no merit function or line search, as in MIPS.
-//! - There's no inertia correction either: on a nonconvex problem, an indefinite `∇²L` can give
-//!   a poor step, as it can in MIPS. A symmetric indefinite factorization that would expose it
-//!   is phase O4's.
+//! - **The inertia correction,** with the pivoted LDLᵀ (`kkt_factorization`, see [`crate::kkt`]).
+//!   On a nonconvex problem an indefinite `∇²L` can make the step a poor one, as in MIPS. LDLᵀ
+//!   reveals it: the KKT matrix's inertia must be `(nx, neq)`, which holds when `W` is positive
+//!   definite on `Jg`'s null space. When it isn't, `W` is shifted by `δ_w I` and refactored, as in
+//!   Wächter and Biegler's Algorithm IC ("On the implementation of an interior-point filter
+//!   line-search algorithm for large-scale nonlinear programming," *Math. Program.*
+//!   106(1):25–57, 2006, doi:10.1007/s10107-004-0559-y, §3.1, with their defaults):
+//!   - **the first shift** is 1e-4, or a third of the last iteration's (at least 1e-20);
+//!   - **it grows** 100× the first time within an iteration and 8× after;
+//!   - **past 1e40,** the solve fails.
+//!
+//!   The shift is in the iteration's record. With LU there's no inertia and no correction.
 //! - It converges by MIPS's four measures, defined alike, with the bounds' slacks and
 //!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
 
 use sparse_mat::compressed_matrix::CsrMatrix;
 
 use crate::interior_point_error::InteriorPointError;
+use sparse_mat::compressed_matrix::Inertia;
+
 use crate::kkt::{KktFactorization, KktSolver};
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
 use crate::solution::Multipliers;
@@ -136,6 +148,17 @@ impl Default for MehrotraOptions {
     }
 }
 
+/// The inertia correction's parameters, Wächter and Biegler's defaults (§3.1 of the paper the module docs cite): the first
+/// shift `δ̄_w⁰`, its smallest and largest, the factor it shrinks by from one iteration to the
+/// next (`κ_w⁻`), and the factors it grows by within an iteration (`κ̄_w⁺` the first time, `κ_w⁺`
+/// after)
+const DELTA_W_FIRST: f64 = 1e-4;
+const DELTA_W_MIN: f64 = 1e-20;
+const DELTA_W_MAX: f64 = 1e40;
+const DELTA_W_DECREASE: f64 = 1.0 / 3.0;
+const DELTA_W_FIRST_INCREASE: f64 = 100.0;
+const DELTA_W_INCREASE: f64 = 8.0;
+
 /// How a solve ended, the status the solvers share. Here `NumericalFailure` is a singular KKT
 /// system, a NaN or too long a step, a step length below `alpha_min`, or the average
 /// complementarity outside `[ε, 1/ε]`.
@@ -165,6 +188,9 @@ pub struct MehrotraIteration {
     pub alphap: f64,
     /// The dual step length
     pub alphad: f64,
+    /// The inertia correction's shift of `W`, `δ_w` (0 when the inertia was right, and always
+    /// with LU)
+    pub delta_w: f64,
 }
 
 /// The predictor-corrector method's result.
@@ -188,6 +214,9 @@ pub struct MehrotraSolution {
     pub analyses: usize,
     /// The refinement steps taken over every KKT solve: 0 with LU, which isn't refined
     pub refinement_steps: usize,
+    /// How many times the KKT matrix was refactored with a larger `δ_w` to correct its inertia:
+    /// 0 with LU
+    pub inertia_corrections: usize,
 }
 
 impl MehrotraSolution {
@@ -666,6 +695,9 @@ pub fn mehrotra<P: Problem>(
     let mut failed = false;
     let mut i = 0;
     let mut kkt = KktSolver::new(opt.kkt_factorization);
+    // The inertia correction's last shift, and how many refactorizations it took
+    let mut last_delta_w = 0.0;
+    let mut corrections = 0;
 
     while !converged && i < opt.max_it {
         i += 1;
@@ -702,10 +734,44 @@ pub fn mehrotra<P: Problem>(
         for (j, &k) in split.up.iter().enumerate() {
             triplets.push((k, k, p.pi_u[j] / p.s_u[j]));
         }
-        let Ok(factor) = kkt.factor(nx, triplets, jg, 0.0) else {
+        // With LDLᵀ, the inertia must be (nx, neq): W positive definite on Jg's null space, so
+        //   that the step is a descent direction. Otherwise W is shifted by δ_w I, more each
+        //   time, as Wächter and Biegler's Algorithm IC does (see the module docs)
+        let wanted = Inertia {
+            positive: nx,
+            negative: neq,
+        };
+        let mut delta_w = 0.0;
+        let factor = loop {
+            let Ok(factor) = kkt.factor(nx, triplets.clone(), jg, delta_w) else {
+                break None;
+            };
+            if factor.inertia().is_none_or(|inertia| inertia == wanted) {
+                break Some(factor);
+            }
+            corrections += 1;
+            delta_w = if delta_w == 0.0 {
+                if last_delta_w == 0.0 {
+                    DELTA_W_FIRST
+                } else {
+                    (DELTA_W_DECREASE * last_delta_w).max(DELTA_W_MIN)
+                }
+            } else if last_delta_w == 0.0 {
+                DELTA_W_FIRST_INCREASE * delta_w
+            } else {
+                DELTA_W_INCREASE * delta_w
+            };
+            if delta_w > DELTA_W_MAX {
+                break None;
+            }
+        };
+        let Some(factor) = factor else {
             failed = true;
             break;
         };
+        if delta_w > 0.0 {
+            last_delta_w = delta_w;
+        }
 
         // A step for complementarity right-hand sides r_z, r_l and r_u
         let hz: Vec<f64> = e.h.iter().zip(&p.z).map(|(h, z)| h + z).collect();
@@ -846,6 +912,7 @@ pub fn mehrotra<P: Problem>(
             obj: e.f / opt.cost_mult,
             alphap,
             alphad,
+            delta_w,
         });
         if tolerances_met(feascond, gradcond, compcond, costcond) {
             converged = true;
@@ -952,6 +1019,7 @@ pub fn mehrotra<P: Problem>(
         history,
         analyses: kkt.analyses(),
         refinement_steps: kkt.refinement_steps(),
+        inertia_corrections: corrections,
     })
 }
 

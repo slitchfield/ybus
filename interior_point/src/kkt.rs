@@ -21,13 +21,14 @@
 //! - **Refined:** each solve takes up to 3 steps of normwise refinement against the matrix, until
 //!   the relative residual is at most 1e-12 or stops halving; it reached LU's residual on those
 //!   matrices.
-//! - **MIPS only swaps the factorization,** with no inertia correction.
+//! - **The inertia:** the factorization gives it, and the predictor-corrector method corrects an
+//!   indefinite `W` with it (see [`crate::mehrotra`]). MIPS only swaps the factorization.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
 use sparse_mat::compressed_matrix::{
-    CscMatrix, CsrMatrix, IndefiniteLdlt, IndefiniteOptions, Lu, LuOptions, Ordering,
+    CscMatrix, CsrMatrix, IndefiniteLdlt, IndefiniteOptions, Inertia, Lu, LuOptions, Ordering,
     SymbolicCholesky, SymbolicLu,
 };
 use sparse_mat::sparse_error::SparseError;
@@ -213,6 +214,14 @@ impl KktFactor {
                     .set(self.refinement_steps.get() + refined.steps);
                 Ok(refined.x)
             }
+        }
+    }
+
+    /// The factored matrix's inertia, with LDLᵀ (`None` with LU).
+    pub(crate) fn inertia(&self) -> Option<Inertia> {
+        match &self.kind {
+            FactorKind::Lu(_) => None,
+            FactorKind::Ldlt { ldlt, .. } => Some(ldlt.inertia()),
         }
     }
 }
