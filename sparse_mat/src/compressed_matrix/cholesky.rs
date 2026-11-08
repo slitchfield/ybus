@@ -23,16 +23,16 @@ use crate::Scalar;
 #[derive(Clone, Debug)]
 pub struct SymbolicCholesky {
     /// Row `i` of `P A Pᵀ` is row `perm[i]` of `A`
-    perm: Vec<usize>,
+    pub(super) perm: Vec<usize>,
     /// The parent of each node of the elimination tree of `P A Pᵀ`, or `None` for a root
     parent: Vec<Option<usize>>,
     postorder: Vec<usize>,
     /// The pattern of `L` in CSR form: row `i`'s columns, increasing, ending with `i` itself
-    l_ptr: Vec<usize>,
-    l_idx: Vec<usize>,
+    pub(super) l_ptr: Vec<usize>,
+    pub(super) l_idx: Vec<usize>,
     /// The pattern of the analyzed matrix, which a matrix being factored must have
-    a_ptr: Vec<usize>,
-    a_idx: Vec<usize>,
+    pub(super) a_ptr: Vec<usize>,
+    pub(super) a_idx: Vec<usize>,
 }
 
 impl<T: Scalar> CsrMatrix<T> {
@@ -475,21 +475,7 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
         scratch.clear();
         scratch.extend(self.perm.iter().map(|&row| x[row]));
         let y = scratch.as_mut_slice();
-        let l = &self.l;
-        for i in 0..y.len() {
-            let mut remainder = y[i];
-            let mut diagonal = T::one();
-            for p in l.ptr[i]..l.ptr[i + 1] {
-                let col = l.idx[p];
-                if col < i {
-                    remainder = remainder - l.data[p] * y[col];
-                } else {
-                    diagonal = l.data[p];
-                    break;
-                }
-            }
-            y[i] = remainder / diagonal;
-        }
+        forward_by_rows(&self.l, y);
         self.back_substitute(y);
         for (&row, &value) in self.perm.iter().zip(y.iter()) {
             x[row] = value;
@@ -499,20 +485,44 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
     /// Overwrites `y` with `L⁻ᴴ y`: back substitution with `Lᴴ` by rows, in the order
     /// `solve_upper_triangular` uses.
     fn back_substitute(&self, y: &mut [T]) {
-        let lt = &self.l_adjoint;
-        for i in (0..y.len()).rev() {
-            let mut remainder = y[i];
-            let mut diagonal = T::one();
-            for p in lt.ptr[i]..lt.ptr[i + 1] {
-                let col = lt.idx[p];
-                if col == i {
-                    diagonal = lt.data[p];
-                } else if col > i {
-                    remainder = remainder - lt.data[p] * y[col];
-                }
+        back_by_rows(&self.l_adjoint, y);
+    }
+}
+
+/// Overwrites `y` with `L⁻¹ y` for a lower triangular `L` in CSR form whose rows end with their
+/// diagonal: forward substitution by rows, in the order `solve_lower_triangular` uses.
+pub(super) fn forward_by_rows<T: Scalar + ComplexFloat>(l: &CsrMatrix<T>, y: &mut [T]) {
+    for i in 0..y.len() {
+        let mut remainder = y[i];
+        let mut diagonal = T::one();
+        for p in l.ptr[i]..l.ptr[i + 1] {
+            let col = l.idx[p];
+            if col < i {
+                remainder = remainder - l.data[p] * y[col];
+            } else {
+                diagonal = l.data[p];
+                break;
             }
-            y[i] = remainder / diagonal;
         }
+        y[i] = remainder / diagonal;
+    }
+}
+
+/// Overwrites `y` with `U⁻¹ y` for an upper triangular `U` in CSR form whose rows start with
+/// their diagonal: back substitution by rows, in the order `solve_upper_triangular` uses.
+pub(super) fn back_by_rows<T: Scalar + ComplexFloat>(u: &CsrMatrix<T>, y: &mut [T]) {
+    for i in (0..y.len()).rev() {
+        let mut remainder = y[i];
+        let mut diagonal = T::one();
+        for p in u.ptr[i]..u.ptr[i + 1] {
+            let col = u.idx[p];
+            if col == i {
+                diagonal = u.data[p];
+            } else if col > i {
+                remainder = remainder - u.data[p] * y[col];
+            }
+        }
+        y[i] = remainder / diagonal;
     }
 }
 

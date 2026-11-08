@@ -508,6 +508,26 @@ with legacy results generated locally to explain differences.
         - **More than the profile's bound on DC,** whose innermost-frame rule had counted the
           analysis's own allocation as allocation.
       - [ ] **A symmetric indefinite LDLᵀ** (target 2), with its inertia.
+        - **Decided with the maintainer (2026-11-07):**
+          - **The method:** static pivots (1×1, no pivoting during the factorization), on the
+            Cholesky's symbolic analysis, rather than Bunch–Kaufman's dynamic 1×1 and 2×2 pivots.
+          - **Why static pivots work:** the solvers regularize the KKT matrix into a
+            quasi-definite one, `[W + δ_w I, Jgᵀ; Jg, −δ_c I]`, which factors under any
+            symmetric ordering (Vanderbei, 1995).
+          - **The inertia** comes from D's signs.
+          - **Bunch–Kaufman** stays a possible follow-up if the numbers call for it.
+        - **Three PRs:**
+          - [x] **The factorization in `sparse_mat`:** `SymbolicCholesky::factor_ldlt` and
+            `CsrMatrix::ldlt` give `Ldlt`, with its solves and `inertia()`. It's Davis's
+            up-looking LDLᵀ on the Cholesky's exact pattern.
+            - **Tested:** against the Cholesky on SPD matrices, against a known D (L₀ D₀ L₀ᵀ),
+              on real and complex quasi-definite matrices under every ordering, and on a matrix
+              that needs pivoting.
+            - **Accuracy:** it degrades as 1/δ with the regularization (about 3e-10 at
+              δ = 1e-8).
+          - [ ] the solvers' option to factor the KKT matrix by LDLᵀ, with regularization and,
+            in the predictor-corrector method, inertia correction;
+          - [ ] the survey, the record and the defaults.
 - [ ] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
       compare against. MIPS's LU switched from AMD to COLAMD in O1's PR 2: with zero diagonals
       in the equality block, AMD's factors filled 14 million entries on `case_ACTIVSg10k`
@@ -531,6 +551,12 @@ Each was checked online (Crossref) on 2026-11-03.
   [doi:10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5)
 - S. Mehrotra, "On the implementation of a primal-dual interior point method," *SIAM J. Optim.*
   2(4):575–601, 1992. [doi:10.1137/0802028](https://doi.org/10.1137/0802028)
+- T. A. Davis, "Algorithm 849: a concise sparse Cholesky factorization package," *ACM Trans.
+  Math. Softw.* 31(4):587–591, 2005.
+  [doi:10.1145/1114268.1114277](https://doi.org/10.1145/1114268.1114277) (checked on Crossref on
+  2026-11-07)
+- R. J. Vanderbei, "Symmetric quasidefinite matrices," *SIAM J. Optim.* 5(1):100–113, 1995.
+  [doi:10.1137/0805005](https://doi.org/10.1137/0805005) (checked on Crossref on 2026-11-07)
 - S. J. Wright, *Primal-Dual Interior-Point Methods*, SIAM, 1997.
   [doi:10.1137/1.9781611971453](https://doi.org/10.1137/1.9781611971453) (checked on Crossref
   on 2026-11-07)
