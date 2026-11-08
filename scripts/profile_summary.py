@@ -18,6 +18,14 @@ optimal power flows, and leave the power flows' stages as they were:
   allocation, so a sparse product inside the Hessian isn't counted as the solver's.
 - Sparse products and sums, and assembly from triplets, called from the interior-point solvers
   (a frame of `interior_point::` on the stack) count as KKT assembly.
+
+Two more apply to the pivoted LDLᵀ, and leave LU and Cholesky samples as they were:
+
+- A sample under `factor_indefinite` is split into its symmetry check and permutation, its
+  supernode partition, its dense Bunch–Kaufman kernel, and the rest, front assembly and
+  extend-add (LDLT_PARTS), unless it's allocation.
+- A residual's product inside refinement (`refine_normwise`) is the refinement's residual, not
+  the power flow's mismatch.
 """
 
 import bisect
@@ -41,7 +49,10 @@ STAGES = [
     ("numeric factorization", ["gilbert_peierls", "Lu>::factor", "Cholesky>::factor",
                                "cholesky::", "factor"]),
     ("triangular solves", ["Lu>::solve", "Cholesky>::solve", "solve_sparse", "triangular",
-                           "lower_solve", "upper_solve"]),
+                           "lower_solve", "upper_solve", "IndefiniteLdlt", "Ldlt<", "DenseLdlt",
+                           "forward_by_rows", "back_by_rows"]),
+    ("refinement residual", ["refine_normwise", "accuracy::refine", "relative_residual",
+                             "componentwise_backward_error"]),
     ("outage updates", ["outage", "woodbury", "Woodbury"]),
     ("assembly and refill", ["JacobianAssembly", "SupersetJacobian", "source_value", "refill",
                              "assemble", "from_triplets", "stamps", "Bdc>::new",
@@ -87,6 +98,20 @@ CONTEXT_STAGES = [
 # The innermost stages that count as KKT assembly when an interior-point solver called them
 KKT_ASSEMBLY = {"assembly and refill", "sparse products and sums"}
 
+# The pivoted LDLᵀ's factorization (SymbolicCholesky::factor_indefinite), split by what's on the
+#   stack under it, first match first; the rest of it is front assembly and extend-add. Only
+#   samples under factor_indefinite are split, so LU and Cholesky samples fold as before.
+LDLT_FACTOR = "factor_indefinite"
+LDLT_PARTS = [
+    ("LDLᵀ: symmetry check and permutation", ["is_hermitian", "permute_symmetric"]),
+    ("LDLᵀ: supernode partition", ["multifrontal::supernodes"]),
+    ("LDLᵀ: dense kernel", ["bunch_kaufman::"]),
+]
+LDLT_ASSEMBLY = "LDLᵀ: front assembly and extend-add"
+
+# A residual's product inside refinement is refinement's, not the power flow's mismatch
+REFINEMENT = ["refine_normwise", "accuracy::refine"]
+
 
 def innermost_stage(names):
     for frame in names:
@@ -100,6 +125,14 @@ def stage_of(names):
     stage = innermost_stage(names)
     if stage == "allocation and copying":
         return stage
+    if any(LDLT_FACTOR in frame for frame in names):
+        for part, patterns in LDLT_PARTS:
+            if any(pattern in frame for frame in names for pattern in patterns):
+                return part
+        return LDLT_ASSEMBLY
+    if stage == "mismatch and flows" and any(
+            pattern in frame for frame in names for pattern in REFINEMENT):
+        return "refinement residual"
     for context, patterns in CONTEXT_STAGES:
         if any(pattern in frame for frame in names for pattern in patterns):
             return context
