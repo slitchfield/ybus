@@ -36,7 +36,7 @@ impl<T: Scalar + ComplexFloat> DBlock<T> {
 
     /// The block's eigenvalues' signs, as `(positive, negative)`. A 2×2 block with a negative
     /// determinant has one of each; with a positive one, both take the sign of its diagonal.
-    fn signs(&self) -> (usize, usize) {
+    pub(crate) fn signs(&self) -> (usize, usize) {
         let zero = <T::Real as Zero>::zero();
         match *self {
             DBlock::One(d) => {

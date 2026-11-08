@@ -35,6 +35,7 @@ mod cholesky;
 mod colamd;
 mod ldlt;
 mod lu;
+mod multifrontal;
 mod ops;
 mod ordering;
 #[cfg(feature = "rayon")]
@@ -51,6 +52,7 @@ pub use bunch_kaufman::{DBlock, DenseLdlt};
 pub use cholesky::{Cholesky, SymbolicCholesky};
 pub use ldlt::{Inertia, Ldlt, PivotReplacement};
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
+pub use multifrontal::{IndefiniteLdlt, IndefiniteOptions};
 pub use ordering::Ordering;
 pub use solvers::SparseSolveWorkspace;
 
