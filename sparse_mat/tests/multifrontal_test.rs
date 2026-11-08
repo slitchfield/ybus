@@ -4,7 +4,9 @@
 //   delayed pivots, against the Cholesky on positive definite matrices, complex Hermitian, its
 //   refinement, and its errors.
 
-use sparse_mat::compressed_matrix::{CsrMatrix, DenseLdlt, IndefiniteOptions, Inertia, Ordering};
+use sparse_mat::compressed_matrix::{
+    Amalgamation, CsrMatrix, DenseLdlt, IndefiniteOptions, Inertia, Ordering, SymbolicIndefinite,
+};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
 
@@ -200,18 +202,19 @@ fn kkt_matrices_with_zero_diagonals_factor_under_every_ordering() {
 fn small_leaf_pivots_are_delayed_to_the_root() {
     // A star: k leaves, each with a diagonal of 1e-6, joined only to the centre. Each leaf is its
     //   own front, whose one fully summed pivot fails the test against its entry of 1, so it's
-    //   delayed; the root pivots them in 2×2 blocks with the centre or with each other
+    //   delayed; the root pivots them in 2×2 blocks with the centre or with each other. That
+    //   needs the fundamental supernodes (no amalgamation), which keep each leaf apart
     let k = 8;
     let mut triplets = vec![(k, k, 1.0)];
     for leaf in 0..k {
         triplets.extend([(leaf, leaf, 1e-6), (leaf, k, 1.0), (k, leaf, 1.0)]);
     }
     let a = CsrMatrix::from_triplets(k + 1, k + 1, triplets).unwrap();
-    let f = a
-        .analyze_cholesky(Ordering::Natural)
-        .unwrap()
-        .factor_indefinite(&a, IndefiniteOptions::default())
-        .unwrap();
+    let unmerged = SymbolicIndefinite::with_amalgamation(
+        a.analyze_cholesky(Ordering::Natural).unwrap(),
+        Amalgamation::NONE,
+    );
+    let f = unmerged.factor(&a, IndefiniteOptions::default()).unwrap();
     assert_eq!(f.delayed(), k);
     let reference = DenseLdlt::factor(&a.to_dense(), 0.01).unwrap();
     assert_eq!(f.inertia(), reference.inertia());
@@ -226,18 +229,28 @@ fn small_leaf_pivots_are_delayed_to_the_root() {
     assert!(f.l_entries() > k, "{}", f.l_entries());
 
     // A threshold small enough lets the leaves pivot where they are
-    let loose = a
-        .analyze_cholesky(Ordering::Natural)
-        .unwrap()
-        .factor_indefinite(&a, IndefiniteOptions { threshold: 1e-7 })
+    let loose = unmerged
+        .factor(&a, IndefiniteOptions { threshold: 1e-7 })
         .unwrap();
     assert_eq!((loose.delayed(), loose.l_entries()), (0, k));
+
+    // With the default amalgamation the leaves and the centre are one front (9 columns, under
+    //   16, with fewer than 80% zeros), where the pivots are found without any delay
+    let merged = a
+        .analyze_cholesky(Ordering::Natural)
+        .unwrap()
+        .factor_indefinite(&a, IndefiniteOptions::default())
+        .unwrap();
+    assert_eq!(merged.delayed(), 0);
+    assert_eq!(merged.inertia(), reference.inertia());
+    let x = merged.solve(&b).unwrap();
+    assert!(residual(&a, &x, &b) < RESIDUAL_BAR);
 }
 
 #[test]
 fn positive_definite_matrices_factor_as_the_cholesky_does() {
-    // A diagonally dominant SPD matrix: every 1×1 pivot passes, nothing is delayed, and L has
-    //   the Cholesky pattern
+    // A diagonally dominant SPD matrix: every 1×1 pivot passes, nothing is delayed, and without
+    //   amalgamation L has the Cholesky pattern
     let mut rng = Lcg(77);
     let n = 80;
     let mut triplets = vec![];
@@ -257,12 +270,24 @@ fn positive_definite_matrices_factor_as_the_cholesky_does() {
     }
     let a = CsrMatrix::from_triplets(n, n, triplets).unwrap();
     let symbolic = a.analyze_cholesky(Ordering::Amd).unwrap();
-    let f = symbolic
-        .factor_indefinite(&a, IndefiniteOptions::default())
+    let f = SymbolicIndefinite::with_amalgamation(symbolic.clone(), Amalgamation::NONE)
+        .factor(&a, IndefiniteOptions::default())
         .unwrap();
     let cholesky = symbolic.factor(&a).unwrap();
     assert_eq!((f.delayed(), f.two_by_two()), (0, 0));
     assert_eq!(f.l_entries(), cholesky.l().values().len() - n);
+    // Amalgamation stores explicit zeros too, and still solves alike
+    let merged = symbolic
+        .factor_indefinite(&a, IndefiniteOptions::default())
+        .unwrap();
+    assert!(merged.l_entries() > f.l_entries());
+    let b = right_hand_side(n, 5);
+    let (x, y) = (merged.solve(&b).unwrap(), cholesky.solve(&b).unwrap());
+    let worst = x
+        .iter()
+        .zip(&y)
+        .fold(0.0f64, |m, (x, y)| m.max((x - y).abs()));
+    assert!(worst < 1e-13, "{worst:e}");
     assert_eq!(
         f.inertia(),
         Inertia {
@@ -590,4 +615,103 @@ fn the_symmetry_check_refuses_what_is_hermitian_refuses() {
     assert!(
         cases.iter().any(|(_, a)| a.is_hermitian()) && cases.iter().any(|(_, a)| !a.is_hermitian())
     );
+}
+
+#[test]
+fn amalgamation_postorders_the_tree_and_merges_without_changing_the_answers() {
+    for seed in 0..8 {
+        let a = kkt(80, 30, 40 + seed);
+        for ordering in [Ordering::Amd, Ordering::Rcm, Ordering::Natural] {
+            let cholesky = a.analyze_cholesky(ordering).unwrap();
+            let merged = SymbolicIndefinite::new(cholesky.clone());
+            // The same tree, renumbered in postorder: the same pattern's size, and a postorder
+            //   that is the identity
+            let postordered = merged.cholesky();
+            assert!(postordered
+                .postorder()
+                .iter()
+                .enumerate()
+                .all(|(k, &node)| k == node));
+            assert_eq!(
+                postordered.column_counts().iter().sum::<usize>(),
+                cholesky.column_counts().iter().sum::<usize>()
+            );
+            let unmerged = SymbolicIndefinite::with_amalgamation(cholesky, Amalgamation::NONE);
+            for threshold in [0.01, 1e-4] {
+                let options = IndefiniteOptions { threshold };
+                let (f, g) = (
+                    merged.factor(&a, options).unwrap(),
+                    unmerged.factor(&a, options).unwrap(),
+                );
+                assert!(f.l_entries() >= g.l_entries());
+                assert_eq!(f.inertia(), g.inertia());
+                let b = right_hand_side(110, seed);
+                for factor in [&f, &g] {
+                    let x = factor.solve(&b).unwrap();
+                    assert!(
+                        residual(&a, &x, &b) < RESIDUAL_BAR,
+                        "{:e}",
+                        residual(&a, &x, &b)
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn merging_everything_merges_only_adjacent_fronts() {
+    // A rule that merges whatever it may: each child joins its parent only when its columns come
+    //   just before the parent's, so every tree ends as one front, dense, and the factorization
+    //   is still exact
+    let everything = Amalgamation {
+        columns: [usize::MAX; 3],
+        zeros: [2.0; 3],
+    };
+    for seed in 0..4 {
+        let a = kkt(40, 15, 70 + seed);
+        let cholesky = a.analyze_cholesky(Ordering::Amd).unwrap();
+        let f = SymbolicIndefinite::with_amalgamation(cholesky, everything)
+            .factor(&a, IndefiniteOptions::default())
+            .unwrap();
+        // One front per tree of the forest: every pivot found within it, nothing delayed
+        assert_eq!(f.delayed(), 0);
+        assert_eq!(
+            f.inertia(),
+            Inertia {
+                positive: 40,
+                negative: 15
+            }
+        );
+        let b = right_hand_side(55, seed);
+        let x = f.solve(&b).unwrap();
+        assert!(
+            residual(&a, &x, &b) < RESIDUAL_BAR,
+            "{:e}",
+            residual(&a, &x, &b)
+        );
+    }
+}
+
+#[test]
+fn amalgamation_keeps_the_fill_bounded() {
+    // The default rule allows explicit zeros only in small fronts, or a few percent in large
+    //   ones, so the stored entries stay within a small multiple of the fundamental supernodes'.
+    //   Measured on these matrices: up to 2.4× (2026-11-08). (Counting a merged front's zeros as
+    //   true entries once let merges cascade into one dense front: 480× on an OPF KKT matrix.)
+    let mut worst = 0.0f64;
+    for seed in 0..4 {
+        let a = kkt(400, 150, 90 + seed);
+        let cholesky = a.analyze_cholesky(Ordering::Amd).unwrap();
+        let options = IndefiniteOptions::default();
+        let merged = SymbolicIndefinite::new(cholesky.clone())
+            .factor(&a, options)
+            .unwrap();
+        let unmerged = SymbolicIndefinite::with_amalgamation(cholesky, Amalgamation::NONE)
+            .factor(&a, options)
+            .unwrap();
+        worst = worst.max(merged.l_entries() as f64 / unmerged.l_entries() as f64);
+    }
+    eprintln!("stored entries with amalgamation: up to {worst:.2}× without");
+    assert!(worst < 4.0, "{worst:.2}");
 }
