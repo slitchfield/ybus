@@ -7,7 +7,7 @@
 #
 # Usage: scripts/benchmark-opf.sh [<output.csv>]
 #   Writes one CSV line per case, smallest case file first, to <output.csv> (default
-#   target/opf-survey-<model>-<solver>.csv) and to stdout as it goes. Needs GNU time (/usr/bin/time) and the
+#   target/opf-survey-<model>-<solver>-<kkt>.csv) and to stdout as it goes. Needs GNU time (/usr/bin/time) and the
 #   normalized cases (scripts/normalize-cases.sh, which needs Octave unless they're already made).
 #   MATPOWER's results are generated into testdata/ by scripts/generate-reference.sh, which needs
 #   Octave; without it, the comparison columns stay empty. Never commit those results
@@ -16,6 +16,9 @@
 #   YBUS_BENCH_MODEL    dc or ac (default dc)
 #   YBUS_BENCH_SOLVER   mips or mehrotra (default mips, MATPOWER's): the OPF's solver, at
 #                       MATPOWER's OPF settings
+#   YBUS_BENCH_KKT      lu, ldlt or ldlt-uncorrected (default lu): how the solver factors the
+#                       KKT matrix; ldlt-uncorrected is LDLᵀ without the predictor-corrector
+#                       method's inertia correction
 #   YBUS_BENCH_TIMEOUT  the time limit per case, in seconds (default 3600)
 #   YBUS_BENCH_MEMORY   the address-space limit per case, in GiB (default 10)
 #   YBUS_BENCH_CASES    the cases to survey, separated by spaces (default: every case with costs)
@@ -34,7 +37,12 @@ case "${SOLVER}" in
     mips|mehrotra) ;;
     *) echo "error: YBUS_BENCH_SOLVER must be mips or mehrotra" >&2; exit 2 ;;
 esac
-OUT="${1:-${ROOT}/target/opf-survey-${MODEL}-${SOLVER}.csv}"
+KKT="${YBUS_BENCH_KKT:-lu}"
+case "${KKT}" in
+    lu|ldlt|ldlt-uncorrected) ;;
+    *) echo "error: YBUS_BENCH_KKT must be lu, ldlt or ldlt-uncorrected" >&2; exit 2 ;;
+esac
+OUT="${1:-${ROOT}/target/opf-survey-${MODEL}-${SOLVER}-${KKT}.csv}"
 TIMEOUT="${YBUS_BENCH_TIMEOUT:-3600}"
 MEMORY_GIB="${YBUS_BENCH_MEMORY:-10}"
 case "${MODEL}" in
@@ -87,7 +95,8 @@ for name in "${CASES[@]}"; do
     # exec replaces the shell, so the limits and GNU time's measurement apply to the survey
     if line="$(/usr/bin/time -f %M -o "${LOG}/rss" timeout "${TIMEOUT}" \
         bash -c 'ulimit -v "$1" && exec "${@:2}"' _ "$((MEMORY_GIB * 1024 * 1024))" \
-        "${SURVEY}" --model "${MODEL}" --solver "${SOLVER}" "${NORMALIZED}/${name}.m" "${REFERENCE}" \
+        "${SURVEY}" --model "${MODEL}" --solver "${SOLVER}" --kkt "${KKT}" \
+        "${NORMALIZED}/${name}.m" "${REFERENCE}" \
         2> "${LOG}/err")"; then
         status=ok
     else

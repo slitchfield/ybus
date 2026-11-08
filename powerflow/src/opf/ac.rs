@@ -31,6 +31,7 @@
 //! crate-private `opf::derivatives`). The results and multipliers are mapped back to the case
 //! as `nlpopf_solver` and `opf` map them.
 
+use interior_point::kkt::KktFactorization;
 use interior_point::mehrotra::{mehrotra, MehrotraOptions};
 use interior_point::mips::{mips, MipsOptions};
 use interior_point::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Problem};
@@ -74,11 +75,17 @@ impl Default for AcOpfOptions {
 
 impl AcOpfOptions {
     /// The predictor-corrector method with MATPOWER's AC OPF settings: its defaults, but
-    /// `feastol` 5e-6 and `cost_mult` 1e-4, as MIPS runs by default.
+    /// `feastol` 5e-6 and `cost_mult` 1e-4, as MIPS runs by default, and the KKT matrix factored
+    /// by the pivoted LDLᵀ (`KktFactorization::Ldlt`, without the inertia correction). On the
+    /// survey of every MATPOWER case with costs it met phase O3's bar wherever LU did, with the
+    /// same outcomes and iterations, 1.12× faster in the median and 2.70× in total
+    /// (`docs/benchmarks/ldlt-opf-2026-11-08.md`). The DC OPF's settings keep LU, which is faster
+    /// on its many small cases.
     pub fn mehrotra() -> Self {
         let mut mehrotra = MehrotraOptions::default();
         mehrotra.feastol = 5e-6;
         mehrotra.cost_mult = 1e-4;
+        mehrotra.kkt_factorization = KktFactorization::Ldlt;
         AcOpfOptions {
             solver: OpfSolver::Mehrotra(mehrotra),
         }
