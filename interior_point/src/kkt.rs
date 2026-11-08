@@ -29,7 +29,7 @@ use std::rc::Rc;
 
 use sparse_mat::compressed_matrix::{
     CscMatrix, CsrMatrix, IndefiniteLdlt, IndefiniteOptions, Inertia, Lu, LuOptions, Ordering,
-    SymbolicCholesky, SymbolicLu,
+    SymbolicIndefinite, SymbolicLu,
 };
 use sparse_mat::sparse_error::SparseError;
 
@@ -60,7 +60,7 @@ const REFINEMENT_TOLERANCE: f64 = 1e-12;
 pub(crate) struct KktSolver {
     method: KktFactorization,
     lu: Option<SymbolicLu>,
-    ldlt: Option<SymbolicCholesky>,
+    ldlt: Option<SymbolicIndefinite>,
     analyses: usize,
     /// Shared with each factor, which adds its solves' steps
     refinement_steps: Rc<Cell<usize>>,
@@ -167,7 +167,7 @@ impl KktSolver {
             threshold: THRESHOLD,
         };
         if let Some(symbolic) = &self.ldlt {
-            match symbolic.factor_indefinite(&matrix, options) {
+            match symbolic.factor(&matrix, options) {
                 Err(SparseError::PatternMismatch) => {}
                 factored => {
                     return Ok(FactorKind::Ldlt {
@@ -177,9 +177,9 @@ impl KktSolver {
                 }
             }
         }
-        let symbolic = matrix.analyze_cholesky(Ordering::Amd)?;
+        let symbolic = matrix.analyze_indefinite(Ordering::Amd)?;
         self.analyses += 1;
-        let factored = symbolic.factor_indefinite(&matrix, options);
+        let factored = symbolic.factor(&matrix, options);
         self.ldlt = Some(symbolic);
         Ok(FactorKind::Ldlt {
             ldlt: factored?,
