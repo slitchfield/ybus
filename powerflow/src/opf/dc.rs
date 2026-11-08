@@ -24,6 +24,7 @@
 
 use std::f64::consts::PI;
 
+use interior_point::kkt::KktFactorization;
 use interior_point::mehrotra::{qps_mehrotra, MehrotraOptions};
 use interior_point::mips::{qps_mips, MipsOptions};
 use interior_point::problem::{Constraints, QuadraticProblem};
@@ -60,10 +61,15 @@ impl Default for DcOpfOptions {
 
 impl DcOpfOptions {
     /// The predictor-corrector method with MATPOWER's OPF settings: its defaults, but `feastol`
-    /// 5e-6, as MIPS runs by default.
+    /// 5e-6, as MIPS runs by default, and the KKT matrix factored by the pivoted LDLᵀ
+    /// (`KktFactorization::Ldlt`, without the inertia correction). With the LDLᵀ's bookkeeping
+    /// kept with its analysis and its fronts amalgamated, it met phase O3's bar wherever LU did on
+    /// every MATPOWER case with costs, with the same outcomes and iterations, 1.15× faster in the
+    /// median and 3.14× in total (`docs/benchmarks/ldlt-amalgamation-2026-11-08.md`).
     pub fn mehrotra() -> Self {
         let mut mehrotra = MehrotraOptions::default();
         mehrotra.feastol = 5e-6;
+        mehrotra.kkt_factorization = KktFactorization::Ldlt;
         DcOpfOptions {
             solver: OpfSolver::Mehrotra(mehrotra),
         }

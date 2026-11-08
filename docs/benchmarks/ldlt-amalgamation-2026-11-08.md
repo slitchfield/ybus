@@ -109,8 +109,9 @@ comparison before #61 and this PR:
    - **The median:** 1.15× faster.
    - **The total:** 3.14× faster.
 
-   Switching `DcOpfOptions::mehrotra()` to LDLᵀ is left to the maintainer. It's a change of
-   results, though the same outcomes and iterations on every case.
+   Switching `DcOpfOptions::mehrotra()` to LDLᵀ was left to the maintainer, who decided at
+   review to switch it (2026-11-08). It's a change of results, though the same outcomes and
+   iterations on every case. MIPS and `MehrotraOptions::default()` keep LU.
 2. **The amalgamation rule.** CHOLMOD's defaults were taken as they are. Its zero allowances were
    set for a blocked supernodal kernel. Ours pays for zeros per entry, so a tighter rule may do
    better. That's a tuning question for a later PR, with the kernel's blocking.

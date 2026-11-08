@@ -8,9 +8,10 @@
 //! limits enforced one at a time), `n1` (every single-branch outage by rank-k updates) and
 //! `n1-parallel` (the same in parallel, which needs the `rayon` feature), and the optimal power
 //! flows: `dcopf` and `acopf` on MIPS, MATPOWER's default, and `dcopf-mehrotra` and
-//! `acopf-mehrotra` on the predictor-corrector method, each at MATPOWER's OPF settings (the AC
-//! OPF's factoring the KKT matrix by LDLᵀ, the others by LU), and `dcopf-mehrotra-ldlt`, the DC
-//! OPF on the predictor-corrector method with the KKT matrix factored by LDLᵀ. The
+//! `acopf-mehrotra` on the predictor-corrector method, each at MATPOWER's OPF settings (MIPS
+//! factoring the KKT matrix by LU, the predictor-corrector method by LDLᵀ), and
+//! `dcopf-mehrotra-ldlt`, the DC OPF on the predictor-corrector method with the KKT matrix
+//! factored by LDLᵀ explicitly, as its default now does (kept for the earlier profiles). The
 //! pipeline repeats until `<seconds>` (default 5) have passed, at least once. Prints the number of
 //! runs and the mean time per run to stderr.
 
@@ -109,8 +110,8 @@ fn run(workload: &str, path: &Path) -> Result<(), String> {
             } else {
                 DcOpfOptions::mehrotra()
             };
-            // The DC OPF keeps LU by default; this measures it on LDLᵀ, where its small cases
-            //   lose (docs/benchmarks/ldlt-opf-2026-11-08.md)
+            // LDLᵀ explicitly, as the DC OPF's default has since
+            //   docs/benchmarks/ldlt-amalgamation-2026-11-08.md; the workload predates that
             if workload == "dcopf-mehrotra-ldlt" {
                 options.solver = options
                     .solver

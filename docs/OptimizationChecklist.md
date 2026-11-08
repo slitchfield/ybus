@@ -522,8 +522,9 @@ with legacy results generated locally to explain differences.
                  and 3.14× in total; AC 1.16× and 3.07×.
                - **Amalgamation's own gain:** 1.02–1.23×. The dense kernel pays per entry for
                  the larger fronts' zeros.
-               - **Left to the maintainer:** whether the DC OPF's predictor-corrector default
-                 switches to LDLᵀ, which it now qualifies for under #59's rule.
+               - **Decided with the maintainer (2026-11-08):** the DC OPF's
+                 predictor-corrector default switches to LDLᵀ, which it now qualifies for under
+                 #59's rule. MIPS and `MehrotraOptions::default()` keep LU.
           2. the OPF's evaluation (bound 1.4–1.6× on AC);
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.
