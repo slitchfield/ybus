@@ -8,7 +8,8 @@
 //! MATPOWER, or the predictor-corrector method, each at MATPOWER's OPF settings
 //! (`DcOpfOptions::mehrotra`, `AcOpfOptions::mehrotra`). The KKT matrix is factored by LU by default, or by the pivoted
 //! LDLᵀ (`OpfSolver::with_kkt_factorization`), with the predictor-corrector method's inertia
-//! correction on or, for `ldlt-uncorrected`, off.
+//! correction on or, for `ldlt-uncorrected`, off. `--kkt` overrides the solver's own default (the
+//! AC OPF's predictor-corrector settings factor by LDLᵀ), so `lu` is LU for every solver.
 //!
 //! Prints one CSV line, with the columns in `HEADER`. Parsing and the OPF (model and solve
 //! together, as MATPOWER's elapsed time covers its setup and solve) are each timed by their median

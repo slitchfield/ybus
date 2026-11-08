@@ -238,10 +238,15 @@ fn the_defaults_run_mips() {
         panic!("DcOpfOptions::mehrotra chooses the predictor-corrector method");
     };
     assert_eq!(dc.feastol, 5e-6);
+    // The DC OPF keeps LU and the AC OPF factors by LDLᵀ, without the inertia correction, as
+    //   the survey decided (docs/benchmarks/ldlt-opf-2026-11-08.md)
+    assert_eq!(dc.kkt_factorization, KktFactorization::Lu);
     let OpfSolver::Mehrotra(ac) = AcOpfOptions::mehrotra().solver else {
         panic!("AcOpfOptions::mehrotra chooses the predictor-corrector method");
     };
     assert_eq!((ac.feastol, ac.cost_mult), (5e-6, 1e-4));
+    assert_eq!(ac.kkt_factorization, KktFactorization::Ldlt);
+    assert!(!ac.inertia_correction);
 }
 
 #[test]

@@ -77,8 +77,8 @@
 //!   - **it grows** 100× the first time within an iteration and 8× after;
 //!   - **past 1e40,** the solve fails.
 //!
-//!   The shift is in the iteration's record. With LU there's no inertia and no correction, and
-//!   `inertia_correction: false` switches it off with LDLᵀ.
+//!   The shift is in the iteration's record. It's off by default (`inertia_correction`), as the
+//!   OPF survey favoured. With LU there's no inertia and no correction.
 //! - It converges by MIPS's four measures, defined alike, with the bounds' slacks and
 //!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
 
@@ -127,7 +127,9 @@ pub struct MehrotraOptions {
     /// How the KKT system is factored: LU by default, or LDLᵀ (see [`crate::kkt`])
     pub kkt_factorization: KktFactorization,
     /// Whether to correct the KKT matrix's inertia when it's factored by LDLᵀ (see the module
-    /// docs); with LU there's no inertia, and this has no effect
+    /// docs): off by default, since on the OPF survey it changed no outcome for the better and
+    /// cost iterations (`docs/benchmarks/ldlt-opf-2026-11-08.md`); with LU there's no inertia,
+    /// and this has no effect
     pub inertia_correction: bool,
 }
 
@@ -148,7 +150,7 @@ impl Default for MehrotraOptions {
             mu_threshold: 1e-5,
             max_stepsize: 1e10,
             kkt_factorization: KktFactorization::Lu,
-            inertia_correction: true,
+            inertia_correction: false,
         }
     }
 }
