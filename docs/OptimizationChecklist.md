@@ -549,10 +549,28 @@ with legacy results generated locally to explain differences.
           1×1 and 2×2 pivots in each dense front. A pivot too small to take is delayed to the
           parent front (Duff and Reid, 1983; MA57). It's written from the literature, for real
           and Hermitian complex matrices.
-          - [ ] **The dense kernel:** threshold Bunch–Kaufman on a front, with a public dense
-            factorization to test it;
-          - [ ] **the multifrontal driver:** fronts, extend-add, delayed pivots, inertia,
-            solves, and the analysis reused;
+          - [x] **The dense kernel:** threshold Bunch–Kaufman on a front, with a public dense
+            factorization to test it (`DenseLdlt`).
+            - **No fallback to Bunch and Kaufman's own rule:** with u ≤ 1/2, a fully summed
+              nonsingular matrix always has a threshold pivot (Duff and Reid's argument, in
+              `DenseLdlt`'s docs).
+          - [x] **The multifrontal driver:** `SymbolicCholesky::factor_indefinite` and
+            `CsrMatrix::ldlt_indefinite` give `IndefiniteLdlt`.
+            - **What it has:** fundamental-supernode fronts, extend-add, delayed pivots, the
+              inertia, solves, refinement, and the analysis reused.
+            - **On the OPF's KKT matrices** (DC and AC case9241pegase and case_ACTIVSg25k,
+              iterations 1 and 10, u = 1e-4):
+              - **Fill and speed:** 2.4–4.9× fewer entries than LU, and 2–5.3× faster on all
+                but DC case9241pegase at iteration 10 (0.83×), with no regularization.
+              - **Accuracy:** refined to LU's residual.
+              - **Inertia:** correct, except where W isn't positive definite on the null space
+                (AC case_ACTIVSg25k, off by 1–2).
+            - **What u = 0.01 (MA57's default) costs:** more delays, 53k on DC
+              case9241pegase at iteration 10, and so 1.6× LU's fill. u = 1e-8 loses accuracy.
+            - **The rest of the delays:** about 8,400–48,000 at any threshold, from
+              zero-diagonal constraint rows that AMD makes leaves without a partner. An ordering
+              that keeps each with a variable it touches would remove them (the KKT ordering
+              study below).
           - [ ] **the solvers' option,** on the pivoted factorization, with inertia correction
             in the predictor-corrector method;
           - [ ] **the survey, the record and the defaults.**
