@@ -176,6 +176,22 @@ fn the_inertia_correction_leaves_a_saddle_for_a_minimum() {
 }
 
 #[test]
+fn without_the_correction_ldlt_stops_at_the_saddle_as_lu_does() {
+    let (qp, constraints) = saddle();
+    let mut options = mehrotra_options(KktFactorization::Ldlt);
+    options.inertia_correction = false;
+    let s = qps_mehrotra(&qp, &constraints, Some(&[0.1, 0.1]), &options).unwrap();
+    eprintln!(
+        "saddle, LDLᵀ uncorrected: {:?} at {:?}, f = {}, in {}",
+        s.status, s.x, s.f, s.iterations
+    );
+    assert_eq!(s.status, MehrotraStatus::Converged);
+    assert_eq!(s.inertia_corrections, 0);
+    assert!(s.history.iter().all(|h| h.delta_w == 0.0));
+    assert!(s.f.abs() < 1e-6 && s.x[0].abs() < 1e-6, "f = {}", s.f);
+}
+
+#[test]
 fn hs71_from_2_is_refused_as_a_maximum() {
     // With LU the method converges here to a constrained local maximum (f = 131.26, see
     //   mehrotra_test). The inertia correction refuses it, but with no line search the method
