@@ -98,6 +98,8 @@ pub(crate) struct FrontFactor<T> {
 /// candidate passes means the matrix is singular (see [`DenseLdlt`]), an error.
 /// Without it, the factorization stops when no candidate passes, and the rest are delayed.
 ///
+/// `scratch` is working space, reused across calls so a pivot allocates nothing.
+///
 /// Returns `SparseError::SingularMatrix` naming the front position where no pivot was found
 /// with `complete`, or of a pivot that is zero or NaN.
 pub(crate) fn factor_front<T: Scalar + ComplexFloat>(
@@ -106,6 +108,7 @@ pub(crate) fn factor_front<T: Scalar + ComplexFloat>(
     k: usize,
     threshold: T::Real,
     complete: bool,
+    scratch: &mut Vec<T>,
 ) -> Result<FrontFactor<T>, SparseError> {
     debug_assert_eq!(a.len(), m * m);
     debug_assert!(k <= m && (!complete || k == m));
@@ -134,7 +137,7 @@ pub(crate) fn factor_front<T: Scalar + ComplexFloat>(
                 if d == zero || Float::is_nan(d) {
                     return Err(SparseError::SingularMatrix { pivot: order[p] });
                 }
-                eliminate_one(a, m, p, d);
+                eliminate_one(a, m, p, d, scratch);
                 blocks.push(DBlock::One(from_real(d)));
                 p += 1;
             }
@@ -148,7 +151,7 @@ pub(crate) fn factor_front<T: Scalar + ComplexFloat>(
                 if det == zero || Float::is_nan(det) {
                     return Err(SparseError::SingularMatrix { pivot: order[p] });
                 }
-                eliminate_two(a, m, p, d11, d21, d22, det);
+                eliminate_two(a, m, p, (d11, d21, d22, det), scratch);
                 blocks.push(DBlock::Two {
                     a: from_real(d11),
                     b: d21,
@@ -253,11 +256,24 @@ fn swap<T: Copy>(a: &mut [T], m: usize, order: &mut [usize], i: usize, j: usize)
 
 /// Eliminates the 1×1 pivot `d` at position `p`: `L`'s column below it is `a_ip / d`, and the
 /// trailing square loses `a_ip conj(l_j)`, computed on the lower triangle and mirrored
-fn eliminate_one<T: Scalar + ComplexFloat>(a: &mut [T], m: usize, p: usize, d: T::Real) {
+fn eliminate_one<T: Scalar + ComplexFloat>(
+    a: &mut [T],
+    m: usize,
+    p: usize,
+    d: T::Real,
+    scratch: &mut Vec<T>,
+) {
     let at = |i: usize, j: usize| i + j * m;
-    let w: Vec<T> = (p + 1..m).map(|i| a[at(i, p)]).collect();
     let d_t: T = from_real(d);
-    let l: Vec<T> = w.iter().map(|&w| w / d_t).collect();
+    // w, the pivot's column below it, then l = w / d, in the caller's scratch
+    let k = m - p - 1;
+    scratch.clear();
+    scratch.extend((p + 1..m).map(|i| a[at(i, p)]));
+    for ii in 0..k {
+        let value = scratch[ii] / d_t;
+        scratch.push(value);
+    }
+    let (w, l) = scratch.split_at(k);
     for (jj, j) in (p + 1..m).enumerate() {
         let conj_l = l[jj].conj();
         for (ii, i) in (j..m).enumerate().map(|(n, i)| (n + jj, i)) {
@@ -282,26 +298,28 @@ fn eliminate_two<T: Scalar + ComplexFloat>(
     a: &mut [T],
     m: usize,
     p: usize,
-    d11: T::Real,
-    d21: T,
-    d22: T::Real,
-    det: T::Real,
+    (d11, d21, d22, det): (T::Real, T, T::Real, T::Real),
+    scratch: &mut Vec<T>,
 ) {
     let at = |i: usize, j: usize| i + j * m;
     let (d11_t, d22_t, det_t): (T, T, T) = (from_real(d11), from_real(d22), from_real(det));
-    let x: Vec<T> = (p + 2..m).map(|i| a[at(i, p)]).collect();
-    let y: Vec<T> = (p + 2..m).map(|i| a[at(i, p + 1)]).collect();
-    // [l0, l1] = [x, y] D⁻¹, D⁻¹ = [[d22, −conj(d21)], [−d21, d11]] / det
-    let l0: Vec<T> = x
-        .iter()
-        .zip(&y)
-        .map(|(&x, &y)| (x * d22_t - y * d21) / det_t)
-        .collect();
-    let l1: Vec<T> = x
-        .iter()
-        .zip(&y)
-        .map(|(&x, &y)| (y * d11_t - x * d21.conj()) / det_t)
-        .collect();
+    // x and y, the pivots' columns below them, then [l0, l1] = [x, y] D⁻¹ with
+    //   D⁻¹ = [[d22, −conj(d21)], [−d21, d11]] / det, in the caller's scratch
+    let k = m - p - 2;
+    scratch.clear();
+    scratch.extend((p + 2..m).map(|i| a[at(i, p)]));
+    scratch.extend((p + 2..m).map(|i| a[at(i, p + 1)]));
+    for ii in 0..k {
+        let (x, y) = (scratch[ii], scratch[k + ii]);
+        scratch.push((x * d22_t - y * d21) / det_t);
+    }
+    for ii in 0..k {
+        let (x, y) = (scratch[ii], scratch[k + ii]);
+        scratch.push((y * d11_t - x * d21.conj()) / det_t);
+    }
+    let (xy, l) = scratch.split_at(2 * k);
+    let (x, y) = xy.split_at(k);
+    let (l0, l1) = l.split_at(k);
     for (jj, j) in (p + 2..m).enumerate() {
         let (c0, c1) = (l0[jj].conj(), l1[jj].conj());
         for i in j..m {
@@ -436,7 +454,7 @@ impl<T: Scalar + ComplexFloat> DenseLdlt<T> {
             }
         }
         let threshold: T::Real = NumCast::from(threshold).expect("the threshold is representable");
-        let front = factor_front(&mut a, n, n, threshold, true)?;
+        let front = factor_front(&mut a, n, n, threshold, true, &mut Vec::new())?;
         debug_assert_eq!(front.eliminated, n);
         // L: the strictly lower part, with each 2×2 block's lower-left entry (D's) cleared, and
         //   the unit diagonal

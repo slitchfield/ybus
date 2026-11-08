@@ -297,6 +297,14 @@ impl SymbolicIndefinite {
 
         // Contribution blocks waiting for their parent: (variables, dense square, both triangles)
         let mut pending: Vec<Vec<(Vec<usize>, Vec<T>)>> = vec![Vec::new(); nodes.len()];
+        // Reused working space: the front, the kernel's scratch, the front's variables, and
+        //   spent contribution blocks' storage, handed out again (so blocks are still consumed
+        //   in the order they were made, and every sum is as before)
+        let mut front: Vec<T> = Vec::new();
+        let mut scratch: Vec<T> = Vec::new();
+        let mut vars: Vec<usize> = Vec::new();
+        let mut spare_blocks: Vec<Vec<T>> = Vec::new();
+        let mut spare_vars: Vec<Vec<usize>> = Vec::new();
         // Where each variable sits in the current front, or usize::MAX
         let mut position = vec![usize::MAX; n];
         let mut fronts = Vec::with_capacity(nodes.len());
@@ -305,7 +313,8 @@ impl SymbolicIndefinite {
             let (start, end, below) = (&node.start, &node.end, &node.below);
             let contributions = std::mem::take(&mut pending[s]);
             // The front's variables: its own, the children's delayed ones, then the rows below
-            let mut vars: Vec<usize> = (*start..*end).collect();
+            vars.clear();
+            vars.extend(*start..*end);
             for (child_vars, _) in &contributions {
                 for &v in child_vars {
                     if v < *start {
@@ -320,7 +329,8 @@ impl SymbolicIndefinite {
             for (p, &v) in vars.iter().enumerate() {
                 position[v] = p;
             }
-            let mut front = vec![T::zero(); m * m];
+            front.clear();
+            front.resize(m * m, T::zero());
             // A's lower triangle in the own columns, mirrored: row j of C holds column j's
             //   entries, and those at or below the diagonal belong to this front
             for j in *start..*end {
@@ -352,18 +362,19 @@ impl SymbolicIndefinite {
                     }
                 }
             }
-            drop(contributions);
+            for (child_vars, block) in contributions {
+                spare_vars.push(child_vars);
+                spare_blocks.push(block);
+            }
 
             let root = node.parent.is_none();
             debug_assert!(!root || below.is_empty());
-            let factored =
-                factor_front(&mut front, m, fully_summed, threshold, root).map_err(|error| {
-                    match error {
-                        SparseError::SingularMatrix { pivot } => SparseError::SingularMatrix {
-                            pivot: symbolic.perm[vars[pivot]],
-                        },
-                        other => other,
-                    }
+            let factored = factor_front(&mut front, m, fully_summed, threshold, root, &mut scratch)
+                .map_err(|error| match error {
+                    SparseError::SingularMatrix { pivot } => SparseError::SingularMatrix {
+                        pivot: symbolic.perm[vars[pivot]],
+                    },
+                    other => other,
                 })?;
             for &v in &vars {
                 position[v] = usize::MAX;
@@ -373,28 +384,34 @@ impl SymbolicIndefinite {
             // The contribution block, everything not eliminated, goes to the parent
             if e < m {
                 let rest = m - e;
-                let mut block = vec![T::zero(); rest * rest];
+                let mut block = spare_blocks.pop().unwrap_or_default();
+                block.clear();
+                block.resize(rest * rest, T::zero());
                 for b in 0..rest {
                     for a in 0..rest {
                         block[a + b * rest] = front[(e + a) + (e + b) * m];
                     }
                 }
                 let p = node.parent.expect("a front with rows left has a parent");
-                pending[p].push((ordered[e..].to_vec(), block));
+                let mut rest_vars = spare_vars.pop().unwrap_or_default();
+                rest_vars.clear();
+                rest_vars.extend_from_slice(&ordered[e..]);
+                pending[p].push((rest_vars, block));
             }
-            front.truncate(m * e);
+            // L's columns, at their exact size; the front is reused
+            let mut l = front[..m * e].to_vec();
             // Inside a 2×2 block, L's entry is zero (the kernel leaves D's there)
             let mut at = 0;
             for block in &factored.blocks {
                 if block.size() == 2 {
-                    front[(at + 1) + at * m] = T::zero();
+                    l[(at + 1) + at * m] = T::zero();
                 }
                 at += block.size();
             }
             fronts.push(Front {
                 vars: ordered,
                 eliminated: e,
-                l: front,
+                l,
                 blocks: factored.blocks,
             });
         }
