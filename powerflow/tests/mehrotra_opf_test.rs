@@ -353,10 +353,12 @@ fn committed_cases_meet_the_bar_with_ldlt() {
     let mut found = vec![];
     // Only LDLᵀ refines, so its solves show it was used: (MIPS, predictor-corrector)
     let mut refinement_steps = (0, 0);
+    let mut solved = 0;
     for name in ["case14", "case30", "case118"] {
         let Some(path) = common::matpower_case(name) else {
             continue;
         };
+        solved += 1;
         for (solver, mut dc, mut ac) in [
             ("MIPS", DcOpfOptions::default(), AcOpfOptions::default()),
             (
@@ -384,6 +386,8 @@ fn committed_cases_meet_the_bar_with_ldlt() {
         }
     }
     eprintln!("refinement steps over the AC solves: {refinement_steps:?}");
-    assert!(refinement_steps.0 > 0 && refinement_steps.1 > 0);
+    // Without MATPOWER's cases (an unfetched checkout) nothing was solved, as the other tests
+    //   skip; YBUS_REQUIRE_CASES makes that a failure in matpower_case itself
+    assert!(solved == 0 || (refinement_steps.0 > 0 && refinement_steps.1 > 0));
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
