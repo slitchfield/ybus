@@ -513,8 +513,17 @@ with legacy results generated locally to explain differences.
                  the mirror map.
                - **Speed:** 1.16–1.32× on DC with LDLᵀ, 1.20–1.25× on mid-size AC, and
                  1.06–1.10× on the largest AC cases.
-             - [ ] **Relaxed amalgamation of the tiny fronts:** it changes the pivots, so it's
-               judged by O3's bar, with #59's survey rerun;
+             - [x] **Relaxed amalgamation of the tiny fronts**
+               ([`ldlt-amalgamation-2026-11-08.md`](benchmarks/ldlt-amalgamation-2026-11-08.md)).
+               - **The change:** postorder the ordering, then merge by CHOLMOD's rule.
+               - **The bar:** O3's, kept on DC and AC wherever LU meets it, with the same
+                 iterations on every converged case.
+               - **Against LU:** DC on LDLᵀ is now 1.15× faster in the median (0.79× before #61)
+                 and 3.14× in total; AC 1.16× and 3.07×.
+               - **Amalgamation's own gain:** 1.02–1.23×. The dense kernel pays per entry for
+                 the larger fronts' zeros.
+               - **Left to the maintainer:** whether the DC OPF's predictor-corrector default
+                 switches to LDLᵀ, which it now qualifies for under #59's rule.
           2. the OPF's evaluation (bound 1.4–1.6× on AC);
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.
