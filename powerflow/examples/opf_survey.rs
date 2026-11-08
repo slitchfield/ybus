@@ -3,10 +3,11 @@
 //! this once per case and model, each in its own process, so that it can limit time and memory
 //! and record peak memory.
 //!
-//! Usage: `opf_survey --model dc|ac [--solver mips|mehrotra] <case.m> [<reference-dir>]`, or
-//! `opf_survey --header`. The solver is MIPS by default, as in MATPOWER, or the
-//! predictor-corrector method, each at MATPOWER's OPF settings (`DcOpfOptions::mehrotra`,
-//! `AcOpfOptions::mehrotra`).
+//! Usage: `opf_survey --model dc|ac [--solver mips|mehrotra] [--kkt lu|ldlt] <case.m>
+//! [<reference-dir>]`, or `opf_survey --header`. The solver is MIPS by default, as in MATPOWER,
+//! or the predictor-corrector method, each at MATPOWER's OPF settings (`DcOpfOptions::mehrotra`,
+//! `AcOpfOptions::mehrotra`). The KKT matrix is factored by LU by default, or by the pivoted
+//! LDLᵀ (`OpfSolver::with_kkt_factorization`).
 //!
 //! Prints one CSV line, with the columns in `HEADER`. Parsing and the OPF (model and solve
 //! together, as MATPOWER's elapsed time covers its setup and solve) are each timed by their median
@@ -27,6 +28,7 @@ use interior_point::solution::{KktResiduals, Status};
 use powerflow::case::Case;
 use powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
+use powerflow::opf::KktFactorization;
 use reference::{AcOpfReference, DcOpfReference};
 
 /// The columns.
@@ -46,6 +48,8 @@ use reference::{AcOpfReference, DcOpfReference};
 ///   point and multipliers on the OPF's own problem, unscaled (`DcOpfSolution::residuals`),
 ///   empty for an error; then `analyses`, how many times the solver analyzed the KKT matrix
 ///   (1 when its pattern held for the whole solve).
+/// - **The KKT factorization** (last): `lu` or `ldlt`, the refinement steps over every solve,
+///   and the inertia corrections (the predictor-corrector method with LDLᵀ only).
 const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_runs,outcome,\
                       iterations,matpower_success,matpower_iterations,singular,matpower_ms,\
                       objective_rel,lam_p_rel,lam_q_rel,primal_abs,multiplier_abs,\
@@ -54,7 +58,7 @@ const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_r
                       legacy_multiplier_abs,cores_objective_rel,cores_lam_p_rel,cores_lam_q_rel,\
                       cores_primal_abs,cores_multiplier_abs,solver,kkt_stationarity,\
                       kkt_feasibility,kkt_complementarity,kkt_dual_feasibility,\
-                      analyses";
+                      analyses,kkt_factorization,refinement_steps,inertia_corrections";
 
 /// How long to keep repeating a step for its median time
 const BUDGET: Duration = Duration::from_secs(1);
@@ -92,12 +96,20 @@ fn main() -> ExitCode {
         [flag, ..] if flag == "--solver" => return usage(),
         rest => (Solver::Mips, rest),
     };
+    let (kkt, rest) = match rest {
+        [flag, kkt, rest @ ..] if flag == "--kkt" && kkt == "lu" => (KktFactorization::Lu, rest),
+        [flag, kkt, rest @ ..] if flag == "--kkt" && kkt == "ldlt" => {
+            (KktFactorization::Ldlt, rest)
+        }
+        [flag, ..] if flag == "--kkt" => return usage(),
+        rest => (KktFactorization::Lu, rest),
+    };
     let (case, references) = match rest {
         [case] => (case, None),
         [case, references] => (case, Some(Path::new(references))),
         _ => return usage(),
     };
-    match survey(Path::new(case), references, model, solver) {
+    match survey(Path::new(case), references, model, solver, kkt) {
         Ok(line) => {
             println!("{line}");
             ExitCode::SUCCESS
@@ -111,8 +123,8 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: opf_survey --model dc|ac [--solver mips|mehrotra] <case.m> [<reference-dir>] \
-         | --header"
+        "usage: opf_survey --model dc|ac [--solver mips|mehrotra] [--kkt lu|ldlt] <case.m> \
+         [<reference-dir>] | --header"
     );
     ExitCode::from(2)
 }
@@ -125,6 +137,9 @@ struct Fields {
     status: Option<Status>,
     residuals: Option<KktResiduals>,
     analyses: Option<usize>,
+    /// The refinement steps and inertia corrections (none for a reference)
+    refinement_steps: Option<usize>,
+    inertia_corrections: Option<usize>,
     iterations: usize,
     lam_p: Vec<f64>,
     /// `LAM_Q`, for AC only
@@ -141,6 +156,8 @@ impl Fields {
             status: Some(s.status),
             residuals: Some(s.residuals),
             analyses: Some(s.solver.analyses()),
+            refinement_steps: Some(s.solver.refinement_steps()),
+            inertia_corrections: Some(s.solver.inertia_corrections()),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: None,
@@ -163,6 +180,8 @@ impl Fields {
             status: None,
             residuals: None,
             analyses: None,
+            refinement_steps: None,
+            inertia_corrections: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: None,
@@ -185,6 +204,8 @@ impl Fields {
             status: Some(s.status),
             residuals: Some(s.residuals),
             analyses: Some(s.solver.analyses()),
+            refinement_steps: Some(s.solver.refinement_steps()),
+            inertia_corrections: Some(s.solver.inertia_corrections()),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: Some(s.lam_q.clone()),
@@ -220,6 +241,8 @@ impl Fields {
             status: None,
             residuals: None,
             analyses: None,
+            refinement_steps: None,
+            inertia_corrections: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: Some(r.lam_q.clone()),
@@ -294,6 +317,7 @@ fn survey(
     references: Option<&Path>,
     model: Model,
     solver: Solver,
+    factorization: KktFactorization,
 ) -> Result<String, String> {
     let name = path
         .file_stem()
@@ -303,18 +327,20 @@ fn survey(
     let case = case.map_err(|err| err.to_string())?;
     let (opf, runs, ours) = match model {
         Model::Dc => {
-            let options = match solver {
+            let mut options = match solver {
                 Solver::Mips => DcOpfOptions::default(),
                 Solver::Mehrotra => DcOpfOptions::mehrotra(),
             };
+            options.solver = options.solver.with_kkt_factorization(factorization);
             let (t, n, s) = time(|| dc_opf_with_options(&case, &options));
             (t, n, s.map(|s| Fields::dc(&s)))
         }
         Model::Ac => {
-            let options = match solver {
+            let mut options = match solver {
                 Solver::Mips => AcOpfOptions::default(),
                 Solver::Mehrotra => AcOpfOptions::mehrotra(),
             };
+            options.solver = options.solver.with_kkt_factorization(factorization);
             let (t, n, s) = time(|| ac_opf_with_options(&case, &options));
             (t, n, s.map(|s| Fields::ac(&s)))
         }
@@ -420,9 +446,21 @@ fn survey(
         .ok()
         .and_then(|fields| fields.analyses)
         .map_or(String::new(), |n| n.to_string());
+    let kkt_name = match factorization {
+        KktFactorization::Ldlt => "ldlt",
+        _ => "lu",
+    };
+    let count = |n: Option<usize>| n.map_or(String::new(), |n| n.to_string());
+    let (refinement_steps, inertia_corrections) = match ours.as_ref() {
+        Ok(fields) => (
+            count(fields.refinement_steps),
+            count(fields.inertia_corrections),
+        ),
+        Err(_) => (String::new(), String::new()),
+    };
     Ok(format!(
         "{name},{},{},{},{model_name},{:.3},{:.3},{runs},{outcome},{iterations},{core},{legacy},\
-         {solver_name},{kkt},{analyses}",
+         {solver_name},{kkt},{analyses},{kkt_name},{refinement_steps},{inertia_corrections}",
         case.bus.len(),
         case.branch.len(),
         case.generator.len(),

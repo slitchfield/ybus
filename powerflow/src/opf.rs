@@ -18,6 +18,7 @@ pub mod derivatives;
 
 use std::f64::consts::PI;
 
+pub use interior_point::kkt::KktFactorization;
 use interior_point::mehrotra::{MehrotraOptions, MehrotraSolution};
 use interior_point::mips::{MipsOptions, MipsSolution};
 use interior_point::solution::{Multipliers, Status};
@@ -38,6 +39,23 @@ pub enum OpfSolver {
     /// The primal-dual method with Mehrotra's predictor-corrector
     /// ([`interior_point::mehrotra`]), on the same problem, constraints and starting point
     Mehrotra(MehrotraOptions),
+}
+
+impl OpfSolver {
+    /// The same solver, with its KKT matrix factored by `kkt`: LU by default, or the pivoted
+    /// LDLᵀ (see [`interior_point::kkt`]).
+    pub fn with_kkt_factorization(self, kkt: KktFactorization) -> OpfSolver {
+        match self {
+            OpfSolver::Mips(mut options) => {
+                options.kkt_factorization = kkt;
+                OpfSolver::Mips(options)
+            }
+            OpfSolver::Mehrotra(mut options) => {
+                options.kkt_factorization = kkt;
+                OpfSolver::Mehrotra(options)
+            }
+        }
+    }
 }
 
 /// The solver's own result, on the model's variables and constraints, with each iteration's
@@ -91,6 +109,23 @@ impl SolverResult {
         match self {
             SolverResult::Mips(s) => s.analyses,
             SolverResult::Mehrotra(s) => s.analyses,
+        }
+    }
+
+    /// The refinement steps taken over every KKT solve: 0 with LU.
+    pub fn refinement_steps(&self) -> usize {
+        match self {
+            SolverResult::Mips(s) => s.refinement_steps,
+            SolverResult::Mehrotra(s) => s.refinement_steps,
+        }
+    }
+
+    /// How many times the KKT matrix was refactored to correct its inertia: only the
+    /// predictor-corrector method corrects it, with LDLᵀ, so 0 otherwise.
+    pub fn inertia_corrections(&self) -> usize {
+        match self {
+            SolverResult::Mips(_) => 0,
+            SolverResult::Mehrotra(s) => s.inertia_corrections,
         }
     }
 
