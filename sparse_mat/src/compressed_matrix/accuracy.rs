@@ -23,11 +23,12 @@ use num_complex::ComplexFloat;
 use num_traits::{Float, Zero};
 
 use super::{CompressedMatrix, CscMatrix, CsrMatrix, Orientation};
-use crate::compressed_matrix::{Cholesky, Ldlt, Lu};
+use crate::compressed_matrix::{Cholesky, IndefiniteLdlt, Ldlt, Lu};
 use crate::sparse_error::SparseError;
 use crate::Scalar;
 
-/// The result of [`Lu::solve_refined`], [`Cholesky::solve_refined`] or [`Ldlt::solve_refined`].
+/// The result of [`Lu::solve_refined`], [`Cholesky::solve_refined`], [`Ldlt::solve_refined`] or
+/// [`IndefiniteLdlt::solve_refined`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Refined<T: ComplexFloat> {
     /// The solution with the smallest componentwise backward error found
@@ -39,7 +40,7 @@ pub struct Refined<T: ComplexFloat> {
     pub backward_error: T::Real,
 }
 
-/// The result of [`Ldlt::solve_refined_normwise`].
+/// The result of [`Ldlt::solve_refined_normwise`] or [`IndefiniteLdlt::solve_refined_normwise`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct NormwiseRefined<T: ComplexFloat> {
     /// The solution with the smallest relative residual found
@@ -343,6 +344,40 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
         tolerance: T::Real,
     ) -> Result<NormwiseRefined<T>, SparseError> {
         let n = self.l().shape.0;
+        check_refinement_shapes(a.shape, n, b.len())?;
+        Ok(refine_normwise(a, b, max_steps, tolerance, |rhs| {
+            self.solve(rhs).expect("one entry per row")
+        }))
+    }
+}
+
+impl<T: Scalar + ComplexFloat> IndefiniteLdlt<T> {
+    /// [`Lu::solve_refined`] with pivoted `L D Lᴴ` factors: `a` must be the matrix they came
+    /// from.
+    pub fn solve_refined(
+        &self,
+        a: &CsrMatrix<T>,
+        b: &[T],
+        max_steps: usize,
+    ) -> Result<Refined<T>, SparseError> {
+        let n = self.permutation().len();
+        check_refinement_shapes(a.shape, n, b.len())?;
+        Ok(refine(a, b, max_steps, |rhs| {
+            self.solve(rhs).expect("one entry per row")
+        }))
+    }
+
+    /// [`Ldlt::solve_refined_normwise`] with pivoted `L D Lᴴ` factors: refines against `a` until
+    /// `‖b − A x‖∞ ≤ tolerance ‖b‖∞`, for at most `max_steps` corrections, stopping early when a
+    /// step fails to halve the relative residual.
+    pub fn solve_refined_normwise(
+        &self,
+        a: &CsrMatrix<T>,
+        b: &[T],
+        max_steps: usize,
+        tolerance: T::Real,
+    ) -> Result<NormwiseRefined<T>, SparseError> {
+        let n = self.permutation().len();
         check_refinement_shapes(a.shape, n, b.len())?;
         Ok(refine_normwise(a, b, max_steps, tolerance, |rhs| {
             self.solve(rhs).expect("one entry per row")
