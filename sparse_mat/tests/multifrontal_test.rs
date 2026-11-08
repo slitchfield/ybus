@@ -443,3 +443,151 @@ fn a_threshold_above_one_half_is_refused() {
         .unwrap()
         .factor_indefinite(&a, IndefiniteOptions { threshold: 0.75 });
 }
+
+/// Everything a factorization reports, to compare two bit for bit: the solve of a fixed
+/// right-hand side, the inertia and the counts
+fn fingerprint(
+    f: &sparse_mat::compressed_matrix::IndefiniteLdlt<f64>,
+    n: usize,
+) -> (Vec<u64>, Inertia, usize, usize, usize) {
+    let b = right_hand_side(n, 99);
+    let x = f.solve(&b).unwrap();
+    (
+        x.iter().map(|v| v.to_bits()).collect(),
+        f.inertia(),
+        f.delayed(),
+        f.two_by_two(),
+        f.l_entries(),
+    )
+}
+
+#[test]
+fn one_kept_analysis_factors_as_fresh_ones_do() {
+    // Matrices with the same pattern and other values, factored in turn by one kept analysis
+    //   and each by a fresh one, and by SymbolicCholesky::factor_indefinite: the same bit for
+    //   bit, so nothing is left behind in the analysis or reused buffers
+    let base = kkt(60, 25, 13);
+    let kept = base.analyze_indefinite(Ordering::Amd).unwrap();
+    let mut rng = Lcg(14);
+    for round in 0..6 {
+        let lower: Vec<(usize, usize, f64)> = base
+            .iter()
+            .filter(|(i, j, _)| i >= j)
+            .map(|(i, j, v)| {
+                let scaled = if v == 0.0 {
+                    0.0
+                } else {
+                    v * (0.5 + rng.unit().abs())
+                };
+                (i, j, scaled)
+            })
+            .collect();
+        let a = CsrMatrix::from_triplets(
+            85,
+            85,
+            lower.iter().flat_map(|&(i, j, v)| {
+                if i == j {
+                    vec![(i, j, v)]
+                } else {
+                    vec![(i, j, v), (j, i, v)]
+                }
+            }),
+        )
+        .unwrap();
+        let fresh = a.analyze_indefinite(Ordering::Amd).unwrap();
+        let options = IndefiniteOptions {
+            threshold: [0.01, 1e-4, 0.5][round % 3],
+        };
+        let by_kept = fingerprint(&kept.factor(&a, options).unwrap(), 85);
+        assert_eq!(
+            by_kept,
+            fingerprint(&fresh.factor(&a, options).unwrap(), 85),
+            "round {round}"
+        );
+        assert_eq!(
+            by_kept,
+            fingerprint(
+                &fresh.cholesky().factor_indefinite(&a, options).unwrap(),
+                85
+            ),
+            "round {round}"
+        );
+    }
+}
+
+#[test]
+fn the_symmetry_check_refuses_what_is_hermitian_refuses() {
+    // Each matrix is analyzed on its own pattern, so only the values decide
+    let real =
+        |triplets: Vec<(usize, usize, f64)>| CsrMatrix::from_triplets(3, 3, triplets).unwrap();
+    let diagonal = vec![(0, 0, 2.0), (1, 1, 3.0), (2, 2, 4.0)];
+    let with = |extra: &[(usize, usize, f64)]| {
+        let mut t = diagonal.clone();
+        t.extend_from_slice(extra);
+        real(t)
+    };
+    let cases = [
+        ("symmetric", with(&[(0, 1, 1.0), (1, 0, 1.0)])),
+        ("asymmetric values", with(&[(0, 1, 1.0), (1, 0, 1.5)])),
+        // (0, 1) stored, (1, 0) not: symmetric while the stored value is zero
+        ("a stored zero without its mirror", with(&[(0, 1, 0.0)])),
+        ("a nonzero without its mirror", with(&[(0, 1, 1.0)])),
+        (
+            "a nonzero against a stored zero",
+            with(&[(0, 1, 1.0), (1, 0, 0.0)]),
+        ),
+        (
+            "negative zero against zero",
+            with(&[(0, 1, -0.0), (1, 0, 0.0)]),
+        ),
+        ("a NaN pair", with(&[(0, 1, f64::NAN), (1, 0, f64::NAN)])),
+    ];
+    for (name, a) in &cases {
+        let refused = matches!(
+            a.analyze_indefinite(Ordering::Natural)
+                .unwrap()
+                .factor(a, IndefiniteOptions::default()),
+            Err(SparseError::NotSymmetric)
+        );
+        assert_eq!(refused, !a.is_hermitian(), "{name}");
+    }
+    let complex =
+        |triplets: Vec<(usize, usize, C)>| CsrMatrix::from_triplets(2, 2, triplets).unwrap();
+    let complex_cases = [
+        (
+            "Hermitian",
+            complex(vec![
+                (0, 0, C::new(2.0, 0.0)),
+                (1, 1, C::new(3.0, 0.0)),
+                (0, 1, C::new(1.0, 1.0)),
+                (1, 0, C::new(1.0, -1.0)),
+            ]),
+        ),
+        (
+            "symmetric but not Hermitian",
+            complex(vec![
+                (0, 0, C::new(2.0, 0.0)),
+                (1, 1, C::new(3.0, 0.0)),
+                (0, 1, C::new(1.0, 1.0)),
+                (1, 0, C::new(1.0, 1.0)),
+            ]),
+        ),
+        (
+            "a complex diagonal",
+            complex(vec![(0, 0, C::new(2.0, 0.5)), (1, 1, C::new(3.0, 0.0))]),
+        ),
+    ];
+    for (name, a) in &complex_cases {
+        let refused = matches!(
+            a.analyze_indefinite(Ordering::Natural)
+                .unwrap()
+                .factor(a, IndefiniteOptions::default()),
+            Err(SparseError::NotSymmetric)
+        );
+        assert_eq!(refused, !a.is_hermitian(), "{name}");
+    }
+    // Each kind occurs: some refused, some accepted
+    assert!(
+        cases.iter().any(|(_, a)| a.is_hermitian()) && cases.iter().any(|(_, a)| !a.is_hermitian())
+    );
+}

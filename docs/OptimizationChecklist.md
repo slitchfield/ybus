@@ -503,9 +503,18 @@ with legacy results generated locally to explain differences.
           tiny (a median of 4 rows, 0.9 per variable). That is the cost per front behind its
           small-case loss.
         - **MIPS on LU** is 49–89% factorization.
-        - **The proposed order,** to be decided with the maintainer at review:
+        - **The order, decided with the maintainer (2026-11-08):**
           1. the LDLᵀ's bookkeeping (bound DC 1.3–1.5×, AC 1.2–1.3× from the bookkeeping
-             alone);
+             alone), in two PRs:
+             - [x] **The per-pattern work kept with the analysis, and the buffers reused,**
+               bit for bit the same
+               ([`ldlt-bookkeeping-2026-11-08.md`](benchmarks/ldlt-bookkeeping-2026-11-08.md)).
+               - **The change:** `SymbolicIndefinite` holds the supernodes, the gather map and
+                 the mirror map.
+               - **Speed:** 1.16–1.32× on DC with LDLᵀ, 1.20–1.25× on mid-size AC, and
+                 1.06–1.10× on the largest AC cases.
+             - [ ] **Relaxed amalgamation of the tiny fronts:** it changes the pivots, so it's
+               judged by O3's bar, with #59's survey rerun;
           2. the OPF's evaluation (bound 1.4–1.6× on AC);
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.

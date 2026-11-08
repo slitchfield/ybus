@@ -6,7 +6,7 @@ use num_traits::NumCast;
 
 use super::bunch_kaufman::{factor_front, DBlock};
 use super::cholesky::SymbolicCholesky;
-use super::{CsrMatrix, Inertia, Ordering};
+use super::{CompressedMatrix, CsrMatrix, Inertia, Ordering};
 use crate::sparse_error::SparseError;
 use crate::Scalar;
 
@@ -136,11 +136,143 @@ impl SymbolicCholesky {
     /// on the multifrontal method (see [`IndefiniteLdlt`]). The analysis's ordering and
     /// elimination tree are used as they are; pivoting only reorders within and between fronts.
     ///
+    /// This builds a [`SymbolicIndefinite`] on each call. To factor several matrices with the
+    /// same pattern, build one once and use [`SymbolicIndefinite::factor`], whose results are
+    /// the same bit for bit.
+    ///
     /// Returns `SparseError::PatternMismatch` if `matrix`'s shape or pattern differs from the
     /// analyzed one, `SparseError::NotSymmetric` if `A ≠ Aᴴ`, and `SparseError::SingularMatrix`
     /// naming a row of `A` where no pivot could be found, the matrix being singular to working
     /// precision. Panics if `options.threshold` is outside `(0, 0.5]`.
     pub fn factor_indefinite<T: Scalar + ComplexFloat>(
+        &self,
+        matrix: &CsrMatrix<T>,
+        options: IndefiniteOptions,
+    ) -> Result<IndefiniteLdlt<T>, SparseError> {
+        SymbolicIndefinite::new(self.clone()).factor(matrix, options)
+    }
+}
+
+/// One fundamental supernode: its columns, the rows below them that its first column reaches,
+/// and the supernode its parent column belongs to
+#[derive(Clone, Debug)]
+struct Supernode {
+    start: usize,
+    end: usize,
+    below: Vec<usize>,
+    parent: Option<usize>,
+}
+
+/// The symbolic analysis for [`IndefiniteLdlt`]: the Cholesky analysis ([`SymbolicCholesky`]:
+/// the ordering, the elimination tree and L's pattern), with what the multifrontal factorization
+/// needs of the pattern, worked out once rather than at every factorization:
+///
+/// - **the fundamental supernodes,** each front's columns and rows, and its parent;
+/// - **the gather map** from `A`'s stored values to `P A Pᵀ`'s, so a factorization gathers the
+///   values instead of permuting the matrix;
+/// - **each stored entry's mirror,** the position of `(j, i)` for `(i, j)`, so the symmetry
+///   check is one pass over the values, accepting and refusing exactly the matrices
+///   [`is_hermitian`](CsrMatrix::is_hermitian) does.
+///
+/// Together these were 7.5–11.7% of the factorization's time when they were redone each time
+/// (`docs/benchmarks/ipm-profile-2026-11-08.md`). Build it with
+/// [`CsrMatrix::analyze_indefinite`] or from a Cholesky analysis with
+/// [`SymbolicIndefinite::new`], and factor with [`SymbolicIndefinite::factor`].
+#[derive(Clone, Debug)]
+pub struct SymbolicIndefinite {
+    cholesky: SymbolicCholesky,
+    nodes: Vec<Supernode>,
+    /// `P A Pᵀ`'s pattern in CSR form
+    c_ptr: Vec<usize>,
+    c_idx: Vec<usize>,
+    /// For each of `P A Pᵀ`'s stored entries, the position of its value among `A`'s
+    source: Vec<usize>,
+    /// For each of `A`'s stored entries `(i, j)`, the position of `(j, i)`, or `usize::MAX` if
+    /// `A`'s pattern doesn't store it
+    mirror: Vec<usize>,
+}
+
+impl SymbolicIndefinite {
+    /// The analysis for the multifrontal LDLᵀ on `cholesky`'s ordering, elimination tree and
+    /// pattern.
+    pub fn new(cholesky: SymbolicCholesky) -> SymbolicIndefinite {
+        let n = cholesky.dim();
+        let raw = supernodes(&cholesky);
+        // Each column's supernode, to find a supernode's parent
+        let mut node_of = vec![0; n];
+        for (s, (start, end, _)) in raw.iter().enumerate() {
+            node_of[*start..*end].fill(s);
+        }
+        let parent = cholesky.elimination_tree();
+        let nodes = raw
+            .into_iter()
+            .map(|(start, end, below)| Supernode {
+                start,
+                end,
+                below,
+                parent: parent[end - 1].map(|p| node_of[p]),
+            })
+            .collect();
+        // The gather map: the matrix whose values are their own positions, permuted as a
+        //   factorization would permute A
+        let (a_ptr, a_idx) = (&cholesky.a_ptr, &cholesky.a_idx);
+        let positions: CsrMatrix<usize> = CompressedMatrix::from_parts_unchecked(
+            (n, n),
+            a_ptr.clone(),
+            a_idx.clone(),
+            (0..a_idx.len()).collect(),
+        );
+        let (_, c_ptr, c_idx, source) = positions
+            .permute_symmetric(&cholesky.perm)
+            .expect("the analysis's ordering is a permutation of its order")
+            .into_raw_parts();
+        let mut mirror = vec![usize::MAX; a_idx.len()];
+        for i in 0..n {
+            for p in a_ptr[i]..a_ptr[i + 1] {
+                let j = a_idx[p];
+                if let Ok(k) = a_idx[a_ptr[j]..a_ptr[j + 1]].binary_search(&i) {
+                    mirror[p] = a_ptr[j] + k;
+                }
+            }
+        }
+        SymbolicIndefinite {
+            cholesky,
+            nodes,
+            c_ptr,
+            c_idx,
+            source,
+            mirror,
+        }
+    }
+
+    /// The Cholesky analysis it was built on.
+    pub fn cholesky(&self) -> &SymbolicCholesky {
+        &self.cholesky
+    }
+
+    /// Whether the values `data`, on the analyzed pattern, make a Hermitian matrix: each stored
+    /// value is its mirror's conjugate, or zero where the mirror isn't stored, as
+    /// [`is_hermitian`](CsrMatrix::is_hermitian) judges
+    fn is_hermitian<T: Scalar + ComplexFloat>(&self, data: &[T]) -> bool {
+        data.iter().zip(&self.mirror).all(|(&value, &mirror)| {
+            if mirror == usize::MAX {
+                value == T::zero()
+            } else {
+                value == data[mirror].conj()
+            }
+        })
+    }
+
+    /// Factors `matrix`, which must have the analyzed pattern and be symmetric (for a complex
+    /// element type, Hermitian), as `P A Pᵀ = Q L D Lᴴ Qᵀ` with threshold Bunch–Kaufman pivoting
+    /// on the multifrontal method (see [`IndefiniteLdlt`]), with the analysis's supernodes and
+    /// maps.
+    ///
+    /// Returns `SparseError::PatternMismatch` if `matrix`'s shape or pattern differs from the
+    /// analyzed one, `SparseError::NotSymmetric` if `A ≠ Aᴴ`, and `SparseError::SingularMatrix`
+    /// naming a row of `A` where no pivot could be found, the matrix being singular to working
+    /// precision. Panics if `options.threshold` is outside `(0, 0.5]`.
+    pub fn factor<T: Scalar + ComplexFloat>(
         &self,
         matrix: &CsrMatrix<T>,
         options: IndefiniteOptions,
@@ -151,32 +283,38 @@ impl SymbolicCholesky {
             "the threshold must be in (0, 0.5], not {threshold}"
         );
         let threshold: T::Real = NumCast::from(threshold).expect("the threshold is representable");
-        let n = self.dim();
-        if matrix.shape != (n, n) || matrix.ptr != self.a_ptr || matrix.idx != self.a_idx {
+        let symbolic = &self.cholesky;
+        let n = symbolic.dim();
+        if matrix.shape != (n, n) || matrix.ptr != symbolic.a_ptr || matrix.idx != symbolic.a_idx {
             return Err(SparseError::PatternMismatch);
         }
-        if !matrix.is_hermitian() {
+        if !self.is_hermitian(&matrix.data) {
             return Err(SparseError::NotSymmetric);
         }
-        let c = matrix.permute_symmetric(&self.perm)?;
-        let nodes = supernodes(self);
-        // Each column's supernode, to find a supernode's parent
-        let mut node_of = vec![0; n];
-        for (s, (start, end, _)) in nodes.iter().enumerate() {
-            node_of[*start..*end].fill(s);
-        }
-        let parent = self.elimination_tree();
+        // P A Pᵀ's values, gathered into its kept pattern
+        let c_data: Vec<T> = self.source.iter().map(|&q| matrix.data[q]).collect();
+        let nodes = &self.nodes;
 
         // Contribution blocks waiting for their parent: (variables, dense square, both triangles)
         let mut pending: Vec<Vec<(Vec<usize>, Vec<T>)>> = vec![Vec::new(); nodes.len()];
+        // Reused working space: the front, the kernel's scratch, the front's variables, and
+        //   spent contribution blocks' storage, handed out again (so blocks are still consumed
+        //   in the order they were made, and every sum is as before)
+        let mut front: Vec<T> = Vec::new();
+        let mut scratch: Vec<T> = Vec::new();
+        let mut vars: Vec<usize> = Vec::new();
+        let mut spare_blocks: Vec<Vec<T>> = Vec::new();
+        let mut spare_vars: Vec<Vec<usize>> = Vec::new();
         // Where each variable sits in the current front, or usize::MAX
         let mut position = vec![usize::MAX; n];
         let mut fronts = Vec::with_capacity(nodes.len());
         let mut delayed = 0;
-        for (s, (start, end, below)) in nodes.iter().enumerate() {
+        for (s, node) in nodes.iter().enumerate() {
+            let (start, end, below) = (&node.start, &node.end, &node.below);
             let contributions = std::mem::take(&mut pending[s]);
             // The front's variables: its own, the children's delayed ones, then the rows below
-            let mut vars: Vec<usize> = (*start..*end).collect();
+            vars.clear();
+            vars.extend(*start..*end);
             for (child_vars, _) in &contributions {
                 for &v in child_vars {
                     if v < *start {
@@ -191,20 +329,21 @@ impl SymbolicCholesky {
             for (p, &v) in vars.iter().enumerate() {
                 position[v] = p;
             }
-            let mut front = vec![T::zero(); m * m];
+            front.clear();
+            front.resize(m * m, T::zero());
             // A's lower triangle in the own columns, mirrored: row j of C holds column j's
             //   entries, and those at or below the diagonal belong to this front
             for j in *start..*end {
                 let pj = position[j];
-                for q in c.ptr[j]..c.ptr[j + 1] {
-                    let i = c.idx[q];
+                let row = self.c_ptr[j]..self.c_ptr[j + 1];
+                for (&i, &stored) in self.c_idx[row.clone()].iter().zip(&c_data[row]) {
                     if i < j {
                         continue;
                     }
                     let pi = position[i];
                     debug_assert_ne!(pi, usize::MAX, "A's entry within the factor's pattern");
                     // c is Hermitian: C(i, j) = conj(C(j, i))
-                    let value = c.data[q].conj();
+                    let value = stored.conj();
                     front[pi + pj * m] = front[pi + pj * m] + value;
                     if pi != pj {
                         front[pj + pi * m] = front[pj + pi * m] + value.conj();
@@ -223,18 +362,19 @@ impl SymbolicCholesky {
                     }
                 }
             }
-            drop(contributions);
+            for (child_vars, block) in contributions {
+                spare_vars.push(child_vars);
+                spare_blocks.push(block);
+            }
 
-            let root = parent[end - 1].is_none();
+            let root = node.parent.is_none();
             debug_assert!(!root || below.is_empty());
-            let factored =
-                factor_front(&mut front, m, fully_summed, threshold, root).map_err(|error| {
-                    match error {
-                        SparseError::SingularMatrix { pivot } => SparseError::SingularMatrix {
-                            pivot: self.perm[vars[pivot]],
-                        },
-                        other => other,
-                    }
+            let factored = factor_front(&mut front, m, fully_summed, threshold, root, &mut scratch)
+                .map_err(|error| match error {
+                    SparseError::SingularMatrix { pivot } => SparseError::SingularMatrix {
+                        pivot: symbolic.perm[vars[pivot]],
+                    },
+                    other => other,
                 })?;
             for &v in &vars {
                 position[v] = usize::MAX;
@@ -244,37 +384,58 @@ impl SymbolicCholesky {
             // The contribution block, everything not eliminated, goes to the parent
             if e < m {
                 let rest = m - e;
-                let mut block = vec![T::zero(); rest * rest];
+                let mut block = spare_blocks.pop().unwrap_or_default();
+                block.clear();
+                block.resize(rest * rest, T::zero());
                 for b in 0..rest {
                     for a in 0..rest {
                         block[a + b * rest] = front[(e + a) + (e + b) * m];
                     }
                 }
-                let p = node_of[parent[end - 1].expect("a front with rows left has a parent")];
-                pending[p].push((ordered[e..].to_vec(), block));
+                let p = node.parent.expect("a front with rows left has a parent");
+                let mut rest_vars = spare_vars.pop().unwrap_or_default();
+                rest_vars.clear();
+                rest_vars.extend_from_slice(&ordered[e..]);
+                pending[p].push((rest_vars, block));
             }
-            front.truncate(m * e);
+            // L's columns, at their exact size; the front is reused
+            let mut l = front[..m * e].to_vec();
             // Inside a 2×2 block, L's entry is zero (the kernel leaves D's there)
             let mut at = 0;
             for block in &factored.blocks {
                 if block.size() == 2 {
-                    front[(at + 1) + at * m] = T::zero();
+                    l[(at + 1) + at * m] = T::zero();
                 }
                 at += block.size();
             }
             fronts.push(Front {
                 vars: ordered,
                 eliminated: e,
-                l: front,
+                l,
                 blocks: factored.blocks,
             });
         }
         Ok(IndefiniteLdlt {
             n,
-            perm: self.perm.clone(),
+            perm: symbolic.perm.clone(),
             fronts,
             delayed,
         })
+    }
+}
+
+impl<T: Scalar> CsrMatrix<T> {
+    /// Analyzes this matrix's pattern for the multifrontal LDLᵀ ([`IndefiniteLdlt`]) under
+    /// `ordering`: `analyze_cholesky(ordering)`, with the supernodes and maps of
+    /// [`SymbolicIndefinite`].
+    ///
+    /// Returns `SparseError::NotSquare` for a non-square matrix, and
+    /// `SparseError::UnsupportedOrdering` for `Ordering::Colamd`.
+    pub fn analyze_indefinite(
+        &self,
+        ordering: Ordering,
+    ) -> Result<SymbolicIndefinite, SparseError> {
+        Ok(SymbolicIndefinite::new(self.analyze_cholesky(ordering)?))
     }
 }
 
@@ -288,8 +449,8 @@ impl<T: Scalar + ComplexFloat> CsrMatrix<T> {
     /// Returns `SparseError::NotSquare`, `SparseError::NotSymmetric`, or
     /// `SparseError::SingularMatrix`.
     pub fn ldlt_indefinite(&self) -> Result<IndefiniteLdlt<T>, SparseError> {
-        self.analyze_cholesky(Ordering::Amd)?
-            .factor_indefinite(self, IndefiniteOptions::default())
+        self.analyze_indefinite(Ordering::Amd)?
+            .factor(self, IndefiniteOptions::default())
     }
 }
 
