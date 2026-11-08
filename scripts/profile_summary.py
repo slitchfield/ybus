@@ -98,10 +98,11 @@ CONTEXT_STAGES = [
 # The innermost stages that count as KKT assembly when an interior-point solver called them
 KKT_ASSEMBLY = {"assembly and refill", "sparse products and sums"}
 
-# The pivoted LDLᵀ's factorization (SymbolicCholesky::factor_indefinite), split by what's on the
+# The pivoted LDLᵀ's factorization (SymbolicIndefinite::factor, or SymbolicCholesky's
+#   factor_indefinite, which calls it), split by what's on the
 #   stack under it, first match first; the rest of it is front assembly and extend-add. Only
 #   samples under factor_indefinite are split, so LU and Cholesky samples fold as before.
-LDLT_FACTOR = "factor_indefinite"
+LDLT_FACTOR = ["factor_indefinite", "SymbolicIndefinite>::factor"]
 LDLT_PARTS = [
     ("LDLᵀ: symmetry check and permutation", ["is_hermitian", "permute_symmetric"]),
     ("LDLᵀ: supernode partition", ["multifrontal::supernodes"]),
@@ -125,7 +126,7 @@ def stage_of(names):
     stage = innermost_stage(names)
     if stage == "allocation and copying":
         return stage
-    if any(LDLT_FACTOR in frame for frame in names):
+    if any(pattern in frame for frame in names for pattern in LDLT_FACTOR):
         for part, patterns in LDLT_PARTS:
             if any(pattern in frame for frame in names for pattern in patterns):
                 return part
