@@ -52,7 +52,7 @@ pub use bunch_kaufman::{DBlock, DenseLdlt};
 pub use cholesky::{Cholesky, SymbolicCholesky};
 pub use ldlt::{Inertia, Ldlt, PivotReplacement};
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
-pub use multifrontal::{IndefiniteLdlt, IndefiniteOptions, SymbolicIndefinite};
+pub use multifrontal::{Amalgamation, IndefiniteLdlt, IndefiniteOptions, SymbolicIndefinite};
 pub use ordering::Ordering;
 pub use solvers::SparseSolveWorkspace;
 

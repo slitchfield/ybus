@@ -51,6 +51,12 @@ impl<T: Scalar> CsrMatrix<T> {
             });
         }
         let perm = self.ordering(ordering)?;
+        Ok(self.analyze_cholesky_permuted(perm))
+    }
+
+    /// [`analyze_cholesky`](Self::analyze_cholesky) with the permutation given, already checked
+    /// to be one of the matrix's order.
+    pub(super) fn analyze_cholesky_permuted(&self, perm: Vec<usize>) -> SymbolicCholesky {
         let n = perm.len();
         let mut inverse = vec![0; n];
         for (new, &old) in perm.iter().enumerate() {
@@ -108,7 +114,7 @@ impl<T: Scalar> CsrMatrix<T> {
             l_ptr.push(l_idx.len());
         }
 
-        Ok(SymbolicCholesky {
+        SymbolicCholesky {
             postorder: postorder(&parent),
             perm,
             parent,
@@ -116,7 +122,7 @@ impl<T: Scalar> CsrMatrix<T> {
             l_idx,
             a_ptr: self.ptr.clone(),
             a_idx: self.idx.clone(),
-        })
+        }
     }
 }
 
