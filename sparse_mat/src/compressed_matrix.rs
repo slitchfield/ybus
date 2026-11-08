@@ -30,6 +30,7 @@ mod access;
 mod accuracy;
 mod assembly;
 mod blocks;
+mod bunch_kaufman;
 mod cholesky;
 mod colamd;
 mod ldlt;
@@ -46,6 +47,7 @@ mod solvers;
 
 pub use accuracy::{NormwiseRefined, Refined};
 pub use assembly::AssemblyMap;
+pub use bunch_kaufman::{DBlock, DenseLdlt};
 pub use cholesky::{Cholesky, SymbolicCholesky};
 pub use ldlt::{Inertia, Ldlt, PivotReplacement};
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
