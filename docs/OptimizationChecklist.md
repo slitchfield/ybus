@@ -507,7 +507,8 @@ with legacy results generated locally to explain differences.
           dominates.
         - **More than the profile's bound on DC,** whose innermost-frame rule had counted the
           analysis's own allocation as allocation.
-      - [ ] **A symmetric indefinite LDLᵀ** (target 2), with its inertia.
+      - [x] **A symmetric indefinite LDLᵀ** (target 2), with its inertia
+        ([`ldlt-opf-2026-11-08.md`](benchmarks/ldlt-opf-2026-11-08.md)).
         - **Decided with the maintainer (2026-11-07):**
           - **The method:** static pivots (1×1, no pivoting during the factorization), on the
             Cholesky's symbolic analysis, rather than Bunch–Kaufman's dynamic 1×1 and 2×2 pivots.
@@ -590,7 +591,28 @@ with legacy results generated locally to explain differences.
               - **What it can't do:** without a line search, it refuses hs71 from 2's local
                 maximum but then fails, as MIPS does, and it fails near the minima of a
                 nonconvex problem with an equality. A globalization is a separate question.
-          - [ ] **the survey, the record and the defaults.**
+          - [x] **The survey, the record and the defaults**
+            ([`ldlt-opf-2026-11-08.md`](benchmarks/ldlt-opf-2026-11-08.md)): ten runs on all 73
+            cases.
+            - **The default path is unchanged:** the LU runs match #54's survey on every
+              result column.
+            - **The bar holds:** no LDLᵀ setting loses O3's bar where LU meets it.
+            - **Speed:** the large AC cases are 2.4–3.0× faster on the predictor-corrector
+              method, and the small DC cases slower (0.55× in the median below 1,000 buses), from
+              the factorization's cost per front.
+            - **Decided with the maintainer (2026-11-08), by the rule set before the survey,
+              per model:**
+              - **AC:** `AcOpfOptions::mehrotra()` factors by LDLᵀ, without the correction:
+                1.12× faster in the median, 2.70× in total, with the same outcomes and
+                iterations.
+              - **DC keeps LU:** 0.79× in the median, though 2.05× in total.
+              - **MIPS keeps LU,** and so does `MehrotraOptions::default()`.
+              - **The inertia correction** is now off by default. It improved no OPF outcome,
+                and cost iterations on 16 AC cases.
+            - **Left for later:**
+              - the kernel's cost per front, which would let DC qualify;
+              - a KKT-aware ordering for the structural delays;
+              - a globalization for the predictor-corrector method.
 - [ ] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
       compare against. MIPS's LU switched from AMD to COLAMD in O1's PR 2: with zero diagonals
       in the equality block, AMD's factors filled 14 million entries on `case_ACTIVSg10k`
