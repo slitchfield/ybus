@@ -8,7 +8,9 @@
 //! limits enforced one at a time), `n1` (every single-branch outage by rank-k updates) and
 //! `n1-parallel` (the same in parallel, which needs the `rayon` feature), and the optimal power
 //! flows: `dcopf` and `acopf` on MIPS, MATPOWER's default, and `dcopf-mehrotra` and
-//! `acopf-mehrotra` on the predictor-corrector method, each at MATPOWER's OPF settings. The
+//! `acopf-mehrotra` on the predictor-corrector method, each at MATPOWER's OPF settings (the AC
+//! OPF's factoring the KKT matrix by LDLᵀ, the others by LU), and `dcopf-mehrotra-ldlt`, the DC
+//! OPF on the predictor-corrector method with the KKT matrix factored by LDLᵀ. The
 //! pipeline repeats until `<seconds>` (default 5) have passed, at least once. Prints the number of
 //! runs and the mean time per run to stderr.
 
@@ -22,6 +24,7 @@ use powerflow::case::Case;
 use powerflow::dc::DcModel;
 use powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions};
 use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions};
+use powerflow::opf::KktFactorization;
 
 /// Outages per call to `solve_outages`, as in `n1_survey`, so a case's thousands of results are
 /// never all held at once
@@ -57,7 +60,7 @@ fn main() -> ExitCode {
 fn usage() -> ExitCode {
     eprintln!(
         "usage: profile_pf parse|dc|nr|fdxb|fdbx|qlim2|n1|n1-parallel|dcopf|acopf|dcopf-mehrotra|\
-         acopf-mehrotra <case.m> [<seconds>]"
+         dcopf-mehrotra-ldlt|acopf-mehrotra <case.m> [<seconds>]"
     );
     ExitCode::from(2)
 }
@@ -100,12 +103,19 @@ fn run(workload: &str, path: &Path) -> Result<(), String> {
             Ok(())
         }
         // The OPF's outcome doesn't matter here either, only the work
-        "dcopf" | "dcopf-mehrotra" => {
-            let options = if workload == "dcopf" {
+        "dcopf" | "dcopf-mehrotra" | "dcopf-mehrotra-ldlt" => {
+            let mut options = if workload == "dcopf" {
                 DcOpfOptions::default()
             } else {
                 DcOpfOptions::mehrotra()
             };
+            // The DC OPF keeps LU by default; this measures it on LDLᵀ, where its small cases
+            //   lose (docs/benchmarks/ldlt-opf-2026-11-08.md)
+            if workload == "dcopf-mehrotra-ldlt" {
+                options.solver = options
+                    .solver
+                    .with_kkt_factorization(KktFactorization::Ldlt);
+            }
             dc_opf_with_options(&case, &options).map_err(|err| err.to_string())?;
             Ok(())
         }

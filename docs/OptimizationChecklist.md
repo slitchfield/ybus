@@ -491,6 +491,24 @@ with legacy results generated locally to explain differences.
              1.7× on the largest cases if it halves the factorization);
           3. allocation in the KKT assembly and the loops;
           4. the OPF's evaluation.
+      - **Re-profiled after targets 1 and 2** in
+        [`ipm-profile-2026-11-08.md`](benchmarks/ipm-profile-2026-11-08.md). The new cases are a
+        small one, DC case300, and DC on LDLᵀ.
+        - **On AC, on the predictor-corrector method with LDLᵀ:**
+          - the OPF's evaluation is now the largest stage, at 28–38%;
+          - the factorization takes 30–42%, and its arithmetic, the dense kernel, only 8–19%;
+          - its bookkeeping takes 18–31%: front assembly and extend-add, a symmetry check and
+            supernode partition redone every factorization, and allocation.
+        - **On DC with LDLᵀ:** allocation is 18–27% and the bookkeeping 24–31%. The fronts are
+          tiny (a median of 4 rows, 0.9 per variable). That is the cost per front behind its
+          small-case loss.
+        - **MIPS on LU** is 49–89% factorization.
+        - **The proposed order,** to be decided with the maintainer at review:
+          1. the LDLᵀ's bookkeeping (bound DC 1.3–1.5×, AC 1.2–1.3× from the bookkeeping
+             alone);
+          2. the OPF's evaluation (bound 1.4–1.6× on AC);
+          3. allocation and KKT assembly;
+          4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `sparse_mat`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
