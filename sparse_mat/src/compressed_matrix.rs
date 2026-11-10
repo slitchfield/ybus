@@ -34,7 +34,6 @@ mod bunch_kaufman;
 mod cholesky;
 mod colamd;
 mod factorization;
-mod ldlt;
 mod lu;
 mod multifrontal;
 mod ops;
@@ -46,17 +45,34 @@ mod properties;
 #[cfg(feature = "serde")]
 mod serde_impl;
 mod solvers;
+mod static_ldlt;
 
 pub use accuracy::{NormwiseRefined, Refined};
 pub use assembly::AssemblyMap;
-pub use bunch_kaufman::{DBlock, DenseLdlt};
 pub use cholesky::{Cholesky, SymbolicCholesky};
 pub use factorization::Factorization;
-pub use ldlt::{Inertia, Ldlt, PivotReplacement};
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
-pub use multifrontal::{Amalgamation, IndefiniteLdlt, IndefiniteOptions, SymbolicIndefinite};
+pub use multifrontal::{Amalgamation, Ldlt, LdltOptions, SymbolicLdlt};
 pub use ordering::Ordering;
 pub use solvers::SparseSolveWorkspace;
+pub use static_ldlt::Inertia;
+
+/// Factorizations kept for study rather than for use: tried, compared and set aside, or exposed
+/// to test a kernel the main factorizations use. The solvers don't use them; [`Ldlt`], the
+/// pivoted multifrontal LDLᵀ, is the one to use for a symmetric indefinite matrix.
+///
+/// - [`StaticLdlt`](experimental::StaticLdlt): an up-looking LDLᵀ with static 1×1 pivots on the
+///   Cholesky's exact pattern ([`SymbolicCholesky::factor_static_ldlt`], or
+///   [`CsrMatrix::ldlt_static`]), for quasi-definite matrices. It was set aside on 2026-11-07,
+///   having failed in the interior-point solvers where LU converges; with it come
+///   [`PivotReplacement`](experimental::PivotReplacement)
+///   ([`SymbolicCholesky::factor_static_ldlt_replacing`]) and its refinement.
+/// - [`DenseLdlt`](experimental::DenseLdlt): threshold Bunch–Kaufman on a dense matrix, the
+///   kernel [`Ldlt`] runs on each front, with its `D` blocks ([`DBlock`](experimental::DBlock)).
+pub mod experimental {
+    pub use super::bunch_kaufman::{DBlock, DenseLdlt};
+    pub use super::static_ldlt::{PivotReplacement, StaticLdlt};
+}
 
 mod sealed {
     pub trait Sealed {}

@@ -8,7 +8,7 @@
 //! MATPOWER's MIPS does with its backslash. MIPS's results match MATPOWER's with it.
 //!
 //! **LDLᵀ** is `sparse_mat`'s multifrontal factorization with threshold Bunch–Kaufman pivoting
-//! ([`IndefiniteLdlt`]), ordered by AMD:
+//! ([`Ldlt`]), ordered by AMD:
 //!
 //! - **Exactly symmetric:** the lower triangle of `W` is mirrored, so the factorization's symmetry
 //!   check holds, and every diagonal is stored, so the pattern stays fixed and the analysis is
@@ -28,8 +28,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use sparse_mat::compressed_matrix::{
-    CscMatrix, CsrMatrix, IndefiniteLdlt, IndefiniteOptions, Inertia, Lu, LuOptions, Ordering,
-    SymbolicIndefinite, SymbolicLu,
+    CscMatrix, CsrMatrix, Inertia, Ldlt, LdltOptions, Lu, LuOptions, Ordering, SymbolicLdlt,
+    SymbolicLu,
 };
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Factorization;
@@ -61,7 +61,7 @@ const REFINEMENT_TOLERANCE: f64 = 1e-12;
 pub(crate) struct KktSolver {
     method: KktFactorization,
     lu: Option<SymbolicLu>,
-    ldlt: Option<SymbolicIndefinite>,
+    ldlt: Option<SymbolicLdlt>,
     analyses: usize,
     /// Shared with each factor, which adds its solves' steps
     refinement_steps: Rc<Cell<usize>>,
@@ -76,7 +76,7 @@ pub(crate) struct KktFactor {
 enum FactorKind {
     Lu(Box<Lu<f64>>),
     Ldlt {
-        ldlt: IndefiniteLdlt<f64>,
+        ldlt: Ldlt<f64>,
         /// The factored matrix, which the solves refine against
         matrix: CsrMatrix<f64>,
     },
@@ -164,7 +164,7 @@ impl KktSolver {
             }
         }
         let matrix = CsrMatrix::from_triplets(size, size, both).expect("indices in range");
-        let options = IndefiniteOptions {
+        let options = LdltOptions {
             threshold: THRESHOLD,
         };
         if let Some(symbolic) = &self.ldlt {
@@ -178,7 +178,7 @@ impl KktSolver {
                 }
             }
         }
-        let symbolic = matrix.analyze_indefinite(Ordering::Amd)?;
+        let symbolic = matrix.analyze_ldlt(Ordering::Amd)?;
         self.analyses += 1;
         let factored = symbolic.factor(&matrix, options);
         self.ldlt = Some(symbolic);

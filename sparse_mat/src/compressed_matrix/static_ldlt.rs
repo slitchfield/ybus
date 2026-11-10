@@ -1,5 +1,5 @@
 //! Ordered sparse LDLᵀ with static pivots, on the Cholesky factorization's symbolic
-//! analysis: [`Ldlt`].
+//! analysis: [`StaticLdlt`].
 
 use num_complex::ComplexFloat;
 use num_traits::{Float, NumCast};
@@ -12,7 +12,7 @@ use crate::sparse_error::SparseError;
 use crate::Scalar;
 
 /// A symmetric matrix's inertia: how many of its eigenvalues are positive and how many negative.
-/// An [`Ldlt`] factorization has no zero eigenvalue, since a zero pivot fails it.
+/// A [`StaticLdlt`] factorization has no zero eigenvalue, since a zero pivot fails it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Inertia {
     /// The positive eigenvalues
@@ -22,26 +22,26 @@ pub struct Inertia {
 }
 
 /// An ordered LDLᵀ factorization `P A Pᵀ = L D Lᴴ` of a symmetric (for a complex element type,
-/// Hermitian) matrix with nonzero static pivots, from [`SymbolicCholesky::factor_ldlt`] or
-/// [`CsrMatrix::ldlt`]. For a real matrix, `Lᴴ` is `Lᵀ`. Keep it to solve many right-hand
+/// Hermitian) matrix with nonzero static pivots, from [`SymbolicCholesky::factor_static_ldlt`] or
+/// [`CsrMatrix::ldlt_static`]. For a real matrix, `Lᴴ` is `Lᵀ`. Keep it to solve many right-hand
 /// sides against the same matrix.
 ///
-/// `L` is unit lower triangular and `D` diagonal and real. The pivots are the diagonal entries in the order the analysis chose, with no pivoting during
-/// the factorization, so the factor's pattern is exactly the Cholesky factor's
-/// ([`SymbolicCholesky`] serves both) and its cost is known in advance. It is the up-looking
-/// LDLᵀ of Davis's LDL package (T. A. Davis, "Algorithm 849: a concise sparse Cholesky
-/// factorization package," *ACM Trans. Math. Softw.* 31(4):587–591, 2005,
+/// `L` is unit lower triangular and `D` diagonal and real. The pivots are the diagonal entries in
+/// the order the analysis chose, with no pivoting during the factorization, so the factor's pattern
+/// is exactly the Cholesky factor's ([`SymbolicCholesky`] serves both) and its cost is known in
+/// advance. It is the up-looking LDLᵀ of Davis's LDL package (T. A. Davis, "Algorithm 849: a
+/// concise sparse Cholesky factorization package," *ACM Trans. Math. Softw.* 31(4):587–591, 2005,
 /// doi:10.1145/1114268.1114277).
 ///
-/// Static pivots suit a symmetric quasi-definite matrix, `[H Bᴴ; B −G]` with `H` and `G`
-/// positive definite. Such a matrix has an LDLᵀ factorization under every symmetric ordering,
-/// with `D` positive on `H`'s rows and negative on `G`'s (R. J. Vanderbei, "Symmetric
-/// quasidefinite matrices," *SIAM J. Optim.* 5(1):100–113, 1995, doi:10.1137/0805005). An
-/// interior-point method's KKT matrix becomes one when regularized, which is the caller's
-/// choice: [`factor_ldlt`](SymbolicCholesky::factor_ldlt) doesn't perturb small pivots, and a
+/// Static pivots suit a symmetric quasi-definite matrix, `[H Bᴴ; B −G]` with `H` and `G` positive
+/// definite. Such a matrix has an LDLᵀ factorization under every symmetric ordering, with `D`
+/// positive on `H`'s rows and negative on `G`'s (R. J. Vanderbei, "Symmetric quasidefinite
+/// matrices," *SIAM J. Optim.* 5(1):100–113, 1995, doi:10.1137/0805005). An interior-point method's
+/// KKT matrix becomes one when regularized, which is the caller's choice:
+/// [`factor_static_ldlt`](SymbolicCholesky::factor_static_ldlt) doesn't perturb small pivots, and a
 /// matrix that needs pivoting, such as `[[0, 1], [1, 0]]`, fails with a zero pivot.
-/// [`factor_ldlt_replacing`](SymbolicCholesky::factor_ldlt_replacing) replaces tiny pivots
-/// instead, for matrices whose regularization is lost to rounding, and
+/// [`factor_static_ldlt_replacing`](SymbolicCholesky::factor_static_ldlt_replacing) replaces tiny
+/// pivots instead, for matrices whose regularization is lost to rounding, and
 /// [`CsrMatrix::symmetric_scaling`] equilibrates a badly scaled matrix first.
 ///
 /// Static pivots lose accuracy as the regularization shrinks, since a small pivot early in the
@@ -49,25 +49,25 @@ pub struct Inertia {
 /// scaled residual grew as 1/δ: about 3e-10 at δ = 1e-8, and near machine precision from 1e-2
 /// up (see the crate's `ldlt_test`). Iterative refinement against the factorization recovers
 /// the lost accuracy where it matters
-/// ([`Ldlt::solve_refined`], [`Ldlt::solve_refined_normwise`]).
+/// ([`StaticLdlt::solve_refined`], [`StaticLdlt::solve_refined_normwise`]).
 ///
 /// By Sylvester's law of inertia, `D`'s signs are `A`'s eigenvalues' signs:
-/// [`Ldlt::inertia`].
+/// [`StaticLdlt::inertia`].
 ///
 /// It holds `L` in CSR form, and also `Lᴴ` in CSR form for the back substitution, like
 /// [`Cholesky`](super::Cholesky).
 #[derive(Clone, Debug)]
-pub struct Ldlt<T: Scalar = f64> {
+pub struct StaticLdlt<T: Scalar = f64> {
     l: CsrMatrix<T>,
     l_adjoint: CsrMatrix<T>,
     /// `D`'s entries, real (with zero imaginary part for a complex element type)
     d: Vec<T>,
     perm: Vec<usize>,
-    /// How many pivots [`SymbolicCholesky::factor_ldlt_replacing`] replaced
+    /// How many pivots [`SymbolicCholesky::factor_static_ldlt_replacing`] replaced
     replaced: usize,
 }
 
-/// Which pivots [`SymbolicCholesky::factor_ldlt_replacing`] replaces, and with what: a pivot
+/// Which pivots [`SymbolicCholesky::factor_static_ldlt_replacing`] replaces, and with what: a pivot
 /// with `|d| ≤ threshold` becomes `value` (for a row expected positive) or `−value` (for one
 /// expected negative).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,16 +95,16 @@ impl SymbolicCholesky {
     /// analyzed one, `SparseError::NotSymmetric` if `A ≠ Aᴴ` (judged mathematically, ignoring
     /// stored zeros), or `SparseError::SingularMatrix` if a pivot is zero or NaN, naming its row
     /// of `A` (in the original numbering).
-    pub fn factor_ldlt<T: Scalar + ComplexFloat>(
+    pub fn factor_static_ldlt<T: Scalar + ComplexFloat>(
         &self,
         matrix: &CsrMatrix<T>,
-    ) -> Result<Ldlt<T>, SparseError> {
+    ) -> Result<StaticLdlt<T>, SparseError> {
         self.factor_ldlt_with(matrix, None)
     }
 
-    /// [`factor_ldlt`](Self::factor_ldlt), replacing each pivot whose magnitude is at most
-    /// `replacement.threshold` by `±replacement.value`, with the sign its row expects, rather
-    /// than failing on it or dividing by it. [`Ldlt::replaced`] counts the replacements.
+    /// [`factor_static_ldlt`](Self::factor_static_ldlt), replacing each pivot whose magnitude is at
+    /// most `replacement.threshold` by `±replacement.value`, with the sign its row expects, rather
+    /// than failing on it or dividing by it. [`StaticLdlt::replaced`] counts the replacements.
     ///
     /// **What it's for:** static pivots on a regularized KKT-shaped matrix whose entries span
     /// many orders of magnitude. There a pivot whose exact value is about the regularization
@@ -114,23 +114,23 @@ impl SymbolicCholesky {
     /// methods for linear and quadratic optimization," *Optim. Methods Softw.* 11(1–4):275–302,
     /// 1999, doi:10.1080/10556789908805754, regularize the pivots as they're computed). It
     /// changes the matrix that's factored, so solve against the original with refinement
-    /// ([`Ldlt::solve_refined_normwise`]).
+    /// ([`StaticLdlt::solve_refined_normwise`]).
     ///
     /// **What it leaves alone:** a pivot larger than the threshold keeps its value even if its
-    /// sign isn't the expected one, so [`Ldlt::inertia`] still reports a matrix that isn't
+    /// sign isn't the expected one, so [`StaticLdlt::inertia`] still reports a matrix that isn't
     /// quasi-definite, as when an optimization problem's Hessian is indefinite. Replacing such
     /// a pivot by a small one of the expected sign would make `L`'s entries large, so that is
     /// for the caller to correct, by regularizing more.
     ///
-    /// Returns the errors of [`factor_ldlt`](Self::factor_ldlt), and
+    /// Returns the errors of [`factor_static_ldlt`](Self::factor_static_ldlt), and
     /// `SparseError::ShapeMismatch` unless `replacement.positive` has one entry per row.
     /// A NaN pivot is still `SparseError::SingularMatrix`, and so is a zero one with a zero
     /// threshold.
-    pub fn factor_ldlt_replacing<T: Scalar + ComplexFloat>(
+    pub fn factor_static_ldlt_replacing<T: Scalar + ComplexFloat>(
         &self,
         matrix: &CsrMatrix<T>,
         replacement: &PivotReplacement<'_, T::Real>,
-    ) -> Result<Ldlt<T>, SparseError> {
+    ) -> Result<StaticLdlt<T>, SparseError> {
         if replacement.positive.len() != self.dim() {
             return Err(SparseError::ShapeMismatch {
                 left: (self.dim(), self.dim()),
@@ -144,7 +144,7 @@ impl SymbolicCholesky {
         &self,
         matrix: &CsrMatrix<T>,
         replacement: Option<&PivotReplacement<'_, T::Real>>,
-    ) -> Result<Ldlt<T>, SparseError> {
+    ) -> Result<StaticLdlt<T>, SparseError> {
         let n = self.dim();
         if matrix.shape != (n, n) || matrix.ptr != self.a_ptr || matrix.idx != self.a_idx {
             return Err(SparseError::PatternMismatch);
@@ -246,7 +246,7 @@ impl SymbolicCholesky {
             );
             lt_ptr.push(lt_idx.len());
         }
-        Ok(Ldlt {
+        Ok(StaticLdlt {
             l: CompressedMatrix::from_parts_unchecked(
                 (n, n),
                 self.l_ptr.clone(),
@@ -261,7 +261,7 @@ impl SymbolicCholesky {
     }
 }
 
-impl<T: Scalar + ComplexFloat> Ldlt<T> {
+impl<T: Scalar + ComplexFloat> StaticLdlt<T> {
     /// The unit lower triangular factor `L` of `P A Pᵀ`, with its unit diagonal stored. It
     /// stores its whole symbolic pattern, so some entries may be zero.
     pub fn l(&self) -> &CsrMatrix<T> {
@@ -280,8 +280,8 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
         &self.perm
     }
 
-    /// How many pivots [`SymbolicCholesky::factor_ldlt_replacing`] replaced: 0 from
-    /// [`SymbolicCholesky::factor_ldlt`].
+    /// How many pivots [`SymbolicCholesky::factor_static_ldlt_replacing`] replaced: 0 from
+    /// [`SymbolicCholesky::factor_static_ldlt`].
     pub fn replaced(&self) -> usize {
         self.replaced
     }
@@ -302,17 +302,17 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
 }
 
 impl<T: Scalar + ComplexFloat> CsrMatrix<T> {
-    /// Factors a symmetric (for a complex element type, Hermitian) matrix as
-    /// `P A Pᵀ = L D Lᴴ` with static pivots, ordered by approximate minimum degree:
-    /// `analyze_cholesky(Ordering::Amd)` followed by
-    /// [`factor_ldlt`](SymbolicCholesky::factor_ldlt). The same analysis serves the Cholesky
-    /// and LDLᵀ factorizations, so analyze once to factor several matrices with the same
-    /// pattern, either way.
+    /// Factors a symmetric (for a complex element type, Hermitian) matrix as `P A Pᵀ = L D Lᴴ` with
+    /// static pivots, ordered by approximate minimum degree: `analyze_cholesky(Ordering::Amd)`
+    /// followed by [`factor_static_ldlt`](SymbolicCholesky::factor_static_ldlt). The same analysis
+    /// serves the Cholesky and LDLᵀ factorizations, so analyze once to factor several matrices with
+    /// the same pattern, either way.
     ///
     /// Returns `SparseError::NotSquare`, `SparseError::NotSymmetric`, or
     /// `SparseError::SingularMatrix` naming the row of `A` whose pivot was zero.
-    pub fn ldlt(&self) -> Result<Ldlt<T>, SparseError> {
-        self.analyze_cholesky(Ordering::Amd)?.factor_ldlt(self)
+    pub fn ldlt_static(&self) -> Result<StaticLdlt<T>, SparseError> {
+        self.analyze_cholesky(Ordering::Amd)?
+            .factor_static_ldlt(self)
     }
 
     /// A symmetric scaling `s`, positive, such that `S A S` (`S = diag(s)`) has every row's and
@@ -359,13 +359,13 @@ impl<T: Scalar + ComplexFloat> CsrMatrix<T> {
     }
 }
 
-impl<T: Scalar + ComplexFloat> Factorization<T> for Ldlt<T> {
+impl<T: Scalar + ComplexFloat> Factorization<T> for StaticLdlt<T> {
     fn dim(&self) -> usize {
         self.perm.len()
     }
 }
 
-impl<T: Scalar + ComplexFloat> Substitute<T> for Ldlt<T> {
+impl<T: Scalar + ComplexFloat> Substitute<T> for StaticLdlt<T> {
     /// Overwrites `x` (holding `b`, already checked) with the solution: `P b` into `scratch`,
     /// forward substitution with `L`, division by `D`, back substitution with `Lᴴ`, then back
     /// through `P`.

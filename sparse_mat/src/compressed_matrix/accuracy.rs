@@ -24,12 +24,13 @@ use num_traits::{Float, Zero};
 
 use super::factorization::Factorization;
 use super::{CompressedMatrix, CscMatrix, CsrMatrix, Orientation};
-use crate::compressed_matrix::{Cholesky, IndefiniteLdlt, Ldlt, Lu};
+use crate::compressed_matrix::experimental::StaticLdlt;
+use crate::compressed_matrix::{Cholesky, Ldlt, Lu};
 use crate::sparse_error::SparseError;
 use crate::Scalar;
 
-/// The result of [`Lu::solve_refined`], [`Cholesky::solve_refined`], [`Ldlt::solve_refined`] or
-/// [`IndefiniteLdlt::solve_refined`].
+/// The result of [`Lu::solve_refined`], [`Cholesky::solve_refined`], [`StaticLdlt::solve_refined`]
+/// or [`Ldlt::solve_refined`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Refined<T: ComplexFloat> {
     /// The solution with the smallest componentwise backward error found
@@ -41,7 +42,7 @@ pub struct Refined<T: ComplexFloat> {
     pub backward_error: T::Real,
 }
 
-/// The result of [`Ldlt::solve_refined_normwise`] or [`IndefiniteLdlt::solve_refined_normwise`].
+/// The result of [`StaticLdlt::solve_refined_normwise`] or [`Ldlt::solve_refined_normwise`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct NormwiseRefined<T: ComplexFloat> {
     /// The solution with the smallest relative residual found
@@ -307,7 +308,7 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
     }
 }
 
-impl<T: Scalar + ComplexFloat> Ldlt<T> {
+impl<T: Scalar + ComplexFloat> StaticLdlt<T> {
     /// [`Lu::solve_refined`] with LDLᵀ factors, against `a`, which may differ from the matrix
     /// they came from.
     ///
@@ -330,12 +331,12 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
         }))
     }
 
-    /// [`Ldlt::solve_refined`] judged normwise (see the module documentation): solves
+    /// [`StaticLdlt::solve_refined`] judged normwise (see the module documentation): solves
     /// `A x = b`, then refines `x` against `a` until `‖b − A x‖∞ ≤ tolerance ‖b‖∞`, for at most
     /// `max_steps` corrections, stopping early when a step fails to halve the relative
     /// residual, and returns the iterate with the smallest. As for `solve_refined`, `a` may
     /// differ from the matrix these factors came from, such as by a regularization or by
-    /// [replaced pivots](crate::compressed_matrix::SymbolicCholesky::factor_ldlt_replacing).
+    /// [replaced pivots](crate::compressed_matrix::SymbolicCholesky::factor_static_ldlt_replacing).
     /// Returns `SparseError::ShapeMismatch` unless `a` is n × n and `b` has n entries.
     pub fn solve_refined_normwise(
         &self,
@@ -352,7 +353,7 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
     }
 }
 
-impl<T: Scalar + ComplexFloat> IndefiniteLdlt<T> {
+impl<T: Scalar + ComplexFloat> Ldlt<T> {
     /// [`Lu::solve_refined`] with pivoted `L D Lᴴ` factors: `a` must be the matrix they came
     /// from.
     pub fn solve_refined(
@@ -368,9 +369,9 @@ impl<T: Scalar + ComplexFloat> IndefiniteLdlt<T> {
         }))
     }
 
-    /// [`Ldlt::solve_refined_normwise`] with pivoted `L D Lᴴ` factors: refines against `a` until
-    /// `‖b − A x‖∞ ≤ tolerance ‖b‖∞`, for at most `max_steps` corrections, stopping early when a
-    /// step fails to halve the relative residual.
+    /// [`StaticLdlt::solve_refined_normwise`] with pivoted `L D Lᴴ` factors: refines against `a`
+    /// until `‖b − A x‖∞ ≤ tolerance ‖b‖∞`, for at most `max_steps` corrections, stopping early
+    /// when a step fails to halve the relative residual.
     pub fn solve_refined_normwise(
         &self,
         a: &CsrMatrix<T>,

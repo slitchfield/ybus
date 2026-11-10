@@ -16,10 +16,10 @@ pub(crate) mod sealed {
 }
 
 /// The solves of `A x = b` that every factorization of a square matrix `A` provides:
-/// [`Cholesky`](super::Cholesky), [`Lu`](super::Lu), [`IndefiniteLdlt`](super::IndefiniteLdlt),
-/// [`Ldlt`](super::Ldlt) and [`DenseLdlt`](super::DenseLdlt). Each factorization's own methods
-/// add what only it has, such as [`Lu::solve_transpose`](super::Lu::solve_transpose) or the
-/// LDLᵀ factorizations' inertia.
+/// [`Cholesky`](super::Cholesky), [`Lu`](super::Lu) and [`Ldlt`](super::Ldlt), and the
+/// [`experimental`](super::experimental) ones. Each factorization's own methods add what only it
+/// has, such as [`Lu::solve_transpose`](super::Lu::solve_transpose) or the LDLᵀ factorizations'
+/// inertia.
 ///
 /// Every solve of a right-hand side runs the same operations, so a solution is bit for bit the
 /// same whichever of these methods computes it. Each returns `SparseError::ShapeMismatch` unless
