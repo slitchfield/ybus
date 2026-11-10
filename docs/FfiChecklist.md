@@ -141,8 +141,10 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       - **The error:** a new variant, `TopologyMismatch { table, row, field }`, naming the first
         difference (1-based row, MATPOWER's table names), while `CaseMismatch` stays for tables
         of different lengths. Phase F2's status codes give each its own code.
-- [ ] A test asserts at compile time that `Case`, the models, the options and the solutions are
-      `Send` and `Sync`, so the thread-safety contract is checked rather than assumed.
+- [x] A test asserts at compile time that `Case`, the models, the options and the solutions are
+      `Send` and `Sync`, so the thread-safety contract is checked rather than assumed
+      (`powerflow/tests/thread_safety_test.rs`, which also covers `DcStudy` and
+      `PowerflowError`).
 
 ## Phase F2: The crate and its boundary
 
