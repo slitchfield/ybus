@@ -10,9 +10,11 @@
 mod common;
 
 use common::ac_fixture::{ac_fixture, AcBranch, AcBus, AcGen};
+use interior_point::interior_point_error::InteriorPointError;
 use powerflow::case::{BusType, Case, GenCost};
 use powerflow::opf::ac::{ac_opf, ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use powerflow::opf::cost::total_cost;
+use powerflow::opf::OpfSolver;
 use powerflow::powerflow_error::PowerflowError;
 
 /// Both solvers, at MATPOWER's AC OPF settings
@@ -321,4 +323,22 @@ fn unsupported_generators_and_cases_are_refused() {
         ac_opf(&case).unwrap_err(),
         PowerflowError::MissingField { field: "gencost" }
     );
+}
+
+#[test]
+fn a_solver_option_out_of_range_is_an_error() {
+    for (solver, mut options) in solvers() {
+        match &mut options.solver {
+            OpfSolver::Mips(mips) => mips.xi = 0.3,
+            OpfSolver::Mehrotra(mehrotra) => mehrotra.xi = 0.3,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            ac_opf_with_options(&three_bus(), &options).unwrap_err(),
+            PowerflowError::Solver {
+                error: InteriorPointError::InvalidOption { name: "xi" }
+            },
+            "{solver}"
+        );
+    }
 }

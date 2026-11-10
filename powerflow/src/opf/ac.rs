@@ -379,6 +379,8 @@ pub fn ac_opf(case: &Case) -> Result<AcOpfSolution, PowerflowError> {
 /// - [`PowerflowError::UnsupportedGenerator`] for an in-service generator with a PQ capability
 ///   curve, or a dispatchable load with both reactive limits nonzero or a reactive output off
 ///   its power factor by more than 1e-6 p.u., which `makeAvl` rejects
+/// - [`PowerflowError::Solver`] if the solver refuses `options`, such as MIPS's `xi` outside
+///   `[0.5, 1)`
 pub fn ac_opf_with_options(
     case: &Case,
     options: &AcOpfOptions,
@@ -490,14 +492,14 @@ pub fn ac_opf_with_options(
         xmin: Some(xmin),
         xmax: Some(xmax),
     };
-    let consistent = "the AC OPF model's dimensions are consistent";
+    let refused = |error| PowerflowError::Solver { error };
     let solution = match &options.solver {
         OpfSolver::Mips(options) => {
-            SolverResult::Mips(mips(&problem, &x0, &constraints, options).expect(consistent))
+            SolverResult::Mips(mips(&problem, &x0, &constraints, options).map_err(refused)?)
         }
-        OpfSolver::Mehrotra(options) => SolverResult::Mehrotra(
-            mehrotra(&problem, &x0, &constraints, options).expect(consistent),
-        ),
+        OpfSolver::Mehrotra(options) => {
+            SolverResult::Mehrotra(mehrotra(&problem, &x0, &constraints, options).map_err(refused)?)
+        }
     };
     let residuals = kkt_residuals(&problem, &constraints, solution.x(), solution.multipliers())
         .expect("the solver's multipliers fit its problem");

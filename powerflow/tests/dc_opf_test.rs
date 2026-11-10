@@ -5,8 +5,10 @@
 mod common;
 
 use common::dc_fixture::{fixture, B, G, L};
+use interior_point::interior_point_error::InteriorPointError;
 use powerflow::case::{Case, GenCost};
-use powerflow::opf::dc::dc_opf;
+use powerflow::opf::dc::{dc_opf, dc_opf_with_options, DcOpfOptions};
+use powerflow::opf::OpfSolver;
 use powerflow::powerflow_error::PowerflowError;
 
 fn linear(cost_per_mwh: f64) -> GenCost {
@@ -182,4 +184,21 @@ fn a_case_without_a_ref_bus_or_costs_is_refused() {
         dc_opf(&case).unwrap_err(),
         PowerflowError::MissingField { field: "gencost" }
     );
+}
+
+#[test]
+fn a_solver_option_out_of_range_is_an_error() {
+    for mut options in [DcOpfOptions::default(), DcOpfOptions::mehrotra()] {
+        match &mut options.solver {
+            OpfSolver::Mips(mips) => mips.xi = 0.3,
+            OpfSolver::Mehrotra(mehrotra) => mehrotra.xi = 0.3,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            dc_opf_with_options(&two_bus(10.0, 10.0, 30.0), &options).unwrap_err(),
+            PowerflowError::Solver {
+                error: InteriorPointError::InvalidOption { name: "xi" }
+            }
+        );
+    }
 }
