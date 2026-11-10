@@ -6,6 +6,7 @@
 #ifndef YBUS_H
 #define YBUS_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -202,6 +203,56 @@ ybus_status ybus_case_clone(const struct ybus_case *case_, struct ybus_case **ou
 //
 // `case` must be null or a case made by this library and not yet freed.
 void ybus_case_free(struct ybus_case *case_);
+
+// Writes the number of buses in `case` through `out`.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or a writable `size_t`.
+ybus_status ybus_case_bus_count(const struct ybus_case *case_, size_t *out);
+
+// Writes the number of generators in `case` through `out`.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or a writable `size_t`.
+ybus_status ybus_case_gen_count(const struct ybus_case *case_, size_t *out);
+
+// Writes the number of branches in `case` through `out`.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or a writable `size_t`.
+ybus_status ybus_case_branch_count(const struct ybus_case *case_, size_t *out);
+
+// Writes the system MVA base of `case`, which per-unit values are relative to, through `out`.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or a writable `double`.
+ybus_status ybus_case_base_mva(const struct ybus_case *case_, double *out);
+
+// Sets the system MVA base of `case`. It isn't checked here: a base that isn't positive and
+// finite is reported when the case is solved.
+//
+// # Safety
+//
+// `case` must be null or a live case that nothing else is using.
+ybus_status ybus_case_set_base_mva(struct ybus_case *case_, double base_mva);
+
+// Writes whether `case` has generator costs through `out`.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or a writable `bool`.
+ybus_status ybus_case_has_costs(const struct ybus_case *case_, bool *out);
+
+// Writes whether `case` has bus names through `out`.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or a writable `bool`.
+ybus_status ybus_case_has_bus_names(const struct ybus_case *case_, bool *out);
 
 #ifdef __cplusplus
 }  // extern "C"

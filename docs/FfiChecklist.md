@@ -199,8 +199,8 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       The C tests' first real errors are here: a missing file, malformed text, a path that
       isn't UTF-8 and a null argument. Their case, `ybus_ffi/tests/c/three_bus.m`, is a file
       the Rust tests read too.
-- [ ] Sizes and scalars: the bus, generator and branch counts, `base_mva`, and whether the case
-      has costs and bus names.
+- [x] Sizes and scalars: the bus, generator and branch counts, `base_mva`, and whether the case
+      has costs and bus names. `ybus_case_set_base_mva` sets the base, unchecked until a solve.
 - [ ] Column getters for every numeric field of the bus, generator and branch tables, with bus
       types and statuses as integer columns using MATPOWER's codes. Bus names, if any, are read
       one at a time by index.

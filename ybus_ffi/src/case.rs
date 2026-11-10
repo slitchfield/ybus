@@ -6,7 +6,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use powerflow::Case;
 
-use crate::boundary::{arg_ref, arg_slice, arg_str, guard, new_handle};
+use crate::boundary::{arg_mut, arg_ref, arg_slice, arg_str, guard, new_handle};
 use crate::status::ybus_status;
 
 /// A power system case: its buses, generators, branches and optional costs and bus names, as
@@ -115,6 +115,114 @@ pub unsafe extern "C" fn ybus_case_free(case: *mut YbusCase) {
     }));
 }
 
+/// Writes `read(case)` through `out`: the shape of every scalar getter.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, and `out` null or a writable `T`.
+unsafe fn get<T>(case: *const YbusCase, out: *mut T, read: impl FnOnce(&Case) -> T) -> ybus_status {
+    guard(|| {
+        // SAFETY: case and out are as the caller promised
+        let (case, out) = unsafe { (arg_ref(case, "case")?, arg_mut(out, "out")?) };
+        *out = read(&case.case);
+        Ok(())
+    })
+}
+
+/// Writes the number of buses in `case` through `out`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, and `out` null or a writable `size_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_bus_count(
+    case: *const YbusCase,
+    out: *mut usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get(case, out, |case| case.bus.len()) }
+}
+
+/// Writes the number of generators in `case` through `out`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, and `out` null or a writable `size_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_gen_count(
+    case: *const YbusCase,
+    out: *mut usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get(case, out, |case| case.generator.len()) }
+}
+
+/// Writes the number of branches in `case` through `out`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, and `out` null or a writable `size_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_branch_count(
+    case: *const YbusCase,
+    out: *mut usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get(case, out, |case| case.branch.len()) }
+}
+
+/// Writes the system MVA base of `case`, which per-unit values are relative to, through `out`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, and `out` null or a writable `double`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_base_mva(case: *const YbusCase, out: *mut f64) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get(case, out, |case| case.base_mva) }
+}
+
+/// Sets the system MVA base of `case`. It isn't checked here: a base that isn't positive and
+/// finite is reported when the case is solved.
+///
+/// # Safety
+///
+/// `case` must be null or a live case that nothing else is using.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_set_base_mva(case: *mut YbusCase, base_mva: f64) -> ybus_status {
+    guard(|| {
+        // SAFETY: case is as the caller promised
+        let case = unsafe { arg_mut(case, "case") }?;
+        case.case.base_mva = base_mva;
+        Ok(())
+    })
+}
+
+/// Writes whether `case` has generator costs through `out`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, and `out` null or a writable `bool`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_has_costs(case: *const YbusCase, out: *mut bool) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get(case, out, |case| case.gencost.is_some()) }
+}
+
+/// Writes whether `case` has bus names through `out`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, and `out` null or a writable `bool`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_has_bus_names(
+    case: *const YbusCase,
+    out: *mut bool,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get(case, out, |case| case.busnames.is_some()) }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::ffi::CString;
@@ -216,6 +324,52 @@ pub(crate) mod tests {
                 YBUS_ERROR_NULL_ARGUMENT
             );
             assert!(out.is_null());
+        }
+    }
+
+    #[test]
+    fn sizes_and_scalars_are_read_and_the_base_set() {
+        let case = three_bus();
+        let (mut buses, mut generators, mut branches) = (0, 0, 0);
+        let (mut base, mut costs, mut names) = (0.0, false, false);
+        // SAFETY: case is live until freed, and every out is writable
+        unsafe {
+            assert_eq!(ybus_case_bus_count(case, &mut buses), YBUS_OK);
+            assert_eq!(ybus_case_gen_count(case, &mut generators), YBUS_OK);
+            assert_eq!(ybus_case_branch_count(case, &mut branches), YBUS_OK);
+            assert_eq!(ybus_case_base_mva(case, &mut base), YBUS_OK);
+            assert_eq!(ybus_case_has_costs(case, &mut costs), YBUS_OK);
+            assert_eq!(ybus_case_has_bus_names(case, &mut names), YBUS_OK);
+            assert_eq!(
+                (buses, generators, branches, base, costs, names),
+                (3, 2, 3, 100.0, true, true)
+            );
+
+            // Not checked when set: a zero base is the solve's to report
+            assert_eq!(ybus_case_set_base_mva(case, 0.0), YBUS_OK);
+            assert_eq!(ybus_case_base_mva(case, &mut base), YBUS_OK);
+            assert_eq!(base, 0.0);
+
+            (*case).case.gencost = None;
+            (*case).case.busnames = None;
+            assert_eq!(ybus_case_has_costs(case, &mut costs), YBUS_OK);
+            assert_eq!(ybus_case_has_bus_names(case, &mut names), YBUS_OK);
+            assert_eq!((costs, names), (false, false));
+
+            assert_eq!(
+                ybus_case_bus_count(ptr::null(), &mut buses),
+                YBUS_ERROR_NULL_ARGUMENT
+            );
+            assert_eq!(
+                ybus_case_bus_count(case, ptr::null_mut()),
+                YBUS_ERROR_NULL_ARGUMENT
+            );
+            assert_eq!(message(), "`out` is null");
+            assert_eq!(
+                ybus_case_set_base_mva(ptr::null_mut(), 1.0),
+                YBUS_ERROR_NULL_ARGUMENT
+            );
+            ybus_case_free(case);
         }
     }
 }

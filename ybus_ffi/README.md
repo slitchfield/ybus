@@ -40,6 +40,12 @@ A `ybus_case` is an opaque handle to a case, made by one of three functions and 
 Each sets `*out` to `NULL` first, and leaves it `NULL` on an error. `ybus_case_free(NULL)` does
 nothing. Rows are numbered from 0, as in C.
 
+Every getter returns a status and writes its value through an out-parameter, such as
+`ybus_case_bus_count(case, &buses)`. The sizes and scalars are:
+- `ybus_case_bus_count`, `ybus_case_gen_count` and `ybus_case_branch_count`
+- `ybus_case_base_mva`, and `ybus_case_set_base_mva`
+- `ybus_case_has_costs` and `ybus_case_has_bus_names`
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.
