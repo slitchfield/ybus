@@ -19,7 +19,7 @@
 //! - **N-1 screening wins on large cases.** [`DcGpuStudy::outage_loadings`] keeps the flows on
 //!   the device and brings back one value per outage. It was even with 28 threads around
 //!   9,000–14,000 buses, and 1.3–2.1× faster from 25,000 up.
-//! - **Whole results lose.** [`DcGpuStudy::solve_many`], [`DcGpuStudy::solve_outages`] and
+//! - **Whole results lose.** [`DcGpuStudy::solve_many`], [`DcGpuStudy::solve_branch_outages`] and
 //!   [`DcGpuSensitivity::ptdf_columns`] did each result's O(buses + branches) host work on one
 //!   thread, so they ran at 0.1–0.3× of the CPU's parallel methods. Prefer those methods for
 //!   whole results.
@@ -269,7 +269,7 @@ impl DcGpuStudy<'_, '_> {
     ///
     /// The outer result holds `PowerflowError::Gpu` and the errors of [`DcStudy::solve`],
     /// which apply to every outage; each inner one an outage's own.
-    pub fn solve_outages(
+    pub fn solve_branch_outages(
         &mut self,
         case: &Case,
         rows: &[usize],
@@ -323,13 +323,13 @@ impl DcGpuStudy<'_, '_> {
     /// Screens the outage of each case branch row in `rows`, taken out alone, for its most
     /// loaded branch ([`OutageLoading`]), with the updates solved and the flows computed and
     /// reduced on the GPU, so only each outage's maximum comes back. The loadings agree with
-    /// those of [`DcGpuStudy::solve_outages`]'s (and so the CPU's) flows to within rounding;
+    /// those of [`DcGpuStudy::solve_branch_outages`]'s (and so the CPU's) flows to within rounding;
     /// where two branches' loadings are that close, either may be named. The ratings are
     /// `case`'s.
     ///
     /// An outage whose update the GPU finds singular, or whose angles fail
     /// [`DcStudy::solve`]'s check, is solved again on the CPU, which decides its result.
-    /// Errors are those of [`DcGpuStudy::solve_outages`].
+    /// Errors are those of [`DcGpuStudy::solve_branch_outages`].
     pub fn outage_loadings(
         &mut self,
         case: &Case,

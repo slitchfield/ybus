@@ -310,7 +310,7 @@ fn check_outages(what: &str, gpu: &Gpu, case: &Case, width: usize) -> (usize, us
     let cpu = study.solve_outages(case, &sets).unwrap();
     let mut on_gpu = study.gpu(gpu).unwrap();
     on_gpu.set_block_width(width);
-    let solved = on_gpu.solve_outages(case, &rows).unwrap();
+    let solved = on_gpu.solve_branch_outages(case, &rows).unwrap();
     let screened = on_gpu.outage_loadings(case, &rows).unwrap();
     assert_eq!((solved.len(), screened.len()), (rows.len(), rows.len()));
     let (mut ok, mut errors) = (0, 0);

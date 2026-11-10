@@ -12,7 +12,7 @@
 //!   whose islands don't all reach it):
 //!   `DcSensitivity::ptdf_columns` and `par_ptdf_columns` against `DcGpuSensitivity`'s.
 //! - `n1_solutions`: single-branch outages of evenly spaced in-service branches, solved whole:
-//!   `DcStudy::solve_outages` and `par_solve_outages` against `DcGpuStudy::solve_outages`.
+//!   `DcStudy::solve_outages` and `par_solve_outages` against `DcGpuStudy::solve_branch_outages`.
 //! - `n1_screening`: the same outages' most loaded branches: the CPU's solutions reduced on the
 //!   host against `DcGpuStudy::outage_loadings`.
 //!
@@ -392,7 +392,11 @@ fn outages(
                 .par_solve_outages(case, &sets(chunk))
                 .expect("the case matches")
         },
-        |chunk| on_gpu.solve_outages(case, chunk).expect("the GPU works"),
+        |chunk| {
+            on_gpu
+                .solve_branch_outages(case, chunk)
+                .expect("the GPU works")
+        },
         solution_difference,
     );
     prefix.print(&Row {
