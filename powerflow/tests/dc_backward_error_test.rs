@@ -8,7 +8,7 @@
 mod common;
 use common::accuracy::backward_error;
 use powerflow::case::Case;
-use powerflow::dc::{DcModel, DcSolution, DcSolver};
+use powerflow::dc::{DcModel, DcOptions, DcSolution, DcSolver};
 
 /// The largest backward error allowed: 100 ε, where ε is `f64::EPSILON` (2.2e-16). These cases
 /// measured 0.07 ε (case300) to 0.38 ε (case118), and the worst of every MATPOWER case in the
@@ -22,7 +22,7 @@ fn solve(name: &str) -> Option<(Case, DcModel, DcSolution)> {
     let path = common::matpower_case(name)?;
     let case = Case::from_path(&path).unwrap();
     let model = DcModel::new(&case).unwrap();
-    let solution = model.solve(&case).unwrap();
+    let solution = model.solve(&case, &DcOptions::default()).unwrap();
     Some((case, model, solution))
 }
 

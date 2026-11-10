@@ -19,6 +19,7 @@ use sparse_mat::compressed_matrix::{
 };
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 
 use crate::case::{Branch, BusType, Case};
 use crate::powerflow_error::PowerflowError;
@@ -469,17 +470,17 @@ impl AcModel {
     /// `SingularNetwork` if the Jacobian, B′ or B″ is singular. Fast-decoupled also returns
     /// `ZeroReactance` for an in-service branch with `x = 0`, whose B′ or B″ stamps would be
     /// infinite once resistance is ignored.
-    pub fn solve(&self, case: &Case, options: AcOptions) -> Result<AcSolution, PowerflowError> {
+    pub fn solve(&self, case: &Case, options: &AcOptions) -> Result<AcSolution, PowerflowError> {
         self.topology.check_case(case)?;
         match options.reactive_limits {
             ReactiveLimits::Ignore => {
                 let roles = self.topology.roles();
                 let v = self.start(case, &roles);
-                let solved = self.solve_round(case, &roles, v, options, None)?;
+                let solved = self.solve_round(case, &roles, v, *options, None)?;
                 Ok(self.results(case, &roles, &solved))
             }
-            ReactiveLimits::AllAtOnce => self.solve_with_limits(case, options, false),
-            ReactiveLimits::OneAtATime => self.solve_with_limits(case, options, true),
+            ReactiveLimits::AllAtOnce => self.solve_with_limits(case, *options, false),
+            ReactiveLimits::OneAtATime => self.solve_with_limits(case, *options, true),
         }
     }
 
@@ -1579,10 +1580,19 @@ fn va_at(solution: &AcSolution, topology: &Topology, bus: usize) -> f64 {
     solution.va_deg[topology.bus_rows[bus]]
 }
 
-/// Runs an AC power flow on `case` with MATPOWER's default options (Newton's method):
-/// [`AcModel::new`] followed by [`AcModel::solve`], with their errors.
+/// Runs an AC power flow on `case` with MATPOWER's default options (Newton's method); see
+/// [`ac_power_flow_with_options`].
 pub fn ac_power_flow(case: &Case) -> Result<AcSolution, PowerflowError> {
-    AcModel::new(case)?.solve(case, AcOptions::default())
+    ac_power_flow_with_options(case, &AcOptions::default())
+}
+
+/// Runs an AC power flow on `case` with `options`: [`AcModel::new`] followed by
+/// [`AcModel::solve`], with their errors.
+pub fn ac_power_flow_with_options(
+    case: &Case,
+    options: &AcOptions,
+) -> Result<AcSolution, PowerflowError> {
+    AcModel::new(case)?.solve(case, options)
 }
 
 #[cfg(test)]

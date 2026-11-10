@@ -5,9 +5,11 @@
 // Dense matrices' entries are reached by (i, j) here, which reads more plainly than iterators
 #![allow(clippy::needless_range_loop)]
 
-use sparse_mat::compressed_matrix::{CsrMatrix, DBlock, DenseLdlt, Inertia, Ordering};
+use sparse_mat::compressed_matrix::experimental::{DBlock, DenseLdlt};
+use sparse_mat::compressed_matrix::{CsrMatrix, Inertia, Ordering};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 
 type C = Complex<f64>;
 
@@ -220,9 +222,9 @@ fn a_zero_diagonal_takes_a_2x2_pivot() {
         }
     );
     assert_eq!(f.solve(&[1.0, 2.0]).unwrap(), vec![2.0, 1.0]);
-    // The static pivots of Ldlt fail on it
+    // The static pivots of StaticLdlt fail on it
     let csr = CsrMatrix::from_dense(&swap).unwrap();
-    assert!(csr.ldlt().is_err());
+    assert!(csr.ldlt_static().is_err());
 }
 
 #[test]
@@ -344,7 +346,7 @@ fn kkt_matrices_with_zero_diagonals_factor_where_static_pivots_fail() {
         .unwrap();
         let symbolic = csr.analyze_cholesky(Ordering::Natural).unwrap();
         assert_eq!(
-            symbolic.factor_ldlt(&csr).unwrap_err(),
+            symbolic.factor_static_ldlt(&csr).unwrap_err(),
             SparseError::SingularMatrix { pivot: 0 }
         );
     }

@@ -68,7 +68,7 @@ fn states(case: &Case, model: &AcModel) -> Vec<Vec<Complex<f64>>> {
         }),
         polar(&|_, _| 1.0, &|_, _| 0.0),
     ];
-    if let Ok(solution) = model.solve(case, AcOptions::default()) {
+    if let Ok(solution) = model.solve(case, &AcOptions::default()) {
         states.push(polar(&|_, row| solution.vm_pu[row], &|_, row| {
             solution.va_deg[row]
         }));

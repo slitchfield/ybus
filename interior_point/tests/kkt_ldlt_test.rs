@@ -8,10 +8,10 @@ mod common;
 
 use common::{qp4_constraints, qp4_hessian, Banana, Hs71, Nonlinear2, Nonlinear3, Quadratic3};
 use interior_point::kkt::KktFactorization;
-use interior_point::mehrotra::{mehrotra, qps_mehrotra, MehrotraOptions, MehrotraStatus};
+use interior_point::mehrotra::{mehrotra, qps_mehrotra, MehrotraIteration, MehrotraOptions};
 use interior_point::mips::{mips, MipsOptions};
 use interior_point::problem::{Constraints, Problem, QuadraticProblem};
-use interior_point::solution::{kkt_residuals, Multipliers, Status};
+use interior_point::solution::{kkt_residuals, History, Multipliers, Solution, Status};
 use sparse_mat::compressed_matrix::CsrMatrix;
 
 /// The bar for the objective, relative to the larger magnitude (at least 1)
@@ -47,7 +47,7 @@ fn mehrotra_options(kkt: KktFactorization) -> MehrotraOptions {
 fn compare<P: Problem>(name: &str, problem: &P, x0: &[f64], constraints: &Constraints) {
     let run = |solver: &str, kkt: KktFactorization| -> Outcome {
         if solver == "MIPS" {
-            let s = mips(problem, x0, constraints, &mips_options(kkt)).unwrap();
+            let s = mips(problem, constraints, x0, &mips_options(kkt)).unwrap();
             Outcome {
                 status: s.status,
                 iterations: s.iterations,
@@ -57,7 +57,7 @@ fn compare<P: Problem>(name: &str, problem: &P, x0: &[f64], constraints: &Constr
                 refinement_steps: s.refinement_steps,
             }
         } else {
-            let s = mehrotra(problem, x0, constraints, &mehrotra_options(kkt)).unwrap();
+            let s = mehrotra(problem, constraints, x0, &mehrotra_options(kkt)).unwrap();
             Outcome {
                 status: s.status,
                 iterations: s.iterations,
@@ -92,6 +92,14 @@ fn compare<P: Problem>(name: &str, problem: &P, x0: &[f64], constraints: &Constr
                 "{name}, {solver}: residual {residual:e}"
             );
         }
+    }
+}
+
+/// A predictor-corrector solve's iteration records
+fn mehrotra_history(s: &Solution) -> &[MehrotraIteration] {
+    match &s.history {
+        History::Mehrotra(records) => records,
+        History::Mips(_) => panic!("a MIPS history from the predictor-corrector method"),
     }
 }
 
@@ -165,8 +173,8 @@ fn the_inertia_correction_leaves_a_saddle_for_a_minimum() {
     );
     assert_eq!(lu.inertia_corrections, 0);
     assert!(ldlt.inertia_corrections > 0);
-    assert!(ldlt.history.iter().any(|h| h.delta_w > 0.0));
-    assert_eq!(ldlt.status, MehrotraStatus::Converged);
+    assert!(mehrotra_history(&ldlt).iter().any(|h| h.delta_w > 0.0));
+    assert_eq!(ldlt.status, Status::Converged);
     assert!((ldlt.f + 0.5).abs() < 1e-6, "f = {}", ldlt.f);
     assert!((ldlt.x[0].abs() - 1.0).abs() < 1e-6 && ldlt.x[1].abs() < 1e-6);
 }
@@ -182,9 +190,9 @@ fn without_the_correction_ldlt_stops_at_the_saddle_as_lu_does() {
         "saddle, LDLᵀ uncorrected: {:?} at {:?}, f = {}, in {}",
         s.status, s.x, s.f, s.iterations
     );
-    assert_eq!(s.status, MehrotraStatus::Converged);
+    assert_eq!(s.status, Status::Converged);
     assert_eq!(s.inertia_corrections, 0);
-    assert!(s.history.iter().all(|h| h.delta_w == 0.0));
+    assert!(mehrotra_history(&s).iter().all(|h| h.delta_w == 0.0));
     assert!(s.f.abs() < 1e-6 && s.x[0].abs() < 1e-6, "f = {}", s.f);
 }
 
@@ -200,11 +208,11 @@ fn hs71_from_2_is_refused_as_a_maximum() {
     };
     let mut corrected = mehrotra_options(KktFactorization::Ldlt);
     corrected.inertia_correction = true;
-    let s = mehrotra(&Hs71, &[2.0; 4], &bounds, &corrected).unwrap();
+    let s = mehrotra(&Hs71, &bounds, &[2.0; 4], &corrected).unwrap();
     eprintln!(
         "hs71 from 2: {:?} after {} iterations, f = {}, {} corrections",
         s.status, s.iterations, s.f, s.inertia_corrections
     );
-    assert_eq!(s.status, MehrotraStatus::NumericalFailure);
+    assert_eq!(s.status, Status::NumericalFailure);
     assert!(s.inertia_corrections > 0);
 }

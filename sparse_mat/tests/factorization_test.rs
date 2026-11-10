@@ -7,6 +7,7 @@ use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, R
 use sparse_mat::num_complex::ComplexFloat;
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 
 use common::{reference_cholesky, reference_lu, reference_solve_spd};
 

@@ -1,14 +1,16 @@
-// Tests for the multifrontal pivoted LDLᵀ (SymbolicCholesky::factor_indefinite,
-//   CsrMatrix::ldlt_indefinite): against the dense kernel and the LU on random symmetric
+// Tests for the multifrontal pivoted LDLᵀ (SymbolicCholesky::factor_ldlt,
+//   CsrMatrix::ldlt): against the dense kernel and the LU on random symmetric
 //   indefinite matrices, on KKT-shaped matrices whose zero diagonals static pivots fail on, with
 //   delayed pivots, against the Cholesky on positive definite matrices, complex Hermitian, its
 //   refinement, and its errors.
 
+use sparse_mat::compressed_matrix::experimental::DenseLdlt;
 use sparse_mat::compressed_matrix::{
-    Amalgamation, CsrMatrix, DenseLdlt, IndefiniteOptions, Inertia, Ordering, SymbolicIndefinite,
+    Amalgamation, CsrMatrix, Inertia, LdltOptions, Ordering, SymbolicLdlt,
 };
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 
 type C = Complex<f64>;
 
@@ -133,7 +135,7 @@ fn random_symmetric_indefinite_matrices_match_the_dense_factorization() {
                 let f = a
                     .analyze_cholesky(ordering)
                     .unwrap()
-                    .factor_indefinite(&a, IndefiniteOptions::default())
+                    .factor_ldlt(&a, LdltOptions::default())
                     .unwrap();
                 assert_eq!(f.inertia(), reference.inertia(), "n {n}, seed {seed}");
                 let b = right_hand_side(n, seed);
@@ -172,13 +174,13 @@ fn kkt_matrices_with_zero_diagonals_factor_under_every_ordering() {
         assert!(a
             .analyze_cholesky(Ordering::Natural)
             .unwrap()
-            .factor_ldlt(&a)
+            .factor_static_ldlt(&a)
             .is_err());
         for ordering in [Ordering::Natural, Ordering::Amd, Ordering::Rcm] {
             let f = a
                 .analyze_cholesky(ordering)
                 .unwrap()
-                .factor_indefinite(&a, IndefiniteOptions::default())
+                .factor_ldlt(&a, LdltOptions::default())
                 .unwrap();
             assert_eq!(
                 f.inertia(),
@@ -210,11 +212,11 @@ fn small_leaf_pivots_are_delayed_to_the_root() {
         triplets.extend([(leaf, leaf, 1e-6), (leaf, k, 1.0), (k, leaf, 1.0)]);
     }
     let a = CsrMatrix::from_triplets(k + 1, k + 1, triplets).unwrap();
-    let unmerged = SymbolicIndefinite::with_amalgamation(
+    let unmerged = SymbolicLdlt::with_amalgamation(
         a.analyze_cholesky(Ordering::Natural).unwrap(),
         Amalgamation::NONE,
     );
-    let f = unmerged.factor(&a, IndefiniteOptions::default()).unwrap();
+    let f = unmerged.factor(&a, LdltOptions::default()).unwrap();
     assert_eq!(f.delayed(), k);
     let reference = DenseLdlt::factor(&a.to_dense(), 0.01).unwrap();
     assert_eq!(f.inertia(), reference.inertia());
@@ -230,7 +232,7 @@ fn small_leaf_pivots_are_delayed_to_the_root() {
 
     // A threshold small enough lets the leaves pivot where they are
     let loose = unmerged
-        .factor(&a, IndefiniteOptions { threshold: 1e-7 })
+        .factor(&a, LdltOptions { threshold: 1e-7 })
         .unwrap();
     assert_eq!((loose.delayed(), loose.l_entries()), (0, k));
 
@@ -239,7 +241,7 @@ fn small_leaf_pivots_are_delayed_to_the_root() {
     let merged = a
         .analyze_cholesky(Ordering::Natural)
         .unwrap()
-        .factor_indefinite(&a, IndefiniteOptions::default())
+        .factor_ldlt(&a, LdltOptions::default())
         .unwrap();
     assert_eq!(merged.delayed(), 0);
     assert_eq!(merged.inertia(), reference.inertia());
@@ -270,16 +272,14 @@ fn positive_definite_matrices_factor_as_the_cholesky_does() {
     }
     let a = CsrMatrix::from_triplets(n, n, triplets).unwrap();
     let symbolic = a.analyze_cholesky(Ordering::Amd).unwrap();
-    let f = SymbolicIndefinite::with_amalgamation(symbolic.clone(), Amalgamation::NONE)
-        .factor(&a, IndefiniteOptions::default())
+    let f = SymbolicLdlt::with_amalgamation(symbolic.clone(), Amalgamation::NONE)
+        .factor(&a, LdltOptions::default())
         .unwrap();
     let cholesky = symbolic.factor(&a).unwrap();
     assert_eq!((f.delayed(), f.two_by_two()), (0, 0));
     assert_eq!(f.l_entries(), cholesky.l().values().len() - n);
     // Amalgamation stores explicit zeros too, and still solves alike
-    let merged = symbolic
-        .factor_indefinite(&a, IndefiniteOptions::default())
-        .unwrap();
+    let merged = symbolic.factor_ldlt(&a, LdltOptions::default()).unwrap();
     assert!(merged.l_entries() > f.l_entries());
     let b = right_hand_side(n, 5);
     let (x, y) = (merged.solve(&b).unwrap(), cholesky.solve(&b).unwrap());
@@ -327,7 +327,7 @@ fn complex_hermitian_kkt_matrices_factor() {
         })
         .collect();
     let a = CsrMatrix::from_triplets(n + m, n + m, triplets).unwrap();
-    let f = a.ldlt_indefinite().unwrap();
+    let f = a.ldlt().unwrap();
     assert_eq!(
         f.inertia(),
         Inertia {
@@ -377,7 +377,7 @@ fn one_analysis_serves_matrices_with_the_same_pattern() {
     .unwrap();
     for matrix in [&a, &other] {
         let f = symbolic
-            .factor_indefinite(matrix, IndefiniteOptions::default())
+            .factor_ldlt(matrix, LdltOptions::default())
             .unwrap();
         let b = right_hand_side(55, 8);
         assert!(residual(matrix, &f.solve(&b).unwrap(), &b) < RESIDUAL_BAR);
@@ -387,7 +387,7 @@ fn one_analysis_serves_matrices_with_the_same_pattern() {
 #[test]
 fn refinement_and_many_right_hand_sides() {
     let a = kkt(50, 20, 21);
-    let f = a.ldlt_indefinite().unwrap();
+    let f = a.ldlt().unwrap();
     let b = right_hand_side(70, 2);
     let refined = f.solve_refined_normwise(&a, &b, 5, 1e-15).unwrap();
     assert!(refined.relative_residual <= 1e-15 || refined.steps <= 5);
@@ -428,7 +428,7 @@ fn errors() {
     let other = kkt(10, 4, 2);
     assert_eq!(
         symbolic
-            .factor_indefinite(&other, IndefiniteOptions::default())
+            .factor_ldlt(&other, LdltOptions::default())
             .unwrap_err(),
         SparseError::PatternMismatch
     );
@@ -437,7 +437,7 @@ fn errors() {
     asymmetric.values_mut()[1] += 1.0;
     assert_eq!(
         symbolic
-            .factor_indefinite(&asymmetric, IndefiniteOptions::default())
+            .factor_ldlt(&asymmetric, LdltOptions::default())
             .unwrap_err(),
         SparseError::NotSymmetric
     );
@@ -449,12 +449,12 @@ fn errors() {
     ])
     .unwrap();
     assert!(matches!(
-        singular.ldlt_indefinite(),
+        singular.ldlt(),
         Err(SparseError::SingularMatrix { .. })
     ));
     let zero = CsrMatrix::from_triplets(2, 2, vec![(0, 0, 0.0), (1, 1, 0.0)]).unwrap();
     assert!(matches!(
-        zero.ldlt_indefinite(),
+        zero.ldlt(),
         Err(SparseError::SingularMatrix { .. })
     ));
 }
@@ -466,13 +466,13 @@ fn a_threshold_above_one_half_is_refused() {
     let _ = a
         .analyze_cholesky(Ordering::Amd)
         .unwrap()
-        .factor_indefinite(&a, IndefiniteOptions { threshold: 0.75 });
+        .factor_ldlt(&a, LdltOptions { threshold: 0.75 });
 }
 
 /// Everything a factorization reports, to compare two bit for bit: the solve of a fixed
 /// right-hand side, the inertia and the counts
 fn fingerprint(
-    f: &sparse_mat::compressed_matrix::IndefiniteLdlt<f64>,
+    f: &sparse_mat::compressed_matrix::Ldlt<f64>,
     n: usize,
 ) -> (Vec<u64>, Inertia, usize, usize, usize) {
     let b = right_hand_side(n, 99);
@@ -489,10 +489,10 @@ fn fingerprint(
 #[test]
 fn one_kept_analysis_factors_as_fresh_ones_do() {
     // Matrices with the same pattern and other values, factored in turn by one kept analysis
-    //   and each by a fresh one, and by SymbolicCholesky::factor_indefinite: the same bit for
+    //   and each by a fresh one, and by SymbolicCholesky::factor_ldlt: the same bit for
     //   bit, so nothing is left behind in the analysis or reused buffers
     let base = kkt(60, 25, 13);
-    let kept = base.analyze_indefinite(Ordering::Amd).unwrap();
+    let kept = base.analyze_ldlt(Ordering::Amd).unwrap();
     let mut rng = Lcg(14);
     for round in 0..6 {
         let lower: Vec<(usize, usize, f64)> = base
@@ -519,8 +519,8 @@ fn one_kept_analysis_factors_as_fresh_ones_do() {
             }),
         )
         .unwrap();
-        let fresh = a.analyze_indefinite(Ordering::Amd).unwrap();
-        let options = IndefiniteOptions {
+        let fresh = a.analyze_ldlt(Ordering::Amd).unwrap();
+        let options = LdltOptions {
             threshold: [0.01, 1e-4, 0.5][round % 3],
         };
         let by_kept = fingerprint(&kept.factor(&a, options).unwrap(), 85);
@@ -531,10 +531,7 @@ fn one_kept_analysis_factors_as_fresh_ones_do() {
         );
         assert_eq!(
             by_kept,
-            fingerprint(
-                &fresh.cholesky().factor_indefinite(&a, options).unwrap(),
-                85
-            ),
+            fingerprint(&fresh.cholesky().factor_ldlt(&a, options).unwrap(), 85),
             "round {round}"
         );
     }
@@ -569,9 +566,9 @@ fn the_symmetry_check_refuses_what_is_hermitian_refuses() {
     ];
     for (name, a) in &cases {
         let refused = matches!(
-            a.analyze_indefinite(Ordering::Natural)
+            a.analyze_ldlt(Ordering::Natural)
                 .unwrap()
-                .factor(a, IndefiniteOptions::default()),
+                .factor(a, LdltOptions::default()),
             Err(SparseError::NotSymmetric)
         );
         assert_eq!(refused, !a.is_hermitian(), "{name}");
@@ -604,9 +601,9 @@ fn the_symmetry_check_refuses_what_is_hermitian_refuses() {
     ];
     for (name, a) in &complex_cases {
         let refused = matches!(
-            a.analyze_indefinite(Ordering::Natural)
+            a.analyze_ldlt(Ordering::Natural)
                 .unwrap()
-                .factor(a, IndefiniteOptions::default()),
+                .factor(a, LdltOptions::default()),
             Err(SparseError::NotSymmetric)
         );
         assert_eq!(refused, !a.is_hermitian(), "{name}");
@@ -623,7 +620,7 @@ fn amalgamation_postorders_the_tree_and_merges_without_changing_the_answers() {
         let a = kkt(80, 30, 40 + seed);
         for ordering in [Ordering::Amd, Ordering::Rcm, Ordering::Natural] {
             let cholesky = a.analyze_cholesky(ordering).unwrap();
-            let merged = SymbolicIndefinite::new(cholesky.clone());
+            let merged = SymbolicLdlt::new(cholesky.clone());
             // The same tree, renumbered in postorder: the same pattern's size, and a postorder
             //   that is the identity
             let postordered = merged.cholesky();
@@ -636,9 +633,9 @@ fn amalgamation_postorders_the_tree_and_merges_without_changing_the_answers() {
                 postordered.column_counts().iter().sum::<usize>(),
                 cholesky.column_counts().iter().sum::<usize>()
             );
-            let unmerged = SymbolicIndefinite::with_amalgamation(cholesky, Amalgamation::NONE);
+            let unmerged = SymbolicLdlt::with_amalgamation(cholesky, Amalgamation::NONE);
             for threshold in [0.01, 1e-4] {
-                let options = IndefiniteOptions { threshold };
+                let options = LdltOptions { threshold };
                 let (f, g) = (
                     merged.factor(&a, options).unwrap(),
                     unmerged.factor(&a, options).unwrap(),
@@ -671,8 +668,8 @@ fn merging_everything_merges_only_adjacent_fronts() {
     for seed in 0..4 {
         let a = kkt(40, 15, 70 + seed);
         let cholesky = a.analyze_cholesky(Ordering::Amd).unwrap();
-        let f = SymbolicIndefinite::with_amalgamation(cholesky, everything)
-            .factor(&a, IndefiniteOptions::default())
+        let f = SymbolicLdlt::with_amalgamation(cholesky, everything)
+            .factor(&a, LdltOptions::default())
             .unwrap();
         // One front per tree of the forest: every pivot found within it, nothing delayed
         assert_eq!(f.delayed(), 0);
@@ -703,11 +700,11 @@ fn amalgamation_keeps_the_fill_bounded() {
     for seed in 0..4 {
         let a = kkt(400, 150, 90 + seed);
         let cholesky = a.analyze_cholesky(Ordering::Amd).unwrap();
-        let options = IndefiniteOptions::default();
-        let merged = SymbolicIndefinite::new(cholesky.clone())
+        let options = LdltOptions::default();
+        let merged = SymbolicLdlt::new(cholesky.clone())
             .factor(&a, options)
             .unwrap();
-        let unmerged = SymbolicIndefinite::with_amalgamation(cholesky, Amalgamation::NONE)
+        let unmerged = SymbolicLdlt::with_amalgamation(cholesky, Amalgamation::NONE)
             .factor(&a, options)
             .unwrap();
         worst = worst.max(merged.l_entries() as f64 / unmerged.l_entries() as f64);

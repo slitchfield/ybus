@@ -21,7 +21,7 @@ optimal power flows, and leave the power flows' stages as they were:
 
 Two more apply to the pivoted LDLᵀ, and leave LU and Cholesky samples as they were:
 
-- A sample under `factor_indefinite` is split into its symmetry check and permutation, its
+- A sample under `factor_ldlt` is split into its symmetry check and permutation, its
   supernode partition, its dense Bunch–Kaufman kernel, and the rest, front assembly and
   extend-add (LDLT_PARTS), unless it's allocation.
 - A residual's product inside refinement (`refine_normwise`) is the refinement's residual, not
@@ -45,11 +45,14 @@ STAGES = [
     ("ordering and symbolic analysis", ["approximate_minimum_degree", "colamd", "ordering::",
                                         "Adjacency", "analyze_lu", "analyze_cholesky",
                                         "symbolic", "elimination_tree", "column_counts"]),
+    # Every factorization's solves run through the Factorization trait, whose frames name the
+    #   factorization module: matched here, before the factorizations' own "factor"
+    ("triangular solves", ["as sparse_mat::compressed_matrix::factorization::"]),
     ("refactorization", ["refactor"]),
     ("numeric factorization", ["gilbert_peierls", "Lu>::factor", "Cholesky>::factor",
                                "cholesky::", "factor"]),
     ("triangular solves", ["Lu>::solve", "Cholesky>::solve", "solve_sparse", "triangular",
-                           "lower_solve", "upper_solve", "IndefiniteLdlt", "Ldlt<", "DenseLdlt",
+                           "lower_solve", "upper_solve", "Ldlt<", "DenseLdlt",
                            "forward_by_rows", "back_by_rows"]),
     ("refinement residual", ["refine_normwise", "accuracy::refine", "relative_residual",
                              "componentwise_backward_error"]),
@@ -98,11 +101,11 @@ CONTEXT_STAGES = [
 # The innermost stages that count as KKT assembly when an interior-point solver called them
 KKT_ASSEMBLY = {"assembly and refill", "sparse products and sums"}
 
-# The pivoted LDLᵀ's factorization (SymbolicIndefinite::factor, or SymbolicCholesky's
-#   factor_indefinite, which calls it), split by what's on the
-#   stack under it, first match first; the rest of it is front assembly and extend-add. Only
-#   samples under factor_indefinite are split, so LU and Cholesky samples fold as before.
-LDLT_FACTOR = ["factor_indefinite", "SymbolicIndefinite>::factor"]
+# The pivoted LDLᵀ's factorization (SymbolicLdlt::factor, or SymbolicCholesky's factor_ldlt,
+#   which calls it), split by what's on the stack under it, first match first; the rest of it is
+#   front assembly and extend-add. Only samples under it are split, so LU and Cholesky samples
+#   fold as before.
+LDLT_FACTOR = ["factor_ldlt", "SymbolicLdlt>::factor"]
 LDLT_PARTS = [
     ("LDLᵀ: symmetry check and permutation", ["is_hermitian", "permute_symmetric"]),
     ("LDLᵀ: supernode partition", ["multifrontal::supernodes"]),

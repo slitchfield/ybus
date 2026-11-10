@@ -12,7 +12,7 @@
 //!   whose islands don't all reach it):
 //!   `DcSensitivity::ptdf_columns` and `par_ptdf_columns` against `DcGpuSensitivity`'s.
 //! - `n1_solutions`: single-branch outages of evenly spaced in-service branches, solved whole:
-//!   `DcStudy::solve_outages` and `par_solve_outages` against `DcGpuStudy::solve_outages`.
+//!   `DcStudy::solve_outages` and `par_solve_outages` against `DcGpuStudy::solve_branch_outages`.
 //! - `n1_screening`: the same outages' most loaded branches: the CPU's solutions reduced on the
 //!   host against `DcGpuStudy::outage_loadings`.
 //!
@@ -32,7 +32,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use powerflow::case::Case;
-use powerflow::dc::{DcModel, DcSolution, DcStudy, OutageLoading, PtdfSlack};
+use powerflow::dc::{DcModel, DcOptions, DcSolution, DcStudy, OutageLoading, PtdfSlack};
 use powerflow::powerflow_error::PowerflowError;
 use powerflow::Gpu;
 use rayon::prelude::*;
@@ -230,7 +230,9 @@ fn run(path: &Path) -> Result<(), String> {
         .map_or("?".into(), |s| s.to_string_lossy().into_owned());
     let case = Case::from_path(path).map_err(|err| err.to_string())?;
     let model = DcModel::new(&case).map_err(|err| err.to_string())?;
-    let study = model.study().map_err(|err| err.to_string())?;
+    let study = model
+        .study(&DcOptions::default())
+        .map_err(|err| err.to_string())?;
     let unknowns = model.pv_buses().len() + model.pq_buses().len();
     let prefix = Prefix(format!(
         "{name},{},{},{unknowns},{:?}",
@@ -390,7 +392,11 @@ fn outages(
                 .par_solve_outages(case, &sets(chunk))
                 .expect("the case matches")
         },
-        |chunk| on_gpu.solve_outages(case, chunk).expect("the GPU works"),
+        |chunk| {
+            on_gpu
+                .solve_branch_outages(case, chunk)
+                .expect("the GPU works")
+        },
         solution_difference,
     );
     prefix.print(&Row {

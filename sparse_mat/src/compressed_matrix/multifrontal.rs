@@ -1,27 +1,29 @@
 //! Sparse symmetric (Hermitian) indefinite `L D Lᴴ` by the multifrontal method, with threshold
-//! Bunch–Kaufman pivoting and delayed pivots: [`IndefiniteLdlt`].
+//! Bunch–Kaufman pivoting and delayed pivots: [`Ldlt`].
 
 use num_complex::ComplexFloat;
 use num_traits::NumCast;
 
 use super::bunch_kaufman::{factor_front, DBlock};
 use super::cholesky::SymbolicCholesky;
+use super::factorization::sealed::Substitute;
+use super::factorization::Factorization;
 use super::{CompressedMatrix, CsrMatrix, Inertia, Ordering};
 use crate::sparse_error::SparseError;
 use crate::Scalar;
 
-/// Options for [`SymbolicCholesky::factor_indefinite`].
+/// Options for [`SymbolicCholesky::factor_ldlt`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct IndefiniteOptions {
+pub struct LdltOptions {
     /// The threshold `u` of the pivot test, in `(0, 0.5]`: every entry of `L` is at most `1/u`
     /// in magnitude. Larger is more stable and delays more pivots; smaller keeps more of the
     /// ordering's sparsity. The default, 0.01, is MA57's.
     pub threshold: f64,
 }
 
-impl Default for IndefiniteOptions {
-    fn default() -> IndefiniteOptions {
-        IndefiniteOptions { threshold: 0.01 }
+impl Default for LdltOptions {
+    fn default() -> LdltOptions {
+        LdltOptions { threshold: 0.01 }
     }
 }
 
@@ -40,8 +42,8 @@ struct Front<T> {
 }
 
 /// A sparse symmetric (Hermitian) indefinite factorization `P A Pᵀ = Q L D Lᴴ Qᵀ` with threshold
-/// Bunch–Kaufman pivoting, from [`SymbolicCholesky::factor_indefinite`] or
-/// [`CsrMatrix::ldlt_indefinite`]. `P` is the analysis's fill-reducing ordering and `Q` the
+/// Bunch–Kaufman pivoting, from [`SymbolicCholesky::factor_ldlt`] or
+/// [`CsrMatrix::ldlt`]. `P` is the analysis's fill-reducing ordering and `Q` the
 /// pivoting's further permutation, `L` is unit lower triangular and `D` block diagonal with 1×1
 /// and 2×2 blocks. It factors any nonsingular symmetric matrix, with no regularization, and gives
 /// its inertia.
@@ -71,9 +73,9 @@ struct Front<T> {
 /// - J. W. H. Liu, "The multifrontal method for sparse matrix solution: theory and practice,"
 ///   *SIAM Rev.* 34(1):82–109, 1992, doi:10.1137/1034004.
 ///
-/// [`DenseLdlt`]: super::DenseLdlt
+/// [`DenseLdlt`]: super::experimental::DenseLdlt
 #[derive(Clone, Debug)]
-pub struct IndefiniteLdlt<T: Scalar = f64> {
+pub struct Ldlt<T: Scalar = f64> {
     n: usize,
     /// Row `i` of `P A Pᵀ` is row `perm[i]` of `A`
     perm: Vec<usize>,
@@ -133,23 +135,23 @@ fn supernodes(symbolic: &SymbolicCholesky) -> Vec<(usize, usize, Vec<usize>)> {
 impl SymbolicCholesky {
     /// Factors `matrix`, which must have the analyzed pattern and be symmetric (for a complex
     /// element type, Hermitian), as `P A Pᵀ = Q L D Lᴴ Qᵀ` with threshold Bunch–Kaufman pivoting
-    /// on the multifrontal method (see [`IndefiniteLdlt`]). The analysis's ordering and
+    /// on the multifrontal method (see [`Ldlt`]). The analysis's ordering and
     /// elimination tree are used as they are; pivoting only reorders within and between fronts.
     ///
-    /// This builds a [`SymbolicIndefinite`] on each call. To factor several matrices with the
-    /// same pattern, build one once and use [`SymbolicIndefinite::factor`], whose results are
+    /// This builds a [`SymbolicLdlt`] on each call. To factor several matrices with the
+    /// same pattern, build one once and use [`SymbolicLdlt::factor`], whose results are
     /// the same bit for bit.
     ///
     /// Returns `SparseError::PatternMismatch` if `matrix`'s shape or pattern differs from the
     /// analyzed one, `SparseError::NotSymmetric` if `A ≠ Aᴴ`, and `SparseError::SingularMatrix`
     /// naming a row of `A` where no pivot could be found, the matrix being singular to working
     /// precision. Panics if `options.threshold` is outside `(0, 0.5]`.
-    pub fn factor_indefinite<T: Scalar + ComplexFloat>(
+    pub fn factor_ldlt<T: Scalar + ComplexFloat>(
         &self,
         matrix: &CsrMatrix<T>,
-        options: IndefiniteOptions,
-    ) -> Result<IndefiniteLdlt<T>, SparseError> {
-        SymbolicIndefinite::new(self.clone()).factor(matrix, options)
+        options: LdltOptions,
+    ) -> Result<Ldlt<T>, SparseError> {
+        SymbolicLdlt::new(self.clone()).factor(matrix, options)
     }
 }
 
@@ -163,7 +165,7 @@ struct Supernode {
     parent: Option<usize>,
 }
 
-/// The symbolic analysis for [`IndefiniteLdlt`]: the Cholesky analysis ([`SymbolicCholesky`]:
+/// The symbolic analysis for [`Ldlt`]: the Cholesky analysis ([`SymbolicCholesky`]:
 /// the ordering, the elimination tree and L's pattern), with what the multifrontal factorization
 /// needs of the pattern, worked out once rather than at every factorization:
 ///
@@ -176,10 +178,10 @@ struct Supernode {
 ///
 /// Together these were 7.5–11.7% of the factorization's time when they were redone each time
 /// (`docs/benchmarks/ipm-profile-2026-11-08.md`). Build it with
-/// [`CsrMatrix::analyze_indefinite`] or from a Cholesky analysis with
-/// [`SymbolicIndefinite::new`], and factor with [`SymbolicIndefinite::factor`].
+/// [`CsrMatrix::analyze_ldlt`] or from a Cholesky analysis with
+/// [`SymbolicLdlt::new`], and factor with [`SymbolicLdlt::factor`].
 #[derive(Clone, Debug)]
-pub struct SymbolicIndefinite {
+pub struct SymbolicLdlt {
     cholesky: SymbolicCholesky,
     nodes: Vec<Supernode>,
     /// `P A Pᵀ`'s pattern in CSR form
@@ -192,7 +194,7 @@ pub struct SymbolicIndefinite {
     mirror: Vec<usize>,
 }
 
-/// How [`SymbolicIndefinite`] merges supernodes into larger fronts (relaxed amalgamation,
+/// How [`SymbolicLdlt`] merges supernodes into larger fronts (relaxed amalgamation,
 /// Ashcraft and Grimes, "The influence of relaxed supernode partitions on the multifrontal
 /// method," *ACM Trans. Math. Softw.* 15(4):291–309, 1989, doi:10.1145/76909.76910).
 ///
@@ -331,12 +333,12 @@ fn amalgamate(nodes: Vec<Supernode>, amalgamation: Amalgamation) -> Vec<Supernod
     merged
 }
 
-impl SymbolicIndefinite {
+impl SymbolicLdlt {
     /// The analysis for the multifrontal LDLᵀ on `cholesky`'s ordering, elimination tree and
     /// pattern, with the default relaxed amalgamation ([`Amalgamation::default`]): the
     /// ordering is postordered and small supernodes merged.
-    pub fn new(cholesky: SymbolicCholesky) -> SymbolicIndefinite {
-        SymbolicIndefinite::with_amalgamation(cholesky, Amalgamation::default())
+    pub fn new(cholesky: SymbolicCholesky) -> SymbolicLdlt {
+        SymbolicLdlt::with_amalgamation(cholesky, Amalgamation::default())
     }
 
     /// The analysis with the given amalgamation. With [`Amalgamation::NONE`] the fronts are the
@@ -347,7 +349,7 @@ impl SymbolicIndefinite {
     pub fn with_amalgamation(
         cholesky: SymbolicCholesky,
         amalgamation: Amalgamation,
-    ) -> SymbolicIndefinite {
+    ) -> SymbolicLdlt {
         let cholesky = if amalgamation == Amalgamation::NONE {
             cholesky
         } else {
@@ -393,7 +395,7 @@ impl SymbolicIndefinite {
                 }
             }
         }
-        SymbolicIndefinite {
+        SymbolicLdlt {
             cholesky,
             nodes,
             c_ptr,
@@ -423,7 +425,7 @@ impl SymbolicIndefinite {
 
     /// Factors `matrix`, which must have the analyzed pattern and be symmetric (for a complex
     /// element type, Hermitian), as `P A Pᵀ = Q L D Lᴴ Qᵀ` with threshold Bunch–Kaufman pivoting
-    /// on the multifrontal method (see [`IndefiniteLdlt`]), with the analysis's supernodes and
+    /// on the multifrontal method (see [`Ldlt`]), with the analysis's supernodes and
     /// maps.
     ///
     /// Returns `SparseError::PatternMismatch` if `matrix`'s shape or pattern differs from the
@@ -433,8 +435,8 @@ impl SymbolicIndefinite {
     pub fn factor<T: Scalar + ComplexFloat>(
         &self,
         matrix: &CsrMatrix<T>,
-        options: IndefiniteOptions,
-    ) -> Result<IndefiniteLdlt<T>, SparseError> {
+        options: LdltOptions,
+    ) -> Result<Ldlt<T>, SparseError> {
         let threshold = options.threshold;
         assert!(
             threshold > 0.0 && threshold <= 0.5,
@@ -573,7 +575,7 @@ impl SymbolicIndefinite {
                 blocks: factored.blocks,
             });
         }
-        Ok(IndefiniteLdlt {
+        Ok(Ldlt {
             n,
             perm: symbolic.perm.clone(),
             fronts,
@@ -583,17 +585,14 @@ impl SymbolicIndefinite {
 }
 
 impl<T: Scalar> CsrMatrix<T> {
-    /// Analyzes this matrix's pattern for the multifrontal LDLᵀ ([`IndefiniteLdlt`]) under
+    /// Analyzes this matrix's pattern for the multifrontal LDLᵀ ([`Ldlt`]) under
     /// `ordering`: `analyze_cholesky(ordering)`, with the supernodes and maps of
-    /// [`SymbolicIndefinite`].
+    /// [`SymbolicLdlt`].
     ///
     /// Returns `SparseError::NotSquare` for a non-square matrix, and
     /// `SparseError::UnsupportedOrdering` for `Ordering::Colamd`.
-    pub fn analyze_indefinite(
-        &self,
-        ordering: Ordering,
-    ) -> Result<SymbolicIndefinite, SparseError> {
-        Ok(SymbolicIndefinite::new(self.analyze_cholesky(ordering)?))
+    pub fn analyze_ldlt(&self, ordering: Ordering) -> Result<SymbolicLdlt, SparseError> {
+        Ok(SymbolicLdlt::new(self.analyze_cholesky(ordering)?))
     }
 }
 
@@ -601,18 +600,18 @@ impl<T: Scalar + ComplexFloat> CsrMatrix<T> {
     /// Factors a symmetric (for a complex element type, Hermitian) matrix as
     /// `P A Pᵀ = Q L D Lᴴ Qᵀ` with threshold Bunch–Kaufman pivoting, ordered by approximate
     /// minimum degree, with the default options: `analyze_cholesky(Ordering::Amd)` followed by
-    /// [`factor_indefinite`](SymbolicCholesky::factor_indefinite). Analyze once to factor
+    /// [`factor_ldlt`](SymbolicCholesky::factor_ldlt). Analyze once to factor
     /// several matrices with the same pattern.
     ///
     /// Returns `SparseError::NotSquare`, `SparseError::NotSymmetric`, or
     /// `SparseError::SingularMatrix`.
-    pub fn ldlt_indefinite(&self) -> Result<IndefiniteLdlt<T>, SparseError> {
-        self.analyze_indefinite(Ordering::Amd)?
-            .factor(self, IndefiniteOptions::default())
+    pub fn ldlt(&self) -> Result<Ldlt<T>, SparseError> {
+        self.analyze_ldlt(Ordering::Amd)?
+            .factor(self, LdltOptions::default())
     }
 }
 
-impl<T: Scalar + ComplexFloat> IndefiniteLdlt<T> {
+impl<T: Scalar + ComplexFloat> Ldlt<T> {
     /// `A`'s inertia, from `D`'s blocks (Sylvester's law of inertia). `A` is nonsingular, since
     /// a missing pivot fails the factorization.
     pub fn inertia(&self) -> Inertia {
@@ -659,43 +658,10 @@ impl<T: Scalar + ComplexFloat> IndefiniteLdlt<T> {
         &self.perm
     }
 
-    /// Solves `A x = b`. Returns `SparseError::ShapeMismatch` unless `b` has one entry per row
-    /// of `A`.
-    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
-        self.check_rhs(b.len())?;
-        let mut y: Vec<T> = self.perm.iter().map(|&row| b[row]).collect();
-        self.substitute(&mut y);
-        let mut x = vec![T::zero(); self.n];
-        for (&row, &value) in self.perm.iter().zip(&y) {
-            x[row] = value;
-        }
-        Ok(x)
-    }
-
-    /// Solves `A x = b` for each right-hand side in `rhs`, each bit for bit what `solve` gives.
-    /// Returns `SparseError::ShapeMismatch` naming the first right-hand side of the wrong length.
-    pub fn solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
-        for b in rhs {
-            self.check_rhs(b.len())?;
-        }
-        rhs.iter().map(|b| self.solve(b)).collect()
-    }
-
-    fn check_rhs(&self, len: usize) -> Result<(), SparseError> {
-        if len == self.n {
-            Ok(())
-        } else {
-            Err(SparseError::ShapeMismatch {
-                left: (self.n, self.n),
-                right: (len, 1),
-            })
-        }
-    }
-
     /// Overwrites `y`, in `P A Pᵀ`'s numbering, with the solution of `P A Pᵀ y' = y`: forward
     /// substitution front by front in elimination order, `D`'s blocks, then back substitution in
     /// reverse
-    fn substitute(&self, y: &mut [T]) {
+    fn substitute_permuted(&self, y: &mut [T]) {
         for front in &self.fronts {
             let m = front.vars.len();
             for j in 0..front.eliminated {
@@ -739,17 +705,21 @@ impl<T: Scalar + ComplexFloat> IndefiniteLdlt<T> {
     }
 }
 
-#[cfg(feature = "rayon")]
-impl<T: Scalar + ComplexFloat + Send + Sync> IndefiniteLdlt<T> {
-    /// [`IndefiniteLdlt::solve_many`] with the right-hand sides solved in parallel (feature
-    /// `rayon`), each by one thread with exactly `solve`'s operations, so the results are bit for
-    /// bit `solve_many`'s. Returns `SparseError::ShapeMismatch` as `solve_many` does, before
-    /// solving any.
-    pub fn par_solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
-        use rayon::prelude::*;
-        for b in rhs {
-            self.check_rhs(b.len())?;
+impl<T: Scalar + ComplexFloat> Factorization<T> for Ldlt<T> {
+    fn dim(&self) -> usize {
+        self.n
+    }
+}
+
+impl<T: Scalar + ComplexFloat> Substitute<T> for Ldlt<T> {
+    /// `P b` into `scratch`, the substitution there in `P A Pᵀ`'s numbering, and the result
+    /// back through `P`
+    fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
+        scratch.clear();
+        scratch.extend(self.perm.iter().map(|&row| x[row]));
+        self.substitute_permuted(scratch);
+        for (&row, &value) in self.perm.iter().zip(scratch.iter()) {
+            x[row] = value;
         }
-        rhs.par_iter().map(|b| self.solve(b)).collect()
     }
 }

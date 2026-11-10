@@ -12,13 +12,12 @@ use common::{
     dense, known, qp4_constraints, qp4_hessian, references, Banana, Hs71, Nonlinear2, Nonlinear3,
     Quadratic3,
 };
-use interior_point::mehrotra::{
-    mehrotra, qps_mehrotra, MehrotraOptions, MehrotraSolution, MehrotraStatus,
-};
+use interior_point::mehrotra::{mehrotra, qps_mehrotra, MehrotraOptions};
 use interior_point::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
 };
 use interior_point::solution::kkt_residuals;
+use interior_point::solution::{Solution, Status};
 use sparse_mat::compressed_matrix::CsrMatrix;
 
 /// The bar for the objective, relative to the larger magnitude (at least 1)
@@ -68,12 +67,7 @@ fn close_within(ours: &[f64], theirs: &[f64], tolerance: f64, what: &str) -> f64
 
 /// Checks a converged solution against MATPOWER's MIPS run of the same problem (without step
 /// control), and its KKT residuals; prints the iterations against MIPS's
-fn check<P: Problem>(
-    name: &str,
-    problem: &P,
-    constraints: &Constraints,
-    solution: &MehrotraSolution,
-) {
+fn check<P: Problem>(name: &str, problem: &P, constraints: &Constraints, solution: &Solution) {
     let runs = references();
     let reference = &runs[&(name.to_string(), false)];
     let field = |key: &str| reference.0.get(key);
@@ -134,11 +128,11 @@ fn check<P: Problem>(
 fn unconstrained_problems_match_mips() {
     let options = MehrotraOptions::default();
     let none = Constraints::default();
-    let s = mehrotra(&Banana, &[-1.9, 2.0], &none, &options).unwrap();
+    let s = mehrotra(&Banana, &none, &[-1.9, 2.0], &options).unwrap();
     check("banana", &Banana, &none, &s);
     known(&s.x, &[1.0, 1.0], 13, "banana x");
 
-    let s = mehrotra(&Quadratic3, &[0.0; 3], &none, &options).unwrap();
+    let s = mehrotra(&Quadratic3, &none, &[0.0; 3], &options).unwrap();
     check("quadratic3", &Quadratic3, &none, &s);
     known(&s.x, &[3.0, 5.0, 7.0], 13, "quadratic3 x");
     known(&[s.f], &[-244.0], 13, "quadratic3 f");
@@ -152,8 +146,8 @@ fn a_linearly_constrained_qp_matches_mips() {
     };
     let s = mehrotra(
         &qp,
-        &[1.0, 0.0, 0.0, 1.0],
         &qp4_constraints(),
+        &[1.0, 0.0, 0.0, 1.0],
         &MehrotraOptions::default(),
     )
     .unwrap();
@@ -338,13 +332,13 @@ fn nonlinear_programs_match_mips() {
         xmin: Some(vec![0.0; 2]),
         ..Constraints::default()
     };
-    let s = mehrotra(&Nonlinear2, &[1.1, 0.0], &bounds, &options).unwrap();
+    let s = mehrotra(&Nonlinear2, &bounds, &[1.1, 0.0], &options).unwrap();
     check("nonlinear2", &Nonlinear2, &bounds, &s);
     known(&s.x, &[1.0, 1.0], 6, "nonlinear2 x");
     known(&s.multipliers.ineq_nonlin, &[0.0, 0.5], 6, "nonlinear2 mu");
 
     let none = Constraints::default();
-    let s = mehrotra(&Nonlinear3, &[1.0, 1.0, 0.0], &none, &options).unwrap();
+    let s = mehrotra(&Nonlinear3, &none, &[1.0, 1.0, 0.0], &options).unwrap();
     check("nonlinear3", &Nonlinear3, &none, &s);
     known(
         &s.x,
@@ -360,7 +354,7 @@ fn nonlinear_programs_match_mips() {
         "nonlinear3 mu",
     );
 
-    let s = mehrotra(&Hs71, &[1.0, 5.0, 5.0, 1.0], &hs71_bounds(), &options).unwrap();
+    let s = mehrotra(&Hs71, &hs71_bounds(), &[1.0, 5.0, 5.0, 1.0], &options).unwrap();
     check("hs71", &Hs71, &hs71_bounds(), &s);
     known(&s.x, &[1.0, 4.7429994, 3.8211503, 1.3794082], 6, "hs71 x");
     known(&[s.f], &[17.0140173], 6, "hs71 f");
@@ -376,18 +370,14 @@ fn nonlinear_programs_match_mips() {
 
 /// What this method does on hs71 from each other start (2026-11-07), pinned as the iteration
 /// counts are: the status, the iterations, and which known optimum it reached
-fn expected_hs71(label: &str) -> (MehrotraStatus, usize, Option<&'static str>) {
+fn expected_hs71(label: &str) -> (Status, usize, Option<&'static str>) {
     match label {
         // MIPS without step control stops at the local point (11 iterations)
-        "4.5" => (MehrotraStatus::Converged, 11, Some("the optimum")),
+        "4.5" => (Status::Converged, 11, Some("the optimum")),
         // MIPS reaches its iteration limit (150). With the damped corrector this method
         //   converges to a constrained local maximum (see HS71_OPTIMA); with the full one, it
         //   reached the optimum in 13
-        "2" => (
-            MehrotraStatus::Converged,
-            8,
-            Some("a constrained local maximum"),
-        ),
+        "2" => (Status::Converged, 8, Some("a constrained local maximum")),
         _ => unreachable!(),
     }
 }
@@ -396,7 +386,7 @@ fn expected_hs71(label: &str) -> (MehrotraStatus, usize, Option<&'static str>) {
 fn hs71_from_other_starts_reaches_a_known_kkt_point() {
     let options = MehrotraOptions::default();
     for (x0, label) in [([4.5; 4], "4.5"), ([2.0; 4], "2")] {
-        let s = mehrotra(&Hs71, &x0, &hs71_bounds(), &options).unwrap();
+        let s = mehrotra(&Hs71, &hs71_bounds(), &x0, &options).unwrap();
         let runs = references();
         let mips = &runs[&(format!("hs71_from_{label}"), false)];
         let optimum = if s.converged() {
@@ -443,10 +433,10 @@ fn hs71_from_other_starts_reaches_a_known_kkt_point() {
 fn the_cost_scale_comes_off_the_multipliers() {
     // The AC OPF solves with cost_mult 1e-4: the same point, objective and multipliers
     let x0 = [1.0, 5.0, 5.0, 1.0];
-    let plain = mehrotra(&Hs71, &x0, &hs71_bounds(), &MehrotraOptions::default()).unwrap();
+    let plain = mehrotra(&Hs71, &hs71_bounds(), &x0, &MehrotraOptions::default()).unwrap();
     let mut options = MehrotraOptions::default();
     options.cost_mult = 1e-2;
-    let scaled = mehrotra(&Hs71, &x0, &hs71_bounds(), &options).unwrap();
+    let scaled = mehrotra(&Hs71, &hs71_bounds(), &x0, &options).unwrap();
     assert!(scaled.converged(), "{:?}", scaled.status);
     let tolerance = 1e-6;
     close_within(&scaled.x, &plain.x, tolerance, "x");
@@ -497,7 +487,7 @@ fn a_nonlinear_equality_couples_the_steps_from_the_start() {
         xmax: Some(vec![2.0, f64::INFINITY]),
         ..Constraints::default()
     };
-    let s = mehrotra(&Parabola, &[1.5, 0.0], &bounds, &MehrotraOptions::default()).unwrap();
+    let s = mehrotra(&Parabola, &bounds, &[1.5, 0.0], &MehrotraOptions::default()).unwrap();
     eprintln!("parabola: {:?} after {} iterations", s.status, s.iterations);
     assert!(s.converged(), "{:?}", s.status);
     // Pinned (2026-11-07): with separate step lengths while the Hessian is zero, it takes 5

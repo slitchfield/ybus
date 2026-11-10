@@ -25,6 +25,7 @@ use sparse_mat::compressed_matrix::{
 };
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::sparse_matrix::SparseVector;
+use sparse_mat::Factorization;
 
 use crate::case::{BusType, Case};
 use crate::powerflow_error::PowerflowError;
@@ -258,6 +259,25 @@ pub struct DcSolution {
     pub solver: DcSolver,
 }
 
+/// Options for the DC power flow. `Default` gives MATPOWER's method, with B′ ordered by
+/// approximate minimum degree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DcOptions {
+    /// The fill-reducing ordering B′ is factored under (by Cholesky, or by the LU fallback):
+    /// [`Ordering::Amd`] by default. The others are for comparing orderings; every ordering
+    /// gives the same solution, to within rounding.
+    pub ordering: Ordering,
+}
+
+impl Default for DcOptions {
+    fn default() -> DcOptions {
+        DcOptions {
+            ordering: Ordering::Amd,
+        }
+    }
+}
+
 /// The factorization a DC power flow used for B′ (Bbus without the reference rows and
 /// columns).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,41 +307,26 @@ impl DcModel {
     /// `va_deg`, and the remaining angles solve `B′ θ = P′`, by Cholesky ordered by approximate
     /// minimum degree, or, if B′ isn't positive definite, by LU with the same ordering and
     /// threshold partial pivoting. Branch flows are
-    /// `(Bf θ + pfinj) · baseMVA`.
+    /// `(Bf θ + pfinj) · baseMVA`. B′ is ordered as `options` choose.
     ///
     /// Returns `PowerflowError::CaseMismatch` if `case`'s tables have different lengths from
     /// the model's case, and `SingularNetwork` if B′ is singular even though every bus reaches
     /// a reference, which takes reactances that cancel out.
-    pub fn solve(&self, case: &Case) -> Result<DcSolution, PowerflowError> {
-        self.solve_with_ordering(case, Ordering::Amd)
-    }
-
-    /// [`DcModel::solve`] with B′ factored (by Cholesky, or by the LU fallback) under `ordering`
-    /// instead of the default, approximate minimum degree, for comparing orderings. Returns the
-    /// errors of `solve`.
-    pub fn solve_with_ordering(
-        &self,
-        case: &Case,
-        ordering: Ordering,
-    ) -> Result<DcSolution, PowerflowError> {
+    pub fn solve(&self, case: &Case, options: &DcOptions) -> Result<DcSolution, PowerflowError> {
         // The case is checked before B′ is factored, as it always was
         self.topology.check_case(case)?;
-        self.study_with_ordering(ordering)?.solve(case)
+        self.study(options)?.solve(case)
     }
 
     /// Factors B′ once, for any number of solves and studies against it: Bbus over the PV and
-    /// PQ buses (MATPOWER's order), by Cholesky ordered by approximate minimum degree, or, if
-    /// B′ isn't positive definite, by LU with the same ordering and threshold partial pivoting.
+    /// PQ buses (MATPOWER's order), by Cholesky under the ordering `options` choose
+    /// (approximate minimum degree by default), or, if B′ isn't positive definite, by LU with
+    /// the same ordering and threshold partial pivoting.
     ///
     /// Returns `PowerflowError::SingularNetwork` if B′ is singular even though every bus
     /// reaches a reference, which takes reactances that cancel out.
-    pub fn study(&self) -> Result<DcStudy<'_>, PowerflowError> {
-        self.study_with_ordering(Ordering::Amd)
-    }
-
-    /// [`DcModel::study`] with B′ factored under `ordering` instead of approximate minimum
-    /// degree. Returns the errors of `study`.
-    pub fn study_with_ordering(&self, ordering: Ordering) -> Result<DcStudy<'_>, PowerflowError> {
+    pub fn study(&self, options: &DcOptions) -> Result<DcStudy<'_>, PowerflowError> {
+        let ordering = options.ordering;
         // dcpf's unknowns: θ[pv, pq], in MATPOWER's order
         let unknown = self.topology.pv_pq();
         if unknown.is_empty() {
@@ -620,10 +625,18 @@ impl DcStudy<'_> {
     }
 }
 
-/// Runs a DC power flow on `case`: [`DcModel::new`] followed by [`DcModel::solve`], with
-/// their errors.
+/// Runs a DC power flow on `case` with the default options; see [`dc_power_flow_with_options`].
 pub fn dc_power_flow(case: &Case) -> Result<DcSolution, PowerflowError> {
-    DcModel::new(case)?.solve(case)
+    dc_power_flow_with_options(case, &DcOptions::default())
+}
+
+/// Runs a DC power flow on `case` with `options`: [`DcModel::new`] followed by
+/// [`DcModel::solve`], with their errors.
+pub fn dc_power_flow_with_options(
+    case: &Case,
+    options: &DcOptions,
+) -> Result<DcSolution, PowerflowError> {
+    DcModel::new(case)?.solve(case, options)
 }
 
 /// Row `row` of `m` times `x`, summed from zero in the row's order, exactly as `mul_vec`

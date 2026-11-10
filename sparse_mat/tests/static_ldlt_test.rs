@@ -1,13 +1,15 @@
-// Tests for the static-pivot LDLᵀ factorization (SymbolicCholesky::factor_ldlt, CsrMatrix::ldlt):
-//   against the Cholesky on positive definite matrices, against a known D on matrices built as
-//   L₀ D₀ L₀ᵀ, on quasi-definite KKT-shaped matrices under every ordering, its inertia, a
-//   complex Hermitian matrix, and its errors; then the tools for solving with it on regularized
-//   matrices: refinement against the unregularized matrix (componentwise and normwise), pivot
-//   replacement (factor_ldlt_replacing) and symmetric scaling.
+// Tests for the static-pivot LDLᵀ factorization (SymbolicCholesky::factor_static_ldlt,
+//   CsrMatrix::ldlt_static): against the Cholesky on positive definite matrices, against a known D
+//   on matrices built as L₀ D₀ L₀ᵀ, on quasi-definite KKT-shaped matrices under every ordering, its
+//   inertia, a complex Hermitian matrix, and its errors; then the tools for solving with it on
+//   regularized matrices: refinement against the unregularized matrix (componentwise and normwise),
+//   pivot replacement (factor_static_ldlt_replacing) and symmetric scaling.
 
-use sparse_mat::compressed_matrix::{CsrMatrix, Inertia, Ordering, PivotReplacement};
+use sparse_mat::compressed_matrix::experimental::PivotReplacement;
+use sparse_mat::compressed_matrix::{CsrMatrix, Inertia, Ordering};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 
 /// Deterministic pseudo-random numbers (a linear congruential generator).
 struct Lcg(u64);
@@ -98,7 +100,7 @@ fn on_positive_definite_matrices_it_is_the_cholesky_scaled() {
         let a = random_spd(40, 10, seed);
         let symbolic = a.analyze_cholesky(Ordering::Amd).unwrap();
         let cholesky = symbolic.factor(&a).unwrap();
-        let ldlt = symbolic.factor_ldlt(&a).unwrap();
+        let ldlt = symbolic.factor_static_ldlt(&a).unwrap();
         assert_eq!(ldlt.permutation(), cholesky.permutation());
         assert_eq!(
             ldlt.inertia(),
@@ -170,7 +172,7 @@ fn a_known_factorization_is_recovered_with_its_inertia() {
         let ldlt = a
             .analyze_cholesky(Ordering::Natural)
             .unwrap()
-            .factor_ldlt(&a)
+            .factor_static_ldlt(&a)
             .unwrap();
         for (i, (&d, &expected)) in ldlt.d().iter().zip(&d0).enumerate() {
             assert!(
@@ -205,7 +207,7 @@ fn quasi_definite_matrices_factor_under_every_ordering() {
                 let ldlt = a
                     .analyze_cholesky(ordering)
                     .unwrap()
-                    .factor_ldlt(&a)
+                    .factor_static_ldlt(&a)
                     .unwrap_or_else(|e| panic!("seed {seed}, δ {delta}, {ordering:?}: {e}"));
                 assert_eq!(
                     ldlt.inertia(),
@@ -232,7 +234,7 @@ fn a_matrix_that_needs_pivoting_fails_until_regularized() {
     let swap = CsrMatrix::from_triplets(2, 2, vec![(0, 1, 1.0), (1, 0, 1.0)]).unwrap();
     let symbolic = swap.analyze_cholesky(Ordering::Natural).unwrap();
     assert_eq!(
-        symbolic.factor_ldlt(&swap).unwrap_err(),
+        symbolic.factor_static_ldlt(&swap).unwrap_err(),
         SparseError::SingularMatrix { pivot: 0 }
     );
     let delta = 1e-6;
@@ -242,7 +244,7 @@ fn a_matrix_that_needs_pivoting_fails_until_regularized() {
         vec![(0, 0, delta), (0, 1, 1.0), (1, 0, 1.0), (1, 1, -delta)],
     )
     .unwrap();
-    let ldlt = regularized.ldlt().unwrap();
+    let ldlt = regularized.ldlt_static().unwrap();
     assert_eq!(
         ldlt.inertia(),
         Inertia {
@@ -261,7 +263,7 @@ fn errors_match_the_choleskys() {
     let symbolic = a.analyze_cholesky(Ordering::Amd).unwrap();
     let other = random_spd(10, 40, 4);
     assert_eq!(
-        symbolic.factor_ldlt(&other).unwrap_err(),
+        symbolic.factor_static_ldlt(&other).unwrap_err(),
         SparseError::PatternMismatch
     );
     let unsymmetric = CsrMatrix::from_triplets(
@@ -270,8 +272,11 @@ fn errors_match_the_choleskys() {
         vec![(0, 0, 1.0), (0, 1, 2.0), (1, 0, 3.0), (1, 1, 1.0)],
     )
     .unwrap();
-    assert_eq!(unsymmetric.ldlt().unwrap_err(), SparseError::NotSymmetric);
-    let ldlt = a.ldlt().unwrap();
+    assert_eq!(
+        unsymmetric.ldlt_static().unwrap_err(),
+        SparseError::NotSymmetric
+    );
+    let ldlt = a.ldlt_static().unwrap();
     assert!(matches!(
         ldlt.solve(&[1.0; 9]),
         Err(SparseError::ShapeMismatch { .. })
@@ -296,7 +301,7 @@ fn a_hermitian_indefinite_matrix_factors() {
     let ldlt = a
         .analyze_cholesky(Ordering::Natural)
         .unwrap()
-        .factor_ldlt(&a)
+        .factor_static_ldlt(&a)
         .unwrap();
     assert_eq!(
         ldlt.inertia(),
@@ -318,7 +323,7 @@ fn a_hermitian_indefinite_matrix_factors() {
 #[test]
 fn solve_many_is_solve_bit_for_bit() {
     let a = quasi_definite(30, 10, 1e-6, 7);
-    let ldlt = a.ldlt().unwrap();
+    let ldlt = a.ldlt_static().unwrap();
     let rhs: Vec<Vec<f64>> = (0..5).map(|s| right_hand_side(40, s)).collect();
     let many = ldlt.solve_many(&rhs).unwrap();
     for (b, x) in rhs.iter().zip(&many) {
@@ -365,7 +370,7 @@ fn a_larger_hermitian_quasi_definite_matrix_factors() {
         let ldlt = a
             .analyze_cholesky(ordering)
             .unwrap()
-            .factor_ldlt(&a)
+            .factor_static_ldlt(&a)
             .unwrap();
         assert_eq!(
             ldlt.inertia(),
@@ -405,7 +410,7 @@ fn refinement_against_the_unregularized_matrix_recovers_its_solution() {
     };
     for delta in [1e-8, 1e-6, 1e-4] {
         let regularized = quasi_definite(n, m, delta, 41);
-        let ldlt = regularized.ldlt().unwrap();
+        let ldlt = regularized.ldlt_static().unwrap();
         let first = ldlt.solve_refined(&exact, &b, 0).unwrap();
         let refined = ldlt.solve_refined(&exact, &b, 10).unwrap();
         eprintln!(
@@ -431,7 +436,7 @@ fn refinement_against_the_unregularized_matrix_recovers_its_solution() {
         assert!(distance(&own.x) > 0.1 * delta, "{:e}", distance(&own.x));
     }
     // Shapes are checked
-    let ldlt = quasi_definite(n, m, 1e-6, 41).ldlt().unwrap();
+    let ldlt = quasi_definite(n, m, 1e-6, 41).ldlt_static().unwrap();
     assert!(matches!(
         ldlt.solve_refined(&exact, &b[..n], 3),
         Err(SparseError::ShapeMismatch { .. })
@@ -451,7 +456,7 @@ fn normwise_refinement_reaches_its_tolerance_against_the_unregularized_matrix() 
     let exact = quasi_definite(n, m, 0.0, 41);
     let b = right_hand_side(n + m, 42);
     for delta in [1e-8, 1e-6, 1e-4] {
-        let ldlt = quasi_definite(n, m, delta, 41).ldlt().unwrap();
+        let ldlt = quasi_definite(n, m, delta, 41).ldlt_static().unwrap();
         let first = ldlt.solve_refined_normwise(&exact, &b, 0, 0.0).unwrap();
         assert_eq!(first.x, ldlt.solve(&b).unwrap());
         assert_eq!(
@@ -484,7 +489,7 @@ fn normwise_refinement_reaches_its_tolerance_against_the_unregularized_matrix() 
     //   last (x = 4, then −8)
     let far = CsrMatrix::from_triplets(1, 1, vec![(0, 0, 0.25)])
         .unwrap()
-        .ldlt()
+        .ldlt_static()
         .unwrap();
     let one = CsrMatrix::from_triplets(1, 1, vec![(0, 0, 1.0)]).unwrap();
     let diverged = far.solve_refined_normwise(&one, &[1.0], 5, 0.0).unwrap();
@@ -492,7 +497,7 @@ fn normwise_refinement_reaches_its_tolerance_against_the_unregularized_matrix() 
         (diverged.x, diverged.steps, diverged.relative_residual),
         (vec![4.0], 0, 3.0)
     );
-    let ldlt = quasi_definite(n, m, 1e-6, 41).ldlt().unwrap();
+    let ldlt = quasi_definite(n, m, 1e-6, 41).ldlt_static().unwrap();
     assert!(matches!(
         ldlt.solve_refined_normwise(&exact, &b[..n], 3, 1e-14),
         Err(SparseError::ShapeMismatch { .. })
@@ -511,7 +516,9 @@ fn replaced_pivots_take_the_expected_sign_and_refinement_recovers_the_solution()
         threshold: 1e-13,
         value: 1e-6,
     };
-    let ldlt = symbolic.factor_ldlt_replacing(&swap, &replacement).unwrap();
+    let ldlt = symbolic
+        .factor_static_ldlt_replacing(&swap, &replacement)
+        .unwrap();
     assert_eq!(ldlt.replaced(), 1);
     assert_eq!(ldlt.d(), &[1e-6, -1e6]);
     assert_eq!(
@@ -536,10 +543,12 @@ fn replaced_pivots_take_the_expected_sign_and_refinement_recovers_the_solution()
         positive: &[false, true],
         ..replacement
     };
-    let ldlt = symbolic.factor_ldlt_replacing(&swap, &flipped).unwrap();
+    let ldlt = symbolic
+        .factor_static_ldlt_replacing(&swap, &flipped)
+        .unwrap();
     assert_eq!(ldlt.d(), &[-1e-6, 1e6]);
 
-    // Without replacement, factor_ldlt is unchanged, and counts none
+    // Without replacement, factor_static_ldlt is unchanged, and counts none
     let plain = quasi_definite(30, 10, 1e-6, 5);
     let symbolic = plain.analyze_cholesky(Ordering::Amd).unwrap();
     let positive: Vec<bool> = (0..40).map(|i| i < 30).collect();
@@ -549,8 +558,10 @@ fn replaced_pivots_take_the_expected_sign_and_refinement_recovers_the_solution()
         value: 1e-6,
     };
     let (a, b) = (
-        symbolic.factor_ldlt(&plain).unwrap(),
-        symbolic.factor_ldlt_replacing(&plain, &none_small).unwrap(),
+        symbolic.factor_static_ldlt(&plain).unwrap(),
+        symbolic
+            .factor_static_ldlt_replacing(&plain, &none_small)
+            .unwrap(),
     );
     assert_eq!((a.replaced(), b.replaced()), (0, 0));
     assert_eq!(a.d(), b.d());
@@ -563,7 +574,9 @@ fn replaced_pivots_take_the_expected_sign_and_refinement_recovers_the_solution()
         positive: &all_positive,
         ..none_small
     };
-    let ldlt = symbolic.factor_ldlt_replacing(&plain, &unexpected).unwrap();
+    let ldlt = symbolic
+        .factor_static_ldlt_replacing(&plain, &unexpected)
+        .unwrap();
     assert_eq!(ldlt.replaced(), 0);
     assert_eq!(
         ldlt.inertia(),
@@ -575,7 +588,7 @@ fn replaced_pivots_take_the_expected_sign_and_refinement_recovers_the_solution()
 
     // Errors: one sign per row, and a NaN still fails
     assert!(matches!(
-        symbolic.factor_ldlt_replacing(
+        symbolic.factor_static_ldlt_replacing(
             &plain,
             &PivotReplacement {
                 positive: &[true],
@@ -588,7 +601,7 @@ fn replaced_pivots_take_the_expected_sign_and_refinement_recovers_the_solution()
     let nan_symbolic = nan.analyze_cholesky(Ordering::Natural);
     if let Ok(nan_symbolic) = nan_symbolic {
         assert!(matches!(
-            nan_symbolic.factor_ldlt_replacing(
+            nan_symbolic.factor_static_ldlt_replacing(
                 &nan,
                 &PivotReplacement {
                     positive: &[true],
@@ -657,7 +670,7 @@ fn symmetric_scaling_equilibrates_and_keeps_the_solution() {
     // Solving the scaled system and unscaling gives the original's solution
     let b = right_hand_side(n + m, 29);
     let sb: Vec<f64> = b.iter().zip(&s).map(|(b, s)| b * s).collect();
-    let y = scaled.ldlt().unwrap().solve(&sb).unwrap();
+    let y = scaled.ldlt_static().unwrap().solve(&sb).unwrap();
     let x: Vec<f64> = y.iter().zip(&s).map(|(y, s)| y * s).collect();
     let reference = skewed.to_csc().lu().unwrap().solve(&b).unwrap();
     let worst = x.iter().zip(&reference).fold(0.0f64, |w, (x, r)| {

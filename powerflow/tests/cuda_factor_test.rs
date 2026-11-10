@@ -12,6 +12,7 @@ use powerflow::case::Case;
 use powerflow::dc::DcModel;
 use sparse_mat::compressed_matrix::{CsrMatrix, LuOptions, Ordering};
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 use ybus_cuda::{Gpu, GpuFactor};
 
 const CASES: &[&str] = &["case14", "case118", "case2383wp"];

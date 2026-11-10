@@ -1,6 +1,7 @@
 // Tests for the DC model (Bbus assembly): matrices, phase-shifter injections, which elements
 //   are dropped, bus roles and the errors. Expected values are worked out by hand.
 
+use sparse_mat::Factorization;
 mod common;
 use common::dc_fixture::{fixture, B, G, L};
 use powerflow::dc::DcModel;

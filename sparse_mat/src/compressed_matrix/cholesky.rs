@@ -8,6 +8,8 @@ use super::ordering::Adjacency;
 use num_complex::ComplexFloat;
 use num_traits::{Float, NumCast};
 
+use super::factorization::sealed::Substitute;
+use super::factorization::Factorization;
 use super::properties::magnitude_squared;
 use super::solvers::{reach_into, SparseSolveWorkspace};
 use super::{CompressedMatrix, CsrMatrix, Ordering};
@@ -327,45 +329,6 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
         &self.perm
     }
 
-    /// Solves `A x = b`: permutes `b`, substitutes forward with `L` and back with `Lᴴ`, and
-    /// permutes the result back. Returns `SparseError::ShapeMismatch` unless `b` has one entry
-    /// per row of `A`.
-    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
-        let mut x = b.to_vec();
-        self.solve_in_place(&mut x)?;
-        Ok(x)
-    }
-
-    /// Solves `A x = b`, overwriting `rhs` (which holds `b`) with `x`. It saves returning a new
-    /// vector, though permuting still uses one scratch vector of the same length. The result is
-    /// bit for bit `solve`'s. Returns `SparseError::ShapeMismatch`, leaving `rhs` untouched,
-    /// unless `rhs` has one entry per row of `A`.
-    pub fn solve_in_place(&self, rhs: &mut [T]) -> Result<(), SparseError> {
-        self.check_rhs(rhs.len())?;
-        let mut scratch = Vec::with_capacity(rhs.len());
-        self.substitute(rhs, &mut scratch);
-        Ok(())
-    }
-
-    /// Solves `A x = b` for each right-hand side `b` in `rhs`, returning the solutions in the
-    /// same order. One scratch vector serves them all, and each solution is bit for bit what
-    /// `solve` gives. Returns `SparseError::ShapeMismatch` naming the first right-hand side
-    /// whose length isn't the number of rows of `A`.
-    pub fn solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
-        for b in rhs {
-            self.check_rhs(b.len())?;
-        }
-        let mut scratch = Vec::with_capacity(self.perm.len());
-        Ok(rhs
-            .iter()
-            .map(|b| {
-                let mut x = b.clone();
-                self.substitute(&mut x, &mut scratch);
-                x
-            })
-            .collect())
-    }
-
     /// Solves `L y = P b` for a sparse `b`, touching only the part of `L` the solve needs: the
     /// entries of `y` that can be nonzero are those reachable from `b`'s entries in the graph
     /// of `L` (Gilbert 1994), and only those are computed. `y`'s indices are positions in the
@@ -473,21 +436,6 @@ impl<T: Scalar + ComplexFloat> Cholesky<T> {
         }
     }
 
-    /// Overwrites `x` (holding `b`, already checked) with the solution: `P b` into `scratch`,
-    /// forward substitution with `L` and back substitution with `Lᴴ` by rows, in the order
-    /// `solve_lower_triangular` and `solve_upper_triangular` use, then back through `P`. The
-    /// factor's diagonal is positive, so there is no zero to divide by.
-    fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
-        scratch.clear();
-        scratch.extend(self.perm.iter().map(|&row| x[row]));
-        let y = scratch.as_mut_slice();
-        forward_by_rows(&self.l, y);
-        self.back_substitute(y);
-        for (&row, &value) in self.perm.iter().zip(y.iter()) {
-            x[row] = value;
-        }
-    }
-
     /// Overwrites `y` with `L⁻ᴴ y`: back substitution with `Lᴴ` by rows, in the order
     /// `solve_upper_triangular` uses.
     fn back_substitute(&self, y: &mut [T]) {
@@ -529,33 +477,6 @@ pub(super) fn back_by_rows<T: Scalar + ComplexFloat>(u: &CsrMatrix<T>, y: &mut [
             }
         }
         y[i] = remainder / diagonal;
-    }
-}
-
-#[cfg(feature = "rayon")]
-impl<T: Scalar + ComplexFloat + Send + Sync> Cholesky<T> {
-    /// [`Cholesky::solve_many`] with the right-hand sides solved in parallel (feature `rayon`).
-    /// Each is solved by one thread, with its own scratch vector and exactly the operations
-    /// `solve` uses, so the results are bit for bit `solve_many`'s, in the same order. Returns
-    /// `SparseError::ShapeMismatch` naming the first right-hand side whose length isn't the
-    /// number of rows of `A`, before solving any.
-    pub fn par_solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
-        use rayon::prelude::*;
-        for b in rhs {
-            self.check_rhs(b.len())?;
-        }
-        let n = self.perm.len();
-        Ok(rhs
-            .par_iter()
-            .map_init(
-                || Vec::with_capacity(n),
-                |scratch, b| {
-                    let mut x = b.clone();
-                    self.substitute(&mut x, scratch);
-                    x
-                },
-            )
-            .collect())
     }
 }
 
@@ -613,4 +534,27 @@ fn postorder(parent: &[Option<usize>]) -> Vec<usize> {
         }
     }
     order
+}
+
+impl<T: Scalar + ComplexFloat> Factorization<T> for Cholesky<T> {
+    fn dim(&self) -> usize {
+        self.perm.len()
+    }
+}
+
+impl<T: Scalar + ComplexFloat> Substitute<T> for Cholesky<T> {
+    /// Overwrites `x` (holding `b`, already checked) with the solution: `P b` into `scratch`,
+    /// forward substitution with `L` and back substitution with `Lᴴ` by rows, in the order
+    /// `solve_lower_triangular` and `solve_upper_triangular` use, then back through `P`. The
+    /// factor's diagonal is positive, so there is no zero to divide by.
+    fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
+        scratch.clear();
+        scratch.extend(self.perm.iter().map(|&row| x[row]));
+        let y = scratch.as_mut_slice();
+        forward_by_rows(&self.l, y);
+        self.back_substitute(y);
+        for (&row, &value) in self.perm.iter().zip(y.iter()) {
+            x[row] = value;
+        }
+    }
 }

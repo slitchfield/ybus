@@ -7,16 +7,19 @@
 //!   linear constraints and bounds.
 //! - [`mips`]: MIPS, the MATPOWER Interior Point Solver, reimplemented step for step from
 //!   MATPOWER's `mips.m`, so that its iterations and results can be checked against MATPOWER's.
-//! - [`solution`]: what the solvers' results share: the multipliers, and
-//!   [`solution::kkt_residuals`], a check of the KKT conditions at a point that doesn't depend
-//!   on the solver.
+//! - [`solution`]: the result both solvers return, a [`Solution`] with its [`Status`] and
+//!   multipliers, and [`solution::kkt_residuals`], a check of the KKT conditions at a point that
+//!   doesn't depend on the solver.
 //! - [`mehrotra`]: a primal-dual method with Mehrotra's predictor-corrector, written from the
 //!   literature, for the same programs.
 //! - [`kkt`]: how the solvers factor the KKT system, by LU (the default) or by LDLᵀ.
 //! - [`interior_point_error`]: why a solver couldn't start.
 //!
-//! The problem types and the error type are re-exported here: [`Problem`], [`QuadraticProblem`],
-//! [`Constraints`] and [`InteriorPointError`].
+//! The problem types, the result and the error type are re-exported here: [`Problem`],
+//! [`QuadraticProblem`], [`Constraints`], [`Solution`], [`Status`] and [`InteriorPointError`].
+//!
+//! Every solver takes its arguments in the same order: the problem, its `constraints`, the
+//! starting point `x0` and the options.
 //!
 //! The linear algebra is [`sparse_mat`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
 
@@ -34,3 +37,4 @@ mod vector;
 
 pub use interior_point_error::InteriorPointError;
 pub use problem::{Constraints, Problem, QuadraticProblem};
+pub use solution::{Solution, Status};

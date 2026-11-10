@@ -47,8 +47,8 @@ fn assert_solved(what: &str, x: &[f64], upper: &[f64]) {
 fn mips_reanalyzes_when_the_pattern_changes() {
     let s = mips(
         &ChangingPattern,
-        &[0.0, 0.0],
         &bounds(),
+        &[0.0, 0.0],
         &MipsOptions::default(),
     )
     .unwrap();
@@ -64,8 +64,8 @@ fn mips_reanalyzes_when_the_pattern_changes() {
 fn mehrotra_reanalyzes_when_the_pattern_changes() {
     let s = mehrotra(
         &ChangingPattern,
-        &[0.0, 0.0],
         &bounds(),
+        &[0.0, 0.0],
         &MehrotraOptions::default(),
     )
     .unwrap();

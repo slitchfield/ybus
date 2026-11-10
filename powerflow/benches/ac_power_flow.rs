@@ -24,6 +24,7 @@ use powerflow::ac::{AcMethod, AcModel, AcOptions};
 use powerflow::case::Case;
 use sparse_mat::compressed_matrix::{LuOptions, Ordering};
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 
 const CASE: &str = "case2383wp";
 
@@ -33,7 +34,7 @@ fn ac_power_flow(c: &mut Criterion) {
     };
     let case = Case::from_path(&path).unwrap();
     let model = AcModel::new(&case).unwrap();
-    let solution = model.solve(&case, AcOptions::default()).unwrap();
+    let solution = model.solve(&case, &AcOptions::default()).unwrap();
     // The converged voltages, in the model's internal order, for the Jacobian benchmark
     let v: Vec<Complex<f64>> = model
         .bus_rows()
@@ -52,7 +53,7 @@ fn ac_power_flow(c: &mut Criterion) {
     ] {
         let options = AcOptions::for_method(method);
         group.bench_function(name, |b| {
-            b.iter(|| model.solve(black_box(&case), options).unwrap())
+            b.iter(|| model.solve(black_box(&case), &options).unwrap())
         });
     }
     group.bench_function("jacobian", |b| b.iter(|| model.jacobian(black_box(&v))));

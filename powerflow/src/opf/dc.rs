@@ -28,14 +28,14 @@ use interior_point::kkt::KktFactorization;
 use interior_point::mehrotra::{qps_mehrotra, MehrotraOptions};
 use interior_point::mips::{qps_mips, MipsOptions};
 use interior_point::problem::{Constraints, QuadraticProblem};
-use interior_point::solution::{kkt_residuals, KktResiduals, Status};
+use interior_point::solution::{kkt_residuals, KktResiduals, Solution, Status};
 use sparse_mat::compressed_matrix::CsrMatrix;
 
 use crate::case::Case;
 use crate::dc::Bdc;
 use crate::opf::cost::OpfCosts;
 use crate::opf::{
-    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver, SolverResult,
+    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver,
 };
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Network;
@@ -118,7 +118,7 @@ pub struct DcOpfSolution {
     pub residuals: KktResiduals,
     /// The solver's own result, on the model's variables `[Va, Pg, y]` and constraints, with
     /// each iteration's record
-    pub solver: SolverResult,
+    pub solver: Solution,
 }
 
 impl DcOpfSolution {
@@ -252,19 +252,17 @@ pub fn dc_opf_with_options(
     let qp = QuadraticProblem { h, c };
     let refused = |error| PowerflowError::Solver { error };
     let solution = match &options.solver {
-        OpfSolver::Mips(mips) => {
-            SolverResult::Mips(qps_mips(&qp, &constraints, Some(&x0), mips).map_err(refused)?)
+        OpfSolver::Mips(mips) => qps_mips(&qp, &constraints, Some(&x0), mips).map_err(refused)?,
+        OpfSolver::Mehrotra(mehrotra) => {
+            qps_mehrotra(&qp, &constraints, Some(&x0), mehrotra).map_err(refused)?
         }
-        OpfSolver::Mehrotra(mehrotra) => SolverResult::Mehrotra(
-            qps_mehrotra(&qp, &constraints, Some(&x0), mehrotra).map_err(refused)?,
-        ),
     };
-    let residuals = kkt_residuals(&qp, &constraints, solution.x(), solution.multipliers())
+    let residuals = kkt_residuals(&qp, &constraints, &solution.x, &solution.multipliers)
         .expect("the solver's multipliers fit its problem");
 
     // The results, back on the case's tables
-    let x = solution.x();
-    let multipliers = solution.multipliers();
+    let x = &solution.x;
+    let multipliers = &solution.multipliers;
     let mut va_deg: Vec<f64> = case.bus.iter().map(|bus| bus.va_deg).collect();
     let mut lam_p = vec![0.0; case.bus.len()];
     for (i, &row) in network.bus_rows.iter().enumerate() {
@@ -309,9 +307,9 @@ pub fn dc_opf_with_options(
         mu_st,
         mu_angmin,
         mu_angmax,
-        objective: solution.f() + constant,
-        status: solution.status(),
-        iterations: solution.iterations(),
+        objective: solution.f + constant,
+        status: solution.status,
+        iterations: solution.iterations,
         residuals,
         solver: solution,
     })

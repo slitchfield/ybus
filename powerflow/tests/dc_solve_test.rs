@@ -6,7 +6,7 @@
 mod common;
 use common::dc_fixture::{assert_physical, fixture, B, G, L};
 use powerflow::case::Case;
-use powerflow::dc::{dc_power_flow, DcModel, DcSolution, DcSolver};
+use powerflow::dc::{dc_power_flow, DcModel, DcOptions, DcSolution, DcSolver};
 use powerflow::powerflow_error::PowerflowError;
 
 use std::f64::consts::PI;
@@ -253,10 +253,13 @@ fn a_model_solves_new_injections() {
     changed.bus[1].pd_mw = 70.0;
     changed.generator[0].pg_mw = 0.0;
     assert_eq!(
-        model.solve(&changed).unwrap(),
+        model.solve(&changed, &DcOptions::default()).unwrap(),
         dc_power_flow(&changed).unwrap()
     );
-    assert_eq!(model.solve(&base).unwrap(), dc_power_flow(&base).unwrap());
+    assert_eq!(
+        model.solve(&base, &DcOptions::default()).unwrap(),
+        dc_power_flow(&base).unwrap()
+    );
 }
 
 #[test]
@@ -272,7 +275,7 @@ fn a_study_keeps_the_factorization_for_any_number_of_solves() {
     ] {
         let base = case(&tables);
         let model = DcModel::new(&base).unwrap();
-        let study = model.study().unwrap();
+        let study = model.study(&DcOptions::default()).unwrap();
         assert_eq!(study.solver(), solver);
         let mut changed = base.clone();
         changed.bus[0].pd_mw += 25.0;
@@ -280,7 +283,7 @@ fn a_study_keeps_the_factorization_for_any_number_of_solves() {
         for injections in [&base, &changed, &base] {
             assert_eq!(
                 study.solve(injections).unwrap(),
-                model.solve(injections).unwrap()
+                model.solve(injections, &DcOptions::default()).unwrap()
             );
         }
     }
@@ -304,7 +307,7 @@ fn a_study_finds_a_singular_network_without_a_case() {
     );
     let model = DcModel::new(&case(&tables)).unwrap();
     assert_eq!(
-        model.study().unwrap_err(),
+        model.study(&DcOptions::default()).unwrap_err(),
         PowerflowError::SingularNetwork { bus_label: 3 }
     );
 }
@@ -315,7 +318,9 @@ fn a_model_rejects_a_different_case() {
     let mut other = triangle();
     other.1.push(G(2, 1.0, true));
     assert_eq!(
-        model.solve(&case(&other)).unwrap_err(),
+        model
+            .solve(&case(&other), &DcOptions::default())
+            .unwrap_err(),
         PowerflowError::CaseMismatch {
             expected: (3, 1, 3),
             found: (3, 2, 3)

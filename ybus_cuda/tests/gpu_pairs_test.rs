@@ -7,6 +7,7 @@ mod common;
 
 use common::{gpu, random_spd, random_square, Lcg};
 use sparse_mat::compressed_matrix::{Cholesky, CsrMatrix, Lu};
+use sparse_mat::Factorization;
 use ybus_cuda::{ColumnMax, GpuFactor, Pair, PairUpdate};
 
 const BAR: f64 = 1e-12;

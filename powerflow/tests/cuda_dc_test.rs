@@ -11,7 +11,7 @@ mod common;
 use common::dc_fixture::{fixture, B, G, L};
 
 use powerflow::case::{BusType, Case};
-use powerflow::dc::{DcModel, DcSolution, DcSolver, OutageLoading, PtdfSlack};
+use powerflow::dc::{DcModel, DcOptions, DcSolution, DcSolver, OutageLoading, PtdfSlack};
 use powerflow::powerflow_error::PowerflowError;
 use powerflow::Gpu;
 
@@ -82,7 +82,7 @@ fn batched_solves_match_the_cpu() {
         };
         let case = Case::from_path(&path).unwrap();
         let model = DcModel::new(&case).unwrap();
-        let study = model.study().unwrap();
+        let study = model.study(&DcOptions::default()).unwrap();
         assert_eq!(study.solver(), solver, "{name}");
         let variants: Vec<Case> = (0..7)
             .map(|i| scaled(&case, 0.7 + 0.1 * i as f64))
@@ -140,7 +140,7 @@ fn a_network_of_reference_buses_needs_no_gpu_solve() {
         .collect();
     case.gencost = None;
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     assert_eq!(study.solver(), DcSolver::NoSolve);
     let mut on_gpu = study.gpu(&gpu).unwrap();
     assert_eq!(on_gpu.block_width(), 0);
@@ -184,7 +184,7 @@ fn ptdf_columns_and_transfers_match_the_cpu() {
         };
         let case = Case::from_path(&path).unwrap();
         let model = DcModel::new(&case).unwrap();
-        let study = model.study().unwrap();
+        let study = model.study(&DcOptions::default()).unwrap();
         let nbus = case.bus.len();
         let all: Vec<usize> = (0..nbus).collect();
         for (slack_name, slack) in slacks(&case, &model) {
@@ -240,7 +240,7 @@ fn an_isolated_bus_gets_the_cpus_ptdf() {
     let row = case.bus.iter().position(|bus| bus.bus_label == 8).unwrap();
     case.bus[row].bus_type = BusType::Isolated;
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let all: Vec<usize> = (0..case.bus.len()).collect();
     let transfers = [(row, 0), (0, row), (row, row)];
     for (slack_name, slack) in slacks(&case, &model) {
@@ -303,14 +303,14 @@ fn assert_loading_agrees(what: &str, case: &Case, gpu: &OutageLoading, cpu: &DcS
 /// were errors in both.
 fn check_outages(what: &str, gpu: &Gpu, case: &Case, width: usize) -> (usize, usize) {
     let model = DcModel::new(case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let mut rows: Vec<usize> = (0..case.branch.len()).collect();
     rows.insert(rows.len() / 2, case.branch.len());
     let sets: Vec<Vec<usize>> = rows.iter().map(|&row| vec![row]).collect();
     let cpu = study.solve_outages(case, &sets).unwrap();
     let mut on_gpu = study.gpu(gpu).unwrap();
     on_gpu.set_block_width(width);
-    let solved = on_gpu.solve_outages(case, &rows).unwrap();
+    let solved = on_gpu.solve_branch_outages(case, &rows).unwrap();
     let screened = on_gpu.outage_loadings(case, &rows).unwrap();
     assert_eq!((solved.len(), screened.len()), (rows.len(), rows.len()));
     let (mut ok, mut errors) = (0, 0);
@@ -395,7 +395,7 @@ fn a_singular_outage_is_left_to_the_cpu() {
         ];
         let case = fixture(&buses, &[G(1, 100.0, true)], &branches);
         let model = DcModel::new(&case).unwrap();
-        let study = model.study().unwrap();
+        let study = model.study(&DcOptions::default()).unwrap();
         assert!(matches!(
             study.solve_outage(&case, &[3]),
             Err(PowerflowError::SingularNetwork { .. })

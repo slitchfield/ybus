@@ -74,7 +74,7 @@ fn fast_decoupled_matches_runpf() {
             ("fdbx", AcMethod::FastDecoupledBx),
         ] {
             let reference = common::reference::read_ac_run(&committed_dir(), name, run).unwrap();
-            let solution = model.solve(&case, AcOptions::for_method(method)).unwrap();
+            let solution = model.solve(&case, &AcOptions::for_method(method)).unwrap();
             let deviation = common::reference::ac_deviation(&case, &solution, &reference).unwrap();
             eprintln!(
                 "{name} {run}: {} iterations (MATPOWER {}), mismatch {:e}, largest deviation {:e}",
@@ -110,10 +110,10 @@ fn reactive_limits_match_runpf() {
             let held = common::reference::read_limited(&committed_dir(), name, run).unwrap();
             let mut options = AcOptions::default();
             options.reactive_limits = mode;
-            let solution = model.solve(&case, options).unwrap();
+            let solution = model.solve(&case, &options).unwrap();
             // A run that holds nothing is one round, solved as plain Newton is: bit for bit
             if solution.limited_generators.is_empty() {
-                let plain = model.solve(&case, AcOptions::default()).unwrap();
+                let plain = model.solve(&case, &AcOptions::default()).unwrap();
                 let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
                 assert_eq!(bits(&solution.vm_pu), bits(&plain.vm_pu), "{name} {run}");
                 assert_eq!(bits(&solution.va_deg), bits(&plain.va_deg), "{name} {run}");

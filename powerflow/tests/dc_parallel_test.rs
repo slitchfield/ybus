@@ -5,7 +5,7 @@
 mod common;
 
 use powerflow::case::Case;
-use powerflow::dc::{DcModel, DcSolution, PtdfSlack};
+use powerflow::dc::{DcModel, DcOptions, DcSolution, PtdfSlack};
 use powerflow::powerflow_error::PowerflowError;
 
 fn same_bits(a: &[f64], b: &[f64]) -> bool {
@@ -26,7 +26,7 @@ fn parallel_batches_match_sequential_bit_for_bit() {
     };
     let case = Case::from_path(&path).unwrap();
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let nl = case.branch.len();
 
     // Every single outage, and some pairs (islanding ones included)
@@ -76,7 +76,7 @@ fn parallel_errors_are_the_sequential_ones() {
     case.branch[3].status = false;
     case.branch[20].status = false;
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
     let rows = [0, 20, 5, 3, 7];
     assert_eq!(
