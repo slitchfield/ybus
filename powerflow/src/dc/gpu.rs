@@ -592,12 +592,12 @@ impl DcGpuSensitivity<'_, '_> {
             let flows = block
                 .product(operator, &vec![None; chunk.len()])
                 .map_err(gpu_failed)?;
-            if topology.branch_rows.len() == topology.case_shape.2 {
+            if topology.branch_rows.len() == topology.case_shape().2 {
                 // Every branch is in service, so the in-service rows are the case's
                 columns.extend(flows);
             } else {
                 for in_service in flows {
-                    let mut column = vec![0.0; topology.case_shape.2];
+                    let mut column = vec![0.0; topology.case_shape().2];
                     for (&row, flow) in topology.branch_rows.iter().zip(in_service) {
                         column[row] = flow;
                     }

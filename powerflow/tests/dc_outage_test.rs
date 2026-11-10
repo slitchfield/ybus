@@ -237,6 +237,17 @@ fn outage_rows_are_checked() {
         study.solve_outages(&other, &[vec![0]]),
         Err(PowerflowError::CaseMismatch { .. })
     ));
+    // So is one with another topology, rather than solved as an outage
+    let mut switched = case.clone();
+    switched.branch[0].status = !switched.branch[0].status;
+    assert_eq!(
+        study.solve_outages(&switched, &[vec![1]]).unwrap_err(),
+        PowerflowError::TopologyMismatch {
+            table: "branch",
+            row: 1,
+            field: "status"
+        }
+    );
 }
 
 #[test]

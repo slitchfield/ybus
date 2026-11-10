@@ -5,7 +5,7 @@
 mod common;
 use common::ac_fixture::{ac_fixture, AcBranch as L, AcBus as B, AcGen as G};
 use powerflow::ac::AcModel;
-use powerflow::case::Case;
+use powerflow::case::{BusType, Case};
 use powerflow::powerflow_error::PowerflowError;
 use sparse_mat::Complex;
 
@@ -157,6 +157,17 @@ fn restamping_equals_a_fresh_build() {
         model.restamp(&shorter),
         Err(PowerflowError::CaseMismatch { .. })
     ));
+    // Bus 4 made PV changes the topology the matrices were built for
+    let mut retyped = changed.clone();
+    retyped.bus[3].bus_type = BusType::PV;
+    assert_eq!(
+        model.restamp(&retyped),
+        Err(PowerflowError::TopologyMismatch {
+            table: "bus",
+            row: 4,
+            field: "bus_type"
+        })
+    );
     assert_eq!(model.ybus().values(), before.values());
 }
 

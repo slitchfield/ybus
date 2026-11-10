@@ -299,8 +299,9 @@ impl DcModel {
     ///
     /// `case` must be the case the model was built from, or a copy of it with different
     /// injections or reference angles: `pd_mw`, `gs_mw`, `pg_mw` and `va_deg` are read from
-    /// `case`, and everything else from the model. Changing anything else, such as a status or
-    /// a reactance, needs a new model.
+    /// `case`, and everything else from the model. A changed topology (a bus's label or type,
+    /// a generator's bus or status, or a branch's ends or status) is refused; any other change,
+    /// such as a reactance, is ignored. Either needs a new model.
     ///
     /// The net injection at each connected bus is `(Pg − Pd − Gs) / baseMVA − pbusinj`, with
     /// `Pg` summed over its in-service generators. Reference bus angles are fixed at their
@@ -310,8 +311,9 @@ impl DcModel {
     /// `(Bf θ + pfinj) · baseMVA`. B′ is ordered as `options` choose.
     ///
     /// Returns `PowerflowError::CaseMismatch` if `case`'s tables have different lengths from
-    /// the model's case, and `SingularNetwork` if B′ is singular even though every bus reaches
-    /// a reference, which takes reactances that cancel out.
+    /// the model's case, `TopologyMismatch` if its topology differs, and `SingularNetwork` if B′
+    /// is singular even though every bus reaches a reference, which takes reactances that cancel
+    /// out.
     pub fn solve(&self, case: &Case, options: &DcOptions) -> Result<DcSolution, PowerflowError> {
         // The case is checked before B′ is factored, as it always was
         self.topology.check_case(case)?;
@@ -465,8 +467,9 @@ impl DcStudy<'_> {
     /// (which factors B′ and calls this), with the factorization kept.
     ///
     /// Returns `PowerflowError::CaseMismatch` if `case`'s tables have different lengths from
-    /// the model's case, and `SingularNetwork` if B′ is so nearly singular that some angle is
-    /// non-finite or above 1e5 radians, which MATPOWER's `dcpf` treats as failure.
+    /// the model's case, `TopologyMismatch` if its topology differs, and `SingularNetwork` if B′
+    /// is so nearly singular that some angle is non-finite or above 1e5 radians, which
+    /// MATPOWER's `dcpf` treats as failure.
     pub fn solve(&self, case: &Case) -> Result<DcSolution, PowerflowError> {
         self.model.topology.check_case(case)?;
         let (pbus, mut theta) = self.scheduled(case);

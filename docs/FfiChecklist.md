@@ -131,13 +131,20 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
 
 ## Phase F1: Preparing `powerflow`
 
-- [ ] `check_case` compares the bus labels and the branches' endpoints as well as the tables'
-      lengths, so a model solved against a different case of the same size returns
-      `CaseMismatch`. Which other fields it compares, such as statuses, is decided with the
-      item, against what each model's `solve` documents that it reads from the case.
-      `CaseMismatch`'s fields name only table sizes, so it may need a new field or variant.
-- [ ] A test asserts at compile time that `Case`, the models, the options and the solutions are
-      `Send` and `Sync`, so the thread-safety contract is checked rather than assumed.
+- [x] `check_case` compares the case's topology as well as the tables' lengths, so a model
+      solved against a different case of the same size returns an error. Decided with the
+      maintainer (2026-11-10):
+      - **What's compared:** everything topological, which decides the elements a model covers
+        and each bus's role: each bus's label and type, each generator's bus and status, and
+        each branch's ends and status. The injections, setpoints, voltages and (AC) impedances
+        and shunts may still differ, as each model's `solve` and `restamp` document.
+      - **The error:** a new variant, `TopologyMismatch { table, row, field }`, naming the first
+        difference (1-based row, MATPOWER's table names), while `CaseMismatch` stays for tables
+        of different lengths. Phase F2's status codes give each its own code.
+- [x] A test asserts at compile time that `Case`, the models, the options and the solutions are
+      `Send` and `Sync`, so the thread-safety contract is checked rather than assumed
+      (`powerflow/tests/thread_safety_test.rs`, which also covers `DcStudy` and
+      `PowerflowError`).
 
 ## Phase F2: The crate and its boundary
 
