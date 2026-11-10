@@ -375,6 +375,9 @@ impl<T: Scalar> SparseMatrix<T> {
 
 use std::fmt;
 /// Formats the matrix as a bracketed grid of dense rows, one per line.
+///
+/// Values are shown to the formatter's precision (`{:.4}`), or 2 decimal places by default, and
+/// each column is as wide as its widest value.
 impl<T: Scalar + fmt::Display> fmt::Display for SparseMatrix<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write_dense_grid(f, self.shape.1, self.to_dense())
@@ -387,20 +390,35 @@ pub(crate) fn write_dense_grid<T: fmt::Display>(
     cols: usize,
     rows: impl IntoIterator<Item = Vec<T>>,
 ) -> fmt::Result {
-    let inner_line_width = 8 * cols; // 6 chars per col + comma + space + leading space
+    let precision = f.precision().unwrap_or(2);
+    let shown: Vec<Vec<String>> = rows
+        .into_iter()
+        .map(|row| {
+            row.iter()
+                .map(|elem| format!("{elem:.precision$}"))
+                .collect()
+        })
+        .collect();
+    let mut widths = vec![0; cols];
+    for row in &shown {
+        for (width, elem) in widths.iter_mut().zip(row) {
+            *width = (*width).max(elem.chars().count());
+        }
+    }
+    // Each column's width plus a comma and space between columns and a space inside each bar.
+    let inner_line_width = widths.iter().sum::<usize>() + 2 * cols;
     write!(f, "\t/")?;
     for _ in 0..inner_line_width {
         write!(f, " ")?;
     }
     writeln!(f, "\\")?;
-    // TODO: Account for variable number of digits in cols
-    for row in rows {
+    for row in &shown {
         write!(f, "\t| ")?;
-        for (idx, elem) in row.iter().enumerate() {
+        for (idx, (elem, width)) in row.iter().zip(&widths).enumerate() {
             if idx != 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{:>6.2}", elem)?; // TODO: dynamic precision based on longest values
+            write!(f, "{elem:>width$}")?;
         }
         writeln!(f, " |")?;
     }
