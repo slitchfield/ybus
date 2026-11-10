@@ -230,8 +230,20 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       - **Each setting also has a getter,** an addition that lets a binding show the settings.
       - **The codes:** the orderings are 1 to 4, and the methods 1 to 3 (MATPOWER's `NR`,
         `FDXB` and `FDBX`). The reactive limits take MATPOWER's `enforce_q_lims` codes, 0 to 2.
-- [ ] `ybus_dc_power_flow`: a case and options (null for the defaults) in, a solution handle out,
+- [x] `ybus_dc_power_flow`: a case and options (null for the defaults) in, a solution handle out,
       with its column accessors and free. Tests against the committed MATPOWER references.
+      Decided with the maintainer (2026-11-10):
+      - **A solution's columns are read by the case's field codes,** one getter per table, at
+        the column MATPOWER writes each result to. The branch table gains the result codes 14
+        to 17 (`PF`, `QF`, `PT` and `QT`), which a case doesn't have.
+      - **The tests are fidelity, plus a C reference.** A Rust test checks that the FFI's
+        result is `powerflow`'s, bit for bit, under every ordering, on `three_bus.m` and on
+        case14, case30 and case118. A C test compares case14 with the committed CSVs, at
+        `powerflow`'s 1e-9.
+
+      That test found that `Ordering::Colamd` panicked in `DcModel::study`. COLAMD orders
+      columns only, so Cholesky refuses it; B′ now goes straight to LU under it, a fix in
+      `powerflow` in its own commit.
 - [ ] `ybus_ac_power_flow`, in the same form, with the iteration count, mismatch, limited
       generators and factorization count.
 - [ ] The DC and AC models: build from a case, solve against a case (with F1's stricter

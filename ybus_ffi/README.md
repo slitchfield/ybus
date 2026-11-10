@@ -129,6 +129,24 @@ solve takes options, `NULL` means the defaults.
 Every setter has a getter, and a code that isn't one of the setting's is
 `YBUS_ERROR_INVALID_VALUE`.
 
+### Solutions
+
+A solve makes a solution handle, freed with its own `_free`. Its columns are read whole, one
+getter per table, by the case's field codes. The codes are the columns MATPOWER writes each
+result to, so a result reads where MATPOWER would put it:
+
+```c
+ybus_dc_solution *solution;
+ybus_dc_power_flow(case, NULL, &solution);
+ybus_dc_solution_get_bus(solution, YBUS_BUS_VA_DEG, angles, buses);
+ybus_dc_solution_get_branch(solution, YBUS_BRANCH_PF_MW, flows, branches);
+ybus_dc_solution_free(solution);
+```
+
+- **DC:** bus `YBUS_BUS_VA_DEG`, gen `YBUS_GEN_PG_MW`, and branch `YBUS_BRANCH_PF_MW` (14).
+  `ybus_dc_solution_solver` says which factorization solved B′.
+- **A code the solution doesn't have** in that table gives `YBUS_ERROR_INVALID_FIELD`.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.

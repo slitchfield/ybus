@@ -17,7 +17,10 @@ pub mod ac;
 mod boundary;
 pub mod case;
 pub mod dc;
+mod solution;
 pub mod status;
+#[cfg(test)]
+mod testing;
 
 /// The library's major version.
 pub const YBUS_VERSION_MAJOR: u32 = 0;

@@ -3,7 +3,9 @@
 //!
 //! A field code is the field's 1-based column number in MATPOWER's matrix for its table, so
 //! the codes are fixed by the format itself and never renumbered. Codes repeat across tables,
-//! which have their own functions.
+//! which have their own functions. A solution's columns take the same codes, in the columns
+//! MATPOWER writes its results to, such as `YBUS_BRANCH_PF_MW` (14), which a case doesn't
+//! have.
 
 use powerflow::case::{Branch, Bus, BusType, Gen};
 use powerflow::Case;
@@ -114,6 +116,16 @@ pub const YBUS_BRANCH_STATUS: ybus_field = 11;
 pub const YBUS_BRANCH_ANGMIN_DEG: ybus_field = 12;
 /// Maximum angle difference, angle(Vf) − angle(Vt) (degrees).
 pub const YBUS_BRANCH_ANGMAX_DEG: ybus_field = 13;
+/// A solution's real power flowing into the branch at the from end (MW): a result column, in
+/// MATPOWER's place for it, which a case doesn't have.
+pub const YBUS_BRANCH_PF_MW: ybus_field = 14;
+/// A solution's reactive power flowing into the branch at the from end (MVAr): a result
+/// column.
+pub const YBUS_BRANCH_QF_MVAR: ybus_field = 15;
+/// A solution's real power flowing into the branch at the to end (MW): a result column.
+pub const YBUS_BRANCH_PT_MW: ybus_field = 16;
+/// A solution's reactive power flowing into the branch at the to end (MVAr): a result column.
+pub const YBUS_BRANCH_QT_MVAR: ybus_field = 17;
 
 /// How to read and write one `double` field of a row.
 pub(crate) struct Float<R> {

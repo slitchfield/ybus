@@ -1,9 +1,12 @@
-//! The DC power flow through C: its options.
+//! The DC power flow through C: its options, its solution, and the power flow itself.
 
-use powerflow::dc::DcOptions;
+use powerflow::dc::{dc_power_flow_with_options, DcOptions, DcSolution, DcSolver};
 use sparse_mat::compressed_matrix::Ordering;
 
-use crate::boundary::{arg_mut, free_handle, get_value, guard, new_handle, Failure};
+use crate::boundary::{arg_mut, arg_ref, free_handle, get_value, guard, new_handle, Failure};
+use crate::case::columns::{ybus_field, YBUS_BRANCH_PF_MW, YBUS_BUS_VA_DEG, YBUS_GEN_PG_MW};
+use crate::case::YbusCase;
+use crate::solution::get_column;
 use crate::status::ybus_status;
 
 /// A fill-reducing ordering, for the DC power flow's B′.
@@ -121,6 +124,177 @@ pub unsafe extern "C" fn ybus_dc_options_get_ordering(
     }
 }
 
+/// The options `options` points to, or the defaults for a null pointer.
+///
+/// # Safety
+///
+/// `options` must be null or live options.
+pub(crate) unsafe fn options_or_default(
+    options: *const YbusDcOptions,
+) -> Result<DcOptions, Failure> {
+    if options.is_null() {
+        Ok(DcOptions::default())
+    } else {
+        // SAFETY: options is as the caller promised
+        Ok(unsafe { arg_ref(options, "options") }?.options)
+    }
+}
+
+/// The factorization a DC power flow solved B′ with.
+#[allow(non_camel_case_types)]
+pub type ybus_dc_solver = i32;
+
+/// Cholesky, which applies unless some branch has a negative reactance.
+pub const YBUS_DC_SOLVER_CHOLESKY: ybus_dc_solver = 1;
+/// LU with threshold partial pivoting, the fallback when B′ isn't positive definite.
+pub const YBUS_DC_SOLVER_LU: ybus_dc_solver = 2;
+/// No solve was needed: every connected bus is a reference bus.
+pub const YBUS_DC_SOLVER_NO_SOLVE: ybus_dc_solver = 3;
+
+/// A DC power flow's results, indexed like the case's tables, made by `ybus_dc_power_flow` or
+/// `ybus_dc_model_solve` and freed by `ybus_dc_solution_free`.
+pub struct YbusDcSolution {
+    pub(crate) solution: DcSolution,
+}
+
+/// Solves the DC power flow for `case`, as MATPOWER's `rundcpf` does, with `options` (`NULL`
+/// for the defaults), into a new solution in `*out`. `*out` is set to `NULL` first and stays
+/// `NULL` on an error, such as `YBUS_ERROR_ISLAND_WITHOUT_REFERENCE` or
+/// `YBUS_ERROR_SINGULAR_NETWORK`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, `options` null or live options, and `out` null or a
+/// writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_power_flow(
+    case: *const YbusCase,
+    options: *const YbusDcOptions,
+    out: *mut *mut YbusDcSolution,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: out, case and options are as the caller promised
+        unsafe {
+            new_handle(out, || {
+                let case = arg_ref(case, "case")?;
+                let options = options_or_default(options)?;
+                Ok(YbusDcSolution {
+                    solution: dc_power_flow_with_options(&case.case, &options)?,
+                })
+            })
+        }
+    })
+}
+
+/// Frees `solution`, which mustn't be used again. Does nothing if `solution` is null.
+///
+/// # Safety
+///
+/// `solution` must be null or a solution made by this library and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_solution_free(solution: *mut YbusDcSolution) {
+    // SAFETY: as the caller promised
+    unsafe { free_handle(solution) }
+}
+
+/// Writes the solution's bus column `field` into `out`, which has room for `len` entries: one
+/// per bus. The only one is `YBUS_BUS_VA_DEG`, each bus's voltage angle (degrees); an isolated
+/// bus keeps its angle from the case. Returns `YBUS_ERROR_INVALID_FIELD` for any other code,
+/// and `YBUS_ERROR_BUFFER_TOO_SMALL`, writing nothing, if `len` is less than the number of
+/// buses.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_solution_get_bus(
+    solution: *const YbusDcSolution,
+    field: ybus_field,
+    out: *mut f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_column(solution, "bus", field, out, len, |s, field| match field {
+            YBUS_BUS_VA_DEG => Some(&s.solution.va_deg),
+            _ => None,
+        })
+    }
+}
+
+/// [`ybus_dc_solution_get_bus`] for the generators: `YBUS_GEN_PG_MW`, each generator's real
+/// power output (MW), where the first generator at each reference bus picks up the slack. 0
+/// for a generator that's out of service or at an isolated bus.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_solution_get_gen(
+    solution: *const YbusDcSolution,
+    field: ybus_field,
+    out: *mut f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_column(solution, "gen", field, out, len, |s, field| match field {
+            YBUS_GEN_PG_MW => Some(&s.solution.pg_mw),
+            _ => None,
+        })
+    }
+}
+
+/// [`ybus_dc_solution_get_bus`] for the branches: `YBUS_BRANCH_PF_MW`, each branch's real power
+/// flow at the from end (MW); the flow at the to end is its negation, since DC power flow is
+/// lossless. 0 for a branch that's out of service or touches an isolated bus.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_solution_get_branch(
+    solution: *const YbusDcSolution,
+    field: ybus_field,
+    out: *mut f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_column(
+            solution,
+            "branch",
+            field,
+            out,
+            len,
+            |s, field| match field {
+                YBUS_BRANCH_PF_MW => Some(&s.solution.pf_mw),
+                _ => None,
+            },
+        )
+    }
+}
+
+/// Writes which factorization solved B′ through `out`.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or a writable `ybus_dc_solver`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_solution_solver(
+    solution: *const YbusDcSolution,
+    out: *mut ybus_dc_solver,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_value(solution, "solution", out, |s| match s.solution.solver {
+            DcSolver::Cholesky => Ok(YBUS_DC_SOLVER_CHOLESKY),
+            DcSolver::Lu => Ok(YBUS_DC_SOLVER_LU),
+            DcSolver::NoSolve => Ok(YBUS_DC_SOLVER_NO_SOLVE),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ptr;
@@ -160,6 +334,118 @@ mod tests {
             );
             ybus_dc_options_free(options);
             ybus_dc_options_free(ptr::null_mut());
+        }
+    }
+
+    /// The case at `path`, through the export
+    pub(crate) fn load(path: &std::path::Path) -> *mut YbusCase {
+        let path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        let mut case = ptr::null_mut();
+        // SAFETY: path is NUL-terminated, and case writable
+        let status = unsafe { crate::case::ybus_case_from_path(path.as_ptr(), &mut case) };
+        assert_eq!(status, YBUS_OK);
+        case
+    }
+
+    /// The test cases: three_bus.m, and the MATPOWER cases with committed references, when
+    /// they're fetched
+    pub(crate) fn cases() -> Vec<(String, *mut YbusCase)> {
+        let mut cases = vec![("three_bus".to_string(), crate::case::tests::three_bus())];
+        for name in crate::testing::REFERENCE_CASES {
+            if let Some(path) = crate::testing::matpower_case(name) {
+                cases.push((name.to_string(), load(&path)));
+            }
+        }
+        cases
+    }
+
+    #[test]
+    fn the_dc_power_flow_is_powerflows_bit_for_bit() {
+        for (name, case) in cases() {
+            for code in [
+                YBUS_ORDERING_AMD,
+                YBUS_ORDERING_NATURAL,
+                YBUS_ORDERING_RCM,
+                YBUS_ORDERING_COLAMD,
+            ] {
+                let mut options = ptr::null_mut();
+                let mut solution = ptr::null_mut();
+                // SAFETY: each handle is live until freed, and each out writable
+                unsafe {
+                    assert_eq!(ybus_dc_options_new(&mut options), YBUS_OK);
+                    assert_eq!(ybus_dc_options_set_ordering(options, code), YBUS_OK);
+                    let status = ybus_dc_power_flow(case, options, &mut solution);
+                    let expected = dc_power_flow_with_options(&(*case).case, &(*options).options);
+                    match expected {
+                        Ok(expected) => {
+                            assert_eq!(status, YBUS_OK, "{name} {code}");
+                            assert_eq!((*solution).solution, expected, "{name} {code}");
+                        }
+                        Err(error) => {
+                            assert_eq!(status, crate::status::powerflow_code(&error));
+                            assert!(solution.is_null());
+                        }
+                    }
+                    ybus_dc_solution_free(solution);
+                    ybus_dc_options_free(options);
+                }
+            }
+            // SAFETY: case is live until this free
+            unsafe { crate::case::ybus_case_free(case) };
+        }
+    }
+
+    #[test]
+    fn a_dc_solution_reads_its_columns_by_the_cases_codes() {
+        let case = crate::case::tests::three_bus();
+        let mut solution = ptr::null_mut();
+        let (mut va, mut pg, mut pf) = ([0.0; 3], [0.0; 2], [0.0; 3]);
+        let mut solver = 0;
+        // SAFETY: each handle is live until freed, and each buffer has room for its length
+        unsafe {
+            assert_eq!(
+                ybus_dc_power_flow(case, ptr::null(), &mut solution),
+                YBUS_OK
+            );
+            let expected =
+                dc_power_flow_with_options(&(*case).case, &DcOptions::default()).unwrap();
+            assert_eq!(
+                ybus_dc_solution_get_bus(solution, YBUS_BUS_VA_DEG, va.as_mut_ptr(), 3),
+                YBUS_OK
+            );
+            assert_eq!(
+                ybus_dc_solution_get_gen(solution, YBUS_GEN_PG_MW, pg.as_mut_ptr(), 2),
+                YBUS_OK
+            );
+            assert_eq!(
+                ybus_dc_solution_get_branch(solution, YBUS_BRANCH_PF_MW, pf.as_mut_ptr(), 3),
+                YBUS_OK
+            );
+            assert_eq!(
+                (&va[..], &pg[..], &pf[..]),
+                (
+                    &expected.va_deg[..],
+                    &expected.pg_mw[..],
+                    &expected.pf_mw[..]
+                )
+            );
+            assert_eq!(ybus_dc_solution_solver(solution, &mut solver), YBUS_OK);
+            assert_eq!(solver, YBUS_DC_SOLVER_CHOLESKY);
+            assert_eq!(
+                ybus_dc_solution_get_bus(
+                    solution,
+                    crate::case::columns::YBUS_BUS_VM_PU,
+                    va.as_mut_ptr(),
+                    3
+                ),
+                crate::status::YBUS_ERROR_INVALID_FIELD
+            );
+            assert_eq!(
+                ybus_dc_solution_get_branch(solution, YBUS_BRANCH_PF_MW, pf.as_mut_ptr(), 2),
+                crate::status::YBUS_ERROR_BUFFER_TOO_SMALL
+            );
+            ybus_dc_solution_free(solution);
+            crate::case::ybus_case_free(case);
         }
     }
 }

@@ -44,6 +44,10 @@ typedef struct ybus_case ybus_case;
 // taken.
 typedef struct ybus_dc_options ybus_dc_options;
 
+// A DC power flow's results, indexed like the case's tables, made by `ybus_dc_power_flow` or
+// `ybus_dc_model_solve` and freed by `ybus_dc_solution_free`.
+typedef struct ybus_dc_solution ybus_dc_solution;
+
 // A status code: `YBUS_OK` (0) on success, or the code of what failed, with a message that
 // `ybus_last_error_message` returns.
 typedef int32_t ybus_status;
@@ -60,6 +64,9 @@ typedef int32_t ybus_field;
 
 // A fill-reducing ordering, for the DC power flow's B′.
 typedef int32_t ybus_ordering;
+
+// The factorization a DC power flow solved B′ with.
+typedef int32_t ybus_dc_solver;
 
 // Newton's method in polar form, as MATPOWER's `newtonpf` (`pf.alg = 'NR'`, the default).
 #define YBUS_AC_NEWTON 1
@@ -222,6 +229,20 @@ typedef int32_t ybus_ordering;
 // Maximum angle difference, angle(Vf) − angle(Vt) (degrees).
 #define YBUS_BRANCH_ANGMAX_DEG 13
 
+// A solution's real power flowing into the branch at the from end (MW): a result column, in
+// MATPOWER's place for it, which a case doesn't have.
+#define YBUS_BRANCH_PF_MW 14
+
+// A solution's reactive power flowing into the branch at the from end (MVAr): a result
+// column.
+#define YBUS_BRANCH_QF_MVAR 15
+
+// A solution's real power flowing into the branch at the to end (MW): a result column.
+#define YBUS_BRANCH_PT_MW 16
+
+// A solution's reactive power flowing into the branch at the to end (MVAr): a result column.
+#define YBUS_BRANCH_QT_MVAR 17
+
 // No reordering.
 #define YBUS_ORDERING_NATURAL 1
 
@@ -233,6 +254,15 @@ typedef int32_t ybus_ordering;
 
 // Column approximate minimum degree (COLAMD), for LU.
 #define YBUS_ORDERING_COLAMD 4
+
+// Cholesky, which applies unless some branch has a negative reactance.
+#define YBUS_DC_SOLVER_CHOLESKY 1
+
+// LU with threshold partial pivoting, the fallback when B′ isn't positive definite.
+#define YBUS_DC_SOLVER_LU 2
+
+// No solve was needed: every connected bus is a reference bus.
+#define YBUS_DC_SOLVER_NO_SOLVE 3
 
 // Success.
 #define YBUS_OK 0
@@ -794,6 +824,71 @@ ybus_status ybus_dc_options_set_ordering(struct ybus_dc_options *options, ybus_o
 //
 // `options` must be null or live options, and `out` null or a writable `ybus_ordering`.
 ybus_status ybus_dc_options_get_ordering(const struct ybus_dc_options *options, ybus_ordering *out);
+
+// Solves the DC power flow for `case`, as MATPOWER's `rundcpf` does, with `options` (`NULL`
+// for the defaults), into a new solution in `*out`. `*out` is set to `NULL` first and stays
+// `NULL` on an error, such as `YBUS_ERROR_ISLAND_WITHOUT_REFERENCE` or
+// `YBUS_ERROR_SINGULAR_NETWORK`.
+//
+// # Safety
+//
+// `case` must be null or a live case, `options` null or live options, and `out` null or a
+// writable pointer.
+ybus_status ybus_dc_power_flow(const struct ybus_case *case_,
+                               const struct ybus_dc_options *options,
+                               struct ybus_dc_solution **out);
+
+// Frees `solution`, which mustn't be used again. Does nothing if `solution` is null.
+//
+// # Safety
+//
+// `solution` must be null or a solution made by this library and not yet freed.
+void ybus_dc_solution_free(struct ybus_dc_solution *solution);
+
+// Writes the solution's bus column `field` into `out`, which has room for `len` entries: one
+// per bus. The only one is `YBUS_BUS_VA_DEG`, each bus's voltage angle (degrees); an isolated
+// bus keeps its angle from the case. Returns `YBUS_ERROR_INVALID_FIELD` for any other code,
+// and `YBUS_ERROR_BUFFER_TOO_SMALL`, writing nothing, if `len` is less than the number of
+// buses.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+ybus_status ybus_dc_solution_get_bus(const struct ybus_dc_solution *solution,
+                                     ybus_field field,
+                                     double *out,
+                                     size_t len);
+
+// [`ybus_dc_solution_get_bus`] for the generators: `YBUS_GEN_PG_MW`, each generator's real
+// power output (MW), where the first generator at each reference bus picks up the slack. 0
+// for a generator that's out of service or at an isolated bus.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+ybus_status ybus_dc_solution_get_gen(const struct ybus_dc_solution *solution,
+                                     ybus_field field,
+                                     double *out,
+                                     size_t len);
+
+// [`ybus_dc_solution_get_bus`] for the branches: `YBUS_BRANCH_PF_MW`, each branch's real power
+// flow at the from end (MW); the flow at the to end is its negation, since DC power flow is
+// lossless. 0 for a branch that's out of service or touches an isolated bus.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+ybus_status ybus_dc_solution_get_branch(const struct ybus_dc_solution *solution,
+                                        ybus_field field,
+                                        double *out,
+                                        size_t len);
+
+// Writes which factorization solved B′ through `out`.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or a writable `ybus_dc_solver`.
+ybus_status ybus_dc_solution_solver(const struct ybus_dc_solution *solution, ybus_dc_solver *out);
 
 #ifdef __cplusplus
 }  // extern "C"

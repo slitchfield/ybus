@@ -19,6 +19,18 @@ system_libraries=(-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc)
 
 # The test case files, such as three_bus.m, which cases.h loads
 export YBUS_TEST_DATA="$crate/tests/c"
+# MATPOWER's case files (fetched by scripts/fetch-matpower.sh, not committed), from the
+#   MATPOWER_DIR installation if set, as powerflow's tests take them, and the committed
+#   references for case14, case30 and case118. A test that needs a case that isn't there skips
+#   it, unless YBUS_REQUIRE_CASES=1, as CI sets
+if [ -n "${MATPOWER_DIR:-}" ]; then
+    matpower="$MATPOWER_DIR"
+else
+    version="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$workspace/scripts/fetch-matpower.sh")"
+    matpower="$workspace/testdata/matpower/matpower$version"
+fi
+export YBUS_MATPOWER_DATA="$matpower/data"
+export YBUS_REFERENCE_DATA="$workspace/powerflow/tests/data/matpower-reference"
 
 build="$(mktemp -d)"
 trap 'rm -rf "$build"' EXIT
