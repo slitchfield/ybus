@@ -326,7 +326,11 @@ fn field<C>(
 }
 
 /// `BufferTooSmall` unless a buffer of `given` entries holds `needed`
-fn check_room(argument: &'static str, needed: usize, given: usize) -> Result<(), Failure> {
+pub(crate) fn check_room(
+    argument: &'static str,
+    needed: usize,
+    given: usize,
+) -> Result<(), Failure> {
     if given < needed {
         Err(Failure::BufferTooSmall {
             argument,
@@ -399,15 +403,17 @@ unsafe fn get_ints<R>(
 }
 
 /// `LengthMismatch` unless an array of `given` entries is one per row of `rows`
-fn check_length(argument: &'static str, rows: usize, given: usize) -> Result<(), Failure> {
+pub(crate) fn check_length(
+    argument: &'static str,
+    rows: usize,
+    given: usize,
+) -> Result<(), Failure> {
     if given == rows {
         Ok(())
     } else {
-        Err(Failure::LengthMismatch {
-            argument,
-            expected: rows,
-            given,
-        })
+        Err(Failure::LengthMismatch(format!(
+            "`{argument}` has {given} entries, but its table has {rows} rows"
+        )))
     }
 }
 

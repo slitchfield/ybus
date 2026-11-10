@@ -82,6 +82,31 @@ Each getter has a setter, such as `ybus_case_set_bus_f64(case, YBUS_BUS_PD_MW, v
 string. Call it with `NULL, 0` to learn the size. A case without names gives
 `YBUS_ERROR_MISSING_DATA`.
 
+### Costs
+
+The generator costs are read and set whole, as flat arrays. Each row has:
+- a model: `YBUS_COST_POLYNOMIAL` (2) or `YBUS_COST_PIECEWISE_LINEAR` (1), MATPOWER's codes
+- a startup cost and a shutdown cost
+- a run of values, `values[offsets[i]]` up to `values[offsets[i + 1]]`. A polynomial's values
+  are its coefficients, highest order first. A piecewise linear cost's values are its points,
+  interleaved as `p0, cost0, p1, cost1, …`.
+
+The rows are one per generator for real power, optionally followed by one per generator for
+reactive power, as in MATPOWER.
+
+```c
+size_t rows, count;
+ybus_case_cost_sizes(case, &rows, &count);
+/* model, startup and shutdown have rows entries, offsets rows + 1, values count */
+ybus_case_get_costs(case, model, startup, shutdown, offsets, rows, values, count);
+ybus_case_set_costs(case, model, startup, shutdown, offsets, rows, values, count);
+```
+
+Setting replaces the whole table, and setting 0 rows removes it. The structure is checked first:
+the models, an even number of values for each piecewise linear row, and offsets that start at
+0, never decrease, and end at the number of values. What a solve can't use is reported when the
+case is solved.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.

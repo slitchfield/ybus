@@ -211,8 +211,13 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       the case is solved, as in Rust, where building a model runs `Case::validate`. Only what an
       `int64_t` column can't hold is refused when set, the whole column checked first; a test
       sets each column to its values rotated and checks that no other column changes.
-- [ ] Generator costs, read and set in a form for both cost models. The form (flattened
-      coefficients with offsets, or one generator at a time) is decided with the item.
+- [x] Generator costs, read and set in a form for both cost models. The form (flattened
+      coefficients with offsets, or one generator at a time) is decided with the item. Decided:
+      flattened, with offsets. `ybus_case_cost_sizes` gives the rows and values;
+      `ybus_case_get_costs` and `ybus_case_set_costs` take each row's model (MATPOWER's code),
+      startup and shutdown, offsets, and one array of values, coefficients or interleaved
+      points. Setting checks the structure before changing anything, and 0 rows removes the
+      costs.
 
 ## Phase F4: Power flows
 

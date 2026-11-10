@@ -35,12 +35,9 @@ pub(crate) enum Failure {
         needed: usize,
         given: usize,
     },
-    /// The named array's length doesn't match its table.
-    LengthMismatch {
-        argument: &'static str,
-        expected: usize,
-        given: usize,
-    },
+    /// An array's length doesn't match its table, or a cost table's offsets are inconsistent,
+    /// as this says.
+    LengthMismatch(String),
     /// A value can't be held where it was given or asked for, for this reason.
     InvalidValue(String),
     /// A field code isn't one of the table's fields of this kind (`double` or `int64_t`).
@@ -64,7 +61,7 @@ impl Failure {
             Failure::MisalignedArgument(_) => YBUS_ERROR_MISALIGNED_ARGUMENT,
             Failure::InvalidUtf8(_) => YBUS_ERROR_INVALID_UTF8,
             Failure::BufferTooSmall { .. } => YBUS_ERROR_BUFFER_TOO_SMALL,
-            Failure::LengthMismatch { .. } => YBUS_ERROR_LENGTH_MISMATCH,
+            Failure::LengthMismatch(_) => YBUS_ERROR_LENGTH_MISMATCH,
             Failure::InvalidValue(_) => YBUS_ERROR_INVALID_VALUE,
             Failure::InvalidField { .. } => YBUS_ERROR_INVALID_FIELD,
             Failure::MissingData(_) => YBUS_ERROR_MISSING_DATA,
@@ -90,14 +87,7 @@ impl fmt::Display for Failure {
                 f,
                 "`{argument}` has room for {given} elements, but the result needs {needed}"
             ),
-            Failure::LengthMismatch {
-                argument,
-                expected,
-                given,
-            } => write!(
-                f,
-                "`{argument}` has {given} entries, but its table has {expected} rows"
-            ),
+            Failure::LengthMismatch(reason) => write!(f, "{reason}"),
             Failure::InvalidValue(reason) => write!(f, "{reason}"),
             Failure::InvalidField { table, field, kind } => {
                 write!(f, "{field} isn't a {kind} field of the {table} table")

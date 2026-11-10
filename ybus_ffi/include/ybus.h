@@ -23,6 +23,12 @@
 // versions compare as numbers.
 #define YBUS_VERSION (((YBUS_VERSION_MAJOR * 1000000) + (YBUS_VERSION_MINOR * 1000)) + YBUS_VERSION_PATCH)
 
+// A piecewise linear cost, MATPOWER's model 1: its values are `(p, cost)` points.
+#define YBUS_COST_PIECEWISE_LINEAR 1
+
+// A polynomial cost, MATPOWER's model 2: its values are coefficients, highest order first.
+#define YBUS_COST_POLYNOMIAL 2
+
 // A power system case: its buses, generators, branches and optional costs and bus names, as
 // read from a MATPOWER case file. Made by `ybus_case_from_path`, `ybus_case_from_bytes` or
 // `ybus_case_clone`, and freed by `ybus_case_free`.
@@ -569,6 +575,60 @@ ybus_status ybus_case_bus_name(const struct ybus_case *case_,
                                char *buffer,
                                size_t len,
                                size_t *needed);
+
+// Writes the number of cost rows in `case` through `rows`, 0 if it has no costs, and the
+// number of values all of them hold through `values`: the sizes `ybus_case_get_costs` needs.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `rows` and `values` null or writable `size_t`s.
+ybus_status ybus_case_cost_sizes(const struct ybus_case *case_, size_t *rows, size_t *values);
+
+// Writes the costs of `case` into flat arrays: each row's model (`YBUS_COST_POLYNOMIAL` or
+// `YBUS_COST_PIECEWISE_LINEAR`), startup and shutdown costs, and values, which are
+// `values[offsets[i]]` up to `values[offsets[i + 1]]`. `model`, `startup` and `shutdown` have
+// room for `rows` entries, `offsets` for `rows + 1`, and `values` for `values_len`.
+//
+// Returns `YBUS_ERROR_MISSING_DATA` if the case has no costs, and
+// `YBUS_ERROR_BUFFER_TOO_SMALL`, writing nothing, if `rows` or `values_len` is less than
+// `ybus_case_cost_sizes` gives.
+//
+// # Safety
+//
+// `case` must be null or a live case; `model`, `startup` and `shutdown` null or `rows`
+// writable entries; `offsets` null or `rows + 1`; and `values` null or `values_len`.
+ybus_status ybus_case_get_costs(const struct ybus_case *case_,
+                                int32_t *model,
+                                double *startup,
+                                double *shutdown,
+                                size_t *offsets,
+                                size_t rows,
+                                double *values,
+                                size_t values_len);
+
+// Replaces the costs of `case` with `rows` rows given as `ybus_case_get_costs` writes them:
+// each row's model, startup and shutdown costs, and values `values[offsets[i]]` up to
+// `values[offsets[i + 1]]`. `rows` 0 removes the costs (and `values_len` must be 0).
+//
+// The structure is checked before anything changes: `YBUS_ERROR_INVALID_VALUE` for a model
+// other than 1 or 2, or a piecewise linear row with an odd number of values, and
+// `YBUS_ERROR_LENGTH_MISMATCH` unless `offsets` starts at 0, never decreases and ends at
+// `values_len`. What a solve can't use, such as a row count that isn't the generator count or
+// a cubic polynomial, is reported when the case is solved.
+//
+// # Safety
+//
+// `case` must be null or a live case that nothing else is using; `model`, `startup` and
+// `shutdown` null or `rows` readable entries; `offsets` null or `rows + 1` (or null when
+// `rows` is 0); and `values` null or `values_len`.
+ybus_status ybus_case_set_costs(struct ybus_case *case_,
+                                const int32_t *model,
+                                const double *startup,
+                                const double *shutdown,
+                                const size_t *offsets,
+                                size_t rows,
+                                const double *values,
+                                size_t values_len);
 
 #ifdef __cplusplus
 }  // extern "C"
