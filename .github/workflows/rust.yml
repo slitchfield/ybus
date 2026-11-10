@@ -35,10 +35,16 @@ jobs:
       - if: steps.normalized.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends octave
       - run: scripts/normalize-cases.sh
+      # The C header's generator, which check.sh runs to compare ybus.h with the crate. Keep the
+      #   version in sync with ybus_ffi/generate-header.sh; rust-cache keeps the binary between
+      #   runs, and cargo install exits early when it's already installed.
+      - run: cargo install cbindgen --version 0.29.4 --locked
       - run: ./check.sh
         env:
           # Fail, rather than skip, any test whose MATPOWER case is missing
           YBUS_REQUIRE_CASES: "1"
+          # Fail, rather than skip, the header check if cbindgen is missing
+          YBUS_REQUIRE_CBINDGEN: "1"
 
   msrv:
     name: MSRV

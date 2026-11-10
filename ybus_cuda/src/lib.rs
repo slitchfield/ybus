@@ -10,8 +10,9 @@
 //!   solution per column, kept on the device as a [`GpuBlock`] for [`GpuOperator`] products and
 //!   per-column maxima, so only what's asked for is downloaded.
 //!
-//! This is the only crate in the workspace with `unsafe` code: cudarc exposes cuSPARSE only as
-//! raw FFI. Each `unsafe` block says why it's sound, and nothing unsafe crosses the public API.
+//! With `ybus_ffi`, this is one of the two crates in the workspace with `unsafe` code: cudarc
+//! exposes cuSPARSE only as raw FFI. Each `unsafe` block says why it's sound, and nothing
+//! unsafe crosses the public API.
 //! Results are not bit for bit the CPU's, since the GPU orders its arithmetic differently; they
 //! agree to within rounding.
 
