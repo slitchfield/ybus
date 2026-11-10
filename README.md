@@ -64,6 +64,8 @@ one: optimal power flow, interior-point solvers and acceleration.
 - [`docs/LongTermGoals.md`](docs/LongTermGoals.md) records the goals beyond these roadmaps, with
   coarse plans: foreign function interfaces to C, Python and Julia, benchmarks against other
   power flow libraries, security-constrained OPF, and reading ARPA-E's SC-ACOPF data.
+- [`docs/FfiChecklist.md`](docs/FfiChecklist.md) is the roadmap for the first of those goals: a
+  C interface to `powerflow`, then Python and Julia bindings.
 - [`docs/BaseFunctionalityChecklist.md`](docs/BaseFunctionalityChecklist.md) is the completed
   checklist of `sparse_mat`'s core functionality.
 - [`docs/benchmarks/`](docs/benchmarks/) records performance baselines, such as the DC power

@@ -8,7 +8,8 @@ when its turn comes.
 ## 1. Stable foreign function interfaces: C, Python and Julia
 
 Make `powerflow` (and the solvers beneath it) usable from other languages through stable
-interfaces built with Rust's established FFI tooling.
+interfaces built with Rust's established FFI tooling. Planned with the maintainer on 2026-11-10
+as a checklist of its own: [`FfiChecklist.md`](FfiChecklist.md).
 
 - **C first,** since it's the common ground: a C ABI crate (for example `powerflow-ffi`) exposing
   opaque handles for a case, a model and a solution, functions that return status codes rather

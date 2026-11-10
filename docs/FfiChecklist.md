@@ -1,0 +1,223 @@
+# FFI checklist
+
+The roadmap for long-term goal 1 in [`LongTermGoals.md`](LongTermGoals.md): a stable C interface
+to `powerflow`, then Python and Julia bindings. Each unchecked item in phases F1 to F6 is sized to
+be one commit; phase F7's are coarser and are broken into commit-sized items when each is planned.
+Phase F0's decisions were made with the maintainer on 2026-11-10.
+
+## Goals
+
+1. **A C ABI first.** A crate of its own that wraps `powerflow` in `extern "C"` functions: opaque
+   handles for cases, options, models and solutions, status codes instead of panics, and buffers
+   the caller owns. It's the common ground the other languages can build on.
+2. **Python and Julia after it.** Python through PyO3 and maturin, binding `powerflow` directly;
+   Julia through the C library with `ccall`, so it shares the C layer's stability.
+3. **Out of scope at first:** `sparse_mat`'s matrices, the interior-point solvers on their own,
+   the DC outage studies and sensitivities, and the `rayon` and `cuda` features. Phase F7 lists
+   them.
+
+**Conventions carried over from the earlier roadmaps:**
+- one commit per checklist item, on `dev/` branches, with the PR's description as its report
+- unsafe code only in the new crate, as `ybus_cuda` holds the GPU path's; `powerflow` keeps
+  `#![forbid(unsafe_code)]`
+- every exported function tested from C as well as from Rust, against the committed reference
+  cases
+
+## What there is to build on
+
+- **Entry points.** `Case::from_path`, `from_bytes` and `parse`; `dc_power_flow`,
+  `ac_power_flow`, `dc_opf` and `ac_opf`, each with a `_with_options` partner; and `DcModel` and
+  `AcModel`, built once and solved for many scenarios. Since PR #65 they all take options by
+  reference and return one solution type per solve.
+- **Data shapes.** `Case` holds vectors of structs (`Bus`, `Gen`, `Branch`, `GenCost`) and
+  optional bus names. Each solution is a struct of columns, mostly `Vec<f64>`, indexed like the
+  case's tables, plus a few scalars.
+- **Errors.** `PowerflowError` has 26 variants, many carrying data, and is `#[non_exhaustive]`.
+  Its `Display` messages are written for people.
+- **Options.** `DcOptions`, `AcOptions`, `DcOpfOptions` and `AcOpfOptions` are all
+  `#[non_exhaustive]`. The OPF ones choose a solver through `OpfSolver`, which wraps
+  `MipsOptions` or `MehrotraOptions`.
+- **Panics.** Invariants are checked with `unwrap`, `expect` and `panic!`, so a bug behind any of
+  them panics. The fuzz tests (`powerflow/tests/matpower_fuzz_test.rs`) already use
+  `catch_unwind` to check that the MATPOWER reader returns errors instead of panicking. The
+  workspace's profiles keep the default `panic = "unwind"`.
+- **Two hazards for a C caller.**
+  - **Mismatched cases.** A model is solved against a case passed again, and `check_case` in
+    `powerflow/src/topology.rs` compares only the tables' lengths, so a different case of the
+    same size is solved silently with the wrong network.
+  - **A borrowed model.** `DcStudy<'a>` borrows its `DcModel`, which a C handle can't express.
+
+## Phase F0: Decisions
+
+- [x] **Decide** the first API's scope and the shape of its handles. Decided (2026-11-10):
+      - loading a case from a path or from bytes
+      - the DC and AC power flows and both OPFs, with default or custom options
+      - the DC and AC models, for building once and solving many scenarios
+      - reading every column of each solution
+
+      Cases, options, models and solutions are separate handles, as in the Rust API. A solution
+      then outlives later solves, read-only handles can be shared between threads, and the
+      Python and Julia bindings stay thin. One session handle holding all of them was the
+      alternative: fewer objects to free, but one thread per session, and each run replacing
+      the last one's results. The outage studies, sensitivities, matrices and features wait for
+      phase F7.
+- [x] **Decide** the crate's name and form. Decided (2026-11-10): `ybus_ffi` in the workspace,
+      with `[lib] name = "ybus"` so C links `-lybus` and includes `ybus.h`, matching the `ybus_`
+      symbol prefix; `crate-type = ["cdylib", "staticlib", "rlib"]`, the `rlib` so Rust tests can
+      call the exports; `publish = false` until a release; `powerflow`'s default features only.
+      The long-term goal suggested `powerflow-ffi`, but the other crates use underscores, and
+      the library is the whole project's.
+- [x] **Decide** how a case crosses the boundary. Decided (2026-11-10): an opaque handle with
+      whole-column getters and setters, for example every bus's `pd_mw` read into or written
+      from one array. A C caller can run scenarios on one case, the ABI doesn't depend on the
+      structs' layouts, and whole arrays suit NumPy and Julia. Rejected:
+      - **loaders only:** C couldn't change a case
+      - **`#[repr(C)]` mirror structs:** every field of `Bus`, `Gen` and `Branch` would be part of
+        the ABI
+      - **one element at a time:** slow across the boundary on the largest cases
+
+      Changing part of a column, by range or by index set, waits for phase F7.
+- [x] **Decide** how results cross the boundary. Decided (2026-11-10):
+      - each solution is an opaque handle
+      - each column has an accessor that copies it into a buffer the caller allocates, with a
+        length check (too short is an error, never a partial write)
+      - the scalars (`objective`, `iterations`, `mismatch_pu`) have plain getters
+      - the OPF's `status` becomes a code
+      - the OPF's `solver` and `residuals` fields stay out, since they expose `interior_point`'s
+        internals
+
+      Pointers into the solution's own memory were the alternative: no copies, but a C caller
+      could use them after freeing the solution.
+- [x] **Decide** how errors cross the boundary. Decided (2026-11-10):
+      - every fallible function returns a `ybus_status`, an `int32_t` enum
+      - `YBUS_OK` is 0, with one code per `PowerflowError` variant and codes for the boundary's
+        own failures: a null argument, invalid UTF-8, a buffer too short, and a caught panic
+      - `YBUS_ERROR_OTHER` covers variants added to `PowerflowError` later, until each gets its
+        own code
+      - codes are never renumbered
+      - the message is kept per thread and read by `ybus_last_error_message`, which keeps every
+        signature short and works when a constructor fails before any handle exists
+
+      Rejected: an error handle returned through an out-parameter (an extra argument on every
+      call, and one more object to free), and a message kept on the failing handle (awkward for
+      constructors and for functions that take several handles).
+- [x] **Decide** how options cross the boundary. Decided (2026-11-10): opaque handles created
+      at the defaults (`ybus_ac_options_new`), with one typed setter per field (for example
+      `ybus_ac_options_set_tolerance`), and a null handle meaning the defaults. The compiler
+      checks each name and type, and a new option is a new function, which doesn't break the ABI.
+      String-keyed setters were the alternative: no new symbols for new options, but a
+      misspelled name or wrong type would only fail at run time.
+- [x] **Decide** the ABI and versioning policy, to be written in the crate's README. Decided
+      (2026-11-10):
+      - every symbol is prefixed `ybus_`
+      - `ybus_version` returns the library's version, and the header defines it as macros
+      - before 1.0, any minor version may break the ABI
+      - from 1.0, minor versions only add functions and codes
+- [x] **Decide** the thread-safety contract, to be written in the crate's README. Decided
+      (2026-11-10):
+      - a handle can move between threads
+      - a handle that isn't being changed (a case, a model, a solution) can be read from many
+        threads at once
+      - a case being changed, or an options handle being set, needs the caller's own lock
+
+      Phase F1 checks that the Rust types underneath are `Send` and `Sync`.
+- [x] **Decide** how the header is made. Decided (2026-11-10): generated with the `cbindgen`
+      command-line tool and committed as `ybus_ffi/include/ybus.h`, with CI regenerating it and
+      failing when it differs. `cbindgen` is MPL-2.0, which `deny.toml`'s license list doesn't
+      include, so as a build dependency it would fail the Dependencies job; installed in CI as a
+      tool, it stays out of the dependency tree. Rejected: generating it in `build.rs` (a build
+      dependency and a license exception), and writing it by hand (signatures could drift in
+      ways the C compiler doesn't catch, such as a changed integer width).
+
+## Phase F1: Preparing `powerflow`
+
+- [ ] `check_case` compares the bus labels and the branches' endpoints as well as the tables'
+      lengths, so a model solved against a different case of the same size returns
+      `CaseMismatch`. Which other fields it compares, such as statuses, is decided with the
+      item, against what each model's `solve` documents that it reads from the case.
+      `CaseMismatch`'s fields name only table sizes, so it may need a new field or variant.
+- [ ] A test asserts at compile time that `Case`, the models, the options and the solutions are
+      `Send` and `Sync`, so the thread-safety contract is checked rather than assumed.
+
+## Phase F2: The crate and its boundary
+
+- [ ] The crate: a workspace member named and built as decided in F0, with `ybus_version`, and a
+      README holding the ABI policy and thread-safety contract. `check.sh` and CI build and lint
+      it.
+- [ ] The header: generated by the `cbindgen` command-line tool, committed, and regenerated in
+      CI, which fails when it differs.
+- [ ] A C test harness: a small C program per area, compiled against the header and linked
+      against the static library, run by `check.sh` and CI. Later items each add their C tests.
+- [ ] One guard that every export goes through:
+      - `catch_unwind` turns a panic into `YBUS_ERROR_PANIC` and records its message
+      - null and alignment checks on pointer arguments
+      - the per-thread last error recorded on failure
+
+      A panic reaching an `extern "C"` function aborts the process (since Rust 1.81), so the
+      guard turns that into a status code. A test forces a panic and checks the code.
+- [ ] `ybus_status` and the mapping from `PowerflowError`, with `YBUS_ERROR_OTHER` as the
+      mapping's catch-all arm, since `#[non_exhaustive]` requires one outside `powerflow`.
+      `ybus_last_error_message` copies the message into a caller's buffer and returns the length
+      it needs. Tests trigger a representative error of each kind from C.
+
+## Phase F3: Cases
+
+- [ ] Loading and freeing: `ybus_case_from_path` (a NUL-terminated UTF-8 path),
+      `ybus_case_from_bytes`, `ybus_case_clone` and `ybus_case_free` (a no-op on null).
+- [ ] Sizes and scalars: the bus, generator and branch counts, `base_mva`, and whether the case
+      has costs and bus names.
+- [ ] Column getters for every numeric field of the bus, generator and branch tables, with bus
+      types and statuses as integer columns using MATPOWER's codes. Bus names, if any, are read
+      one at a time by index.
+- [ ] Column setters for the same fields. A set isn't validated; invalid data is reported when
+      the case is solved, as in Rust, where building a model runs `Case::validate`.
+- [ ] Generator costs, read and set in a form for both cost models. The form (flattened
+      coefficients with offsets, or one generator at a time) is decided with the item.
+
+## Phase F4: Power flows
+
+- [ ] Options handles for the DC and AC power flows: create at the defaults, free, and one typed
+      setter per field: the ordering; the method, tolerance, iteration limit and reactive
+      limits.
+- [ ] `ybus_dc_power_flow`: a case and options (null for the defaults) in, a solution handle out,
+      with its column accessors and free. Tests against the committed MATPOWER references.
+- [ ] `ybus_ac_power_flow`, in the same form, with the iteration count, mismatch, limited
+      generators and factorization count.
+- [ ] The DC and AC models: build from a case, solve against a case (with F1's stricter
+      `check_case`), restamp (AC), and free. A C test solves several load scenarios against one
+      model.
+
+## Phase F5: Optimal power flows
+
+- [ ] OPF options handles: the solver (MIPS or the predictor-corrector method), and its main
+      tolerances, iteration limit and KKT factorization, each by a typed setter. Which of the
+      solvers' other fields to expose is decided with the item; the rest keep their defaults.
+- [ ] `ybus_dc_opf`: a solution handle with dispatch, flows, prices, multipliers, objective,
+      status code and iteration count. Tests against the committed references.
+- [ ] `ybus_ac_opf`, in the same form, with the voltage, reactive power and branch multipliers.
+
+## Phase F6: Hardening and a first release
+
+- [ ] CI runs the C tests under AddressSanitizer and UndefinedBehaviorSanitizer, so leaks,
+      double frees and out-of-bounds writes at the boundary fail the build.
+- [ ] A C example in the crate (load a case, run each solve, print a few results), and its use
+      in the crate's README.
+- [ ] A record of the exported symbols, compared with the built library in CI, so a symbol
+      removed or renamed is a visible decision. Whether this starts before 1.0 is decided with
+      the item.
+- [ ] The boundary's own cost, measured on mid-size cases: each solve through C against the same
+      solve in Rust. Recorded in `docs/benchmarks/`; it feeds long-term goal 2.
+
+## Phase F7: Later
+
+Coarse, and planned when its turn comes:
+
+- **Partial case edits:** setting part of a column by range or by index set, so a scenario that
+  changes a few loads on a large case doesn't copy every column.
+- **DC outage studies** through C, after `DcStudy` owns or shares its model (an `Arc`, say)
+  instead of borrowing it.
+- **Sensitivities** (PTDF and LODF), and builds with the `rayon` and `cuda` features.
+- **Python** through PyO3 and maturin, binding `powerflow` directly: cases from files or arrays,
+  the power flows and OPFs, and results as NumPy arrays. Tested with pytest in CI.
+- **Julia** through the C library with `ccall`, wrapped in a small package, tested with Julia's
+  own test runner in CI.
