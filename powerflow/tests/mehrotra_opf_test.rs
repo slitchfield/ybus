@@ -144,8 +144,8 @@ fn compare_dc(
             .unwrap()
             .residuals,
         floors: Floors::new(
-            s.solver.x(),
-            largest_multiplier(s.solver.multipliers()),
+            &s.solver.x,
+            largest_multiplier(&s.solver.multipliers),
             1.0,
         ),
     };
@@ -172,8 +172,8 @@ fn compare_ac(
             .unwrap()
             .residuals,
         floors: Floors::new(
-            s.solver.x(),
-            largest_multiplier(s.solver.multipliers()),
+            &s.solver.x,
+            largest_multiplier(&s.solver.multipliers),
             1e-4,
         ),
     };
@@ -261,8 +261,8 @@ fn mips_analyzes_the_opf_once() {
         let case = Case::from_path(&path).unwrap();
         let dc = dc_opf_with_options(&case, &DcOpfOptions::default()).unwrap();
         let ac = ac_opf_with_options(&case, &AcOpfOptions::default()).unwrap();
-        assert_eq!(dc.solver.analyses(), 1, "{name} DC");
-        assert_eq!(ac.solver.analyses(), 1, "{name} AC");
+        assert_eq!(dc.solver.analyses, 1, "{name} DC");
+        assert_eq!(ac.solver.analyses, 1, "{name} AC");
     }
 }
 
@@ -296,12 +296,12 @@ fn committed_cases_meet_the_bar() {
         found.extend(problems(name, "DC", s.converged(), success, &c));
         assert_eq!(c.iterations, dc, "{name} DC: iterations");
         // The OPF's matrices keep their patterns, so one analysis serves the whole solve
-        assert_eq!(s.solver.analyses(), 1, "{name} DC: analyses");
+        assert_eq!(s.solver.analyses, 1, "{name} DC: analyses");
         let (s, c, success) = compare_ac(name, &path, &committed_dir(), &AcOpfOptions::mehrotra());
         report(name, "AC", &c);
         found.extend(problems(name, "AC", s.converged(), success, &c));
         assert_eq!(c.iterations, ac, "{name} AC: iterations");
-        assert_eq!(s.solver.analyses(), 1, "{name} AC: analyses");
+        assert_eq!(s.solver.analyses, 1, "{name} AC: analyses");
     }
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
@@ -379,12 +379,12 @@ fn committed_cases_meet_the_bar_with_ldlt() {
             let (s, c, success) = compare_dc(name, &path, &committed_dir(), &dc);
             report(name, &format!("DC, {solver}, LDLᵀ"), &c);
             found.extend(problems(name, "DC", s.converged(), success, &c));
-            assert_eq!(s.solver.analyses(), 1, "{name} DC, {solver}: analyses");
+            assert_eq!(s.solver.analyses, 1, "{name} DC, {solver}: analyses");
             let (s, c, success) = compare_ac(name, &path, &committed_dir(), &ac);
             report(name, &format!("AC, {solver}, LDLᵀ"), &c);
             found.extend(problems(name, "AC", s.converged(), success, &c));
-            assert_eq!(s.solver.analyses(), 1, "{name} AC, {solver}: analyses");
-            let steps = s.solver.refinement_steps();
+            assert_eq!(s.solver.analyses, 1, "{name} AC, {solver}: analyses");
+            let steps = s.solver.refinement_steps;
             if solver == "MIPS" {
                 refinement_steps.0 += steps;
             } else {

@@ -107,9 +107,9 @@ fn piecewise_linear_costs_dispatch_segment_by_segment() {
     );
     // MIPS's own variables end with the helper, at generator 1's cost
     assert!(
-        (s.solver.x()[4] - 500.0).abs() < 1e-2,
+        (s.solver.x[4] - 500.0).abs() < 1e-2,
         "y = {}",
-        s.solver.x()[4]
+        s.solver.x[4]
     );
 }
 

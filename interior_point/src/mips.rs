@@ -13,6 +13,7 @@ use sparse_mat::compressed_matrix::{CsrMatrix, Ordering};
 use crate::interior_point_error::InteriorPointError;
 use crate::kkt::{KktFactorization, KktSolver};
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
+use crate::solution::{History, Multipliers, Solution, Status};
 use crate::vector::{dot, norm_inf};
 
 /// The fill-reducing ordering for the KKT system's LU factorization: COLAMD.
@@ -101,18 +102,10 @@ impl Default for MipsOptions {
     }
 }
 
-/// How MIPS ended (`exitflag`), the status the solvers share. For MIPS, `NumericalFailure` is
-/// a NaN or too long a step, a step length below `alpha_min`, or the barrier parameter outside
-/// `[ε, 1/ε]`.
-pub use crate::solution::Status as MipsStatus;
-
-/// The multipliers at the solution, as MIPS reports them (shared with the other solvers).
-pub use crate::solution::Multipliers;
-
 /// One iteration's record (`output.hist`): the termination measures, the barrier parameter,
 /// the step's 2-norm, the objective and the step lengths.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct IterationRecord {
+pub struct MipsIteration {
     /// The feasibility measure
     pub feascond: f64,
     /// The gradient measure
@@ -131,35 +124,6 @@ pub struct IterationRecord {
     pub alphap: f64,
     /// The dual step length
     pub alphad: f64,
-}
-
-/// MIPS's result.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MipsSolution {
-    /// The final point
-    pub x: Vec<f64>,
-    /// The objective there
-    pub f: f64,
-    /// How the solve ended
-    pub status: MipsStatus,
-    /// The number of iterations taken
-    pub iterations: usize,
-    /// The multipliers
-    pub multipliers: Multipliers,
-    /// One record for the starting point and one per iteration
-    pub history: Vec<IterationRecord>,
-    /// How many times the KKT matrix was analyzed: 1 if its pattern held from the first
-    /// iteration to the last (see [`KKT_ORDERING`]), 0 if no iteration factored it
-    pub analyses: usize,
-    /// The refinement steps taken over every KKT solve: 0 with LU, which isn't refined
-    pub refinement_steps: usize,
-}
-
-impl MipsSolution {
-    /// Whether the solve converged.
-    pub fn converged(&self) -> bool {
-        self.status == MipsStatus::Converged
-    }
 }
 
 /// The objective, constraints and Jacobians at a point: MIPS's `f`, `df`, `h`, `g`, and the
@@ -289,10 +253,10 @@ fn lagrangian_gradient(e: &Evaluation, lam: &[f64], mu: &[f64]) -> Vec<f64> {
 #[allow(clippy::manual_range_contains)]
 pub fn mips<P: Problem>(
     problem: &P,
-    x0: &[f64],
     constraints: &Constraints,
+    x0: &[f64],
     options: &MipsOptions,
-) -> Result<MipsSolution, InteriorPointError> {
+) -> Result<Solution, InteriorPointError> {
     let opt = options;
     if opt.xi >= 1.0 || opt.xi < 0.5 {
         return Err(InteriorPointError::InvalidOption { name: "xi" });
@@ -438,7 +402,7 @@ pub fn mips<P: Problem>(
     let mut lx = lagrangian_gradient(&e, &lam, &mu);
     let (mut feascond, mut gradcond, mut compcond) = conditions(&e, &lx, &x, &z, &lam, &mu);
     let mut costcond = (e.f - f0).abs() / (1.0 + f0.abs());
-    let mut history = vec![IterationRecord {
+    let mut history = vec![MipsIteration {
         feascond,
         gradcond,
         compcond,
@@ -584,7 +548,7 @@ pub fn mips<P: Problem>(
         lx = lagrangian_gradient(&e, &lam, &mu);
         (feascond, gradcond, compcond) = conditions(&e, &lx, &x, &z, &lam, &mu);
         costcond = (e.f - f0).abs() / (1.0 + f0.abs());
-        history.push(IterationRecord {
+        history.push(MipsIteration {
             feascond,
             gradcond,
             compcond,
@@ -614,11 +578,11 @@ pub fn mips<P: Problem>(
         }
     }
     let status = if failed {
-        MipsStatus::NumericalFailure
+        Status::NumericalFailure
     } else if converged {
-        MipsStatus::Converged
+        Status::Converged
     } else {
-        MipsStatus::MaxIterations
+        Status::MaxIterations
     };
 
     // Inequalities well inside their limits lose a small multiplier; then the scale comes off
@@ -662,15 +626,16 @@ pub fn mips<P: Problem>(
         lower: mu_l[..nx].to_vec(),
         upper: mu_u[..nx].to_vec(),
     };
-    Ok(MipsSolution {
+    Ok(Solution {
         x,
         f,
         status,
         iterations: i,
         multipliers,
-        history,
+        history: History::Mips(history),
         analyses: kkt.analyses(),
         refinement_steps: kkt.refinement_steps(),
+        inertia_corrections: 0,
     })
 }
 
@@ -684,7 +649,7 @@ pub fn qps_mips(
     constraints: &Constraints,
     x0: Option<&[f64]>,
     options: &MipsOptions,
-) -> Result<MipsSolution, InteriorPointError> {
+) -> Result<Solution, InteriorPointError> {
     let nx = qp.c.len();
     if qp.h.is_none()
         && constraints.a.as_ref().is_none_or(|a| a.shape().0 == 0)
@@ -699,5 +664,5 @@ pub fn qps_mips(
         }
     }
     let zeros = vec![0.0; nx];
-    mips(qp, x0.unwrap_or(&zeros), constraints, options)
+    mips(qp, constraints, x0.unwrap_or(&zeros), options)
 }

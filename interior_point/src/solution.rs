@@ -1,12 +1,14 @@
-//! What the solvers' results share: how a solve ended, the multipliers in MIPS's convention, and
-//! a check of the KKT conditions at a point that doesn't depend on which solver found it.
+//! The solvers' results: a [`Solution`] from either solver, how its solve ended, its multipliers
+//! in MIPS's convention, and a check of the KKT conditions at a point that doesn't depend on
+//! which solver found it.
 
 use crate::interior_point_error::InteriorPointError;
+use crate::mehrotra::MehrotraIteration;
+use crate::mips::MipsIteration;
 use crate::problem::{Constraints, Problem};
 use crate::vector::norm_inf;
 
-/// How a solve ended, for either solver: MIPS calls it [`MipsStatus`](crate::mips::MipsStatus)
-/// and the predictor-corrector method [`MehrotraStatus`](crate::mehrotra::MehrotraStatus).
+/// How a solve ended, for either solver.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     /// Every termination test passed (MIPS's `exitflag` 1)
@@ -33,6 +35,65 @@ pub struct Multipliers {
     pub lower: Vec<f64>,
     /// One per variable, for `xmax` (`upper`)
     pub upper: Vec<f64>,
+}
+
+/// A solver's result, from MIPS ([`mips`](crate::mips::mips)) or the predictor-corrector method
+/// ([`mehrotra`](crate::mehrotra::mehrotra)).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Solution {
+    /// The final point
+    pub x: Vec<f64>,
+    /// The objective there
+    pub f: f64,
+    /// How the solve ended
+    pub status: Status,
+    /// The number of iterations taken
+    pub iterations: usize,
+    /// The multipliers
+    pub multipliers: Multipliers,
+    /// One record for the starting point and one per iteration, in the solver's own terms
+    pub history: History,
+    /// How many times the KKT matrix was analyzed: 1 if its pattern held from the first
+    /// iteration to the last (see [`KKT_ORDERING`](crate::mips::KKT_ORDERING)), 0 if no
+    /// iteration factored it
+    pub analyses: usize,
+    /// The refinement steps taken over every KKT solve: 0 with LU, which isn't refined
+    pub refinement_steps: usize,
+    /// How many times the KKT matrix was refactored with a larger `δ_w` to correct its inertia:
+    /// only the predictor-corrector method corrects it, with LDLᵀ, so 0 otherwise
+    pub inertia_corrections: usize,
+}
+
+impl Solution {
+    /// Whether the solve converged.
+    pub fn converged(&self) -> bool {
+        self.status == Status::Converged
+    }
+}
+
+/// Each iteration's record, from the solver that took them: one for the starting point, then
+/// one per iteration.
+#[derive(Clone, Debug, PartialEq)]
+pub enum History {
+    /// MIPS's records (`output.hist`)
+    Mips(Vec<MipsIteration>),
+    /// The predictor-corrector method's records
+    Mehrotra(Vec<MehrotraIteration>),
+}
+
+impl History {
+    /// The number of records: one more than the iterations taken.
+    pub fn len(&self) -> usize {
+        match self {
+            History::Mips(records) => records.len(),
+            History::Mehrotra(records) => records.len(),
+        }
+    }
+
+    /// Whether there are no records, which a solve never returns.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// How far a point and its multipliers are from satisfying the KKT conditions, each an ∞-norm,

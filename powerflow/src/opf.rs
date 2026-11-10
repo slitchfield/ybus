@@ -8,8 +8,8 @@
 //! - [`ac`]: the AC optimal power flow ([`ac::ac_opf`]), as `runopf` computes it with MIPS.
 //!
 //! The solvers' types this module's API names are re-exported here, from their options
-//! ([`MipsOptions`], [`MehrotraOptions`], [`KktFactorization`]) to their results ([`Status`],
-//! [`Multipliers`], [`KktResiduals`]) and refusals ([`InteriorPointError`]), so that a caller
+//! ([`MipsOptions`], [`MehrotraOptions`], [`KktFactorization`]) to their results ([`Solution`],
+//! [`Status`], [`Multipliers`], [`History`], [`KktResiduals`]) and refusals ([`InteriorPointError`]), so that a caller
 //! needs no direct dependency on `interior_point`.
 //!
 //! See phase O1 of `docs/OptimizationChecklist.md` for the roadmap.
@@ -29,9 +29,9 @@ use std::f64::consts::PI;
 //   direct dependency on interior_point
 pub use interior_point::interior_point_error::InteriorPointError;
 pub use interior_point::kkt::KktFactorization;
-pub use interior_point::mehrotra::{MehrotraOptions, MehrotraSolution};
-pub use interior_point::mips::{MipsOptions, MipsSolution};
-pub use interior_point::solution::{KktResiduals, Multipliers, Status};
+pub use interior_point::mehrotra::{MehrotraIteration, MehrotraOptions};
+pub use interior_point::mips::{MipsIteration, MipsOptions};
+pub use interior_point::solution::{History, KktResiduals, Multipliers, Solution, Status};
 use sparse_mat::compressed_matrix::CsrMatrix;
 
 use crate::case::{BusType, Case};
@@ -64,86 +64,6 @@ impl OpfSolver {
                 options.kkt_factorization = kkt;
                 OpfSolver::Mehrotra(options)
             }
-        }
-    }
-}
-
-/// The solver's own result, on the model's variables and constraints, with each iteration's
-/// record.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum SolverResult {
-    /// MIPS's
-    Mips(MipsSolution),
-    /// The predictor-corrector method's
-    Mehrotra(MehrotraSolution),
-}
-
-impl SolverResult {
-    /// How the solve ended.
-    pub fn status(&self) -> Status {
-        match self {
-            SolverResult::Mips(s) => s.status,
-            SolverResult::Mehrotra(s) => s.status,
-        }
-    }
-
-    /// The iterations taken.
-    pub fn iterations(&self) -> usize {
-        match self {
-            SolverResult::Mips(s) => s.iterations,
-            SolverResult::Mehrotra(s) => s.iterations,
-        }
-    }
-
-    /// The final point, on the model's variables.
-    pub fn x(&self) -> &[f64] {
-        match self {
-            SolverResult::Mips(s) => &s.x,
-            SolverResult::Mehrotra(s) => &s.x,
-        }
-    }
-
-    /// The objective the solver minimized there (for the DC OPF, without the costs' constant
-    /// terms).
-    pub fn f(&self) -> f64 {
-        match self {
-            SolverResult::Mips(s) => s.f,
-            SolverResult::Mehrotra(s) => s.f,
-        }
-    }
-
-    /// How many times the solver analyzed the KKT matrix: 1 when its pattern held for the
-    /// whole solve (see [`KKT_ORDERING`](interior_point::mips::KKT_ORDERING)).
-    pub fn analyses(&self) -> usize {
-        match self {
-            SolverResult::Mips(s) => s.analyses,
-            SolverResult::Mehrotra(s) => s.analyses,
-        }
-    }
-
-    /// The refinement steps taken over every KKT solve: 0 with LU.
-    pub fn refinement_steps(&self) -> usize {
-        match self {
-            SolverResult::Mips(s) => s.refinement_steps,
-            SolverResult::Mehrotra(s) => s.refinement_steps,
-        }
-    }
-
-    /// How many times the KKT matrix was refactored to correct its inertia: only the
-    /// predictor-corrector method corrects it, with LDLᵀ, so 0 otherwise.
-    pub fn inertia_corrections(&self) -> usize {
-        match self {
-            SolverResult::Mips(_) => 0,
-            SolverResult::Mehrotra(s) => s.inertia_corrections,
-        }
-    }
-
-    /// The multipliers, in MIPS's convention.
-    pub fn multipliers(&self) -> &Multipliers {
-        match self {
-            SolverResult::Mips(s) => &s.multipliers,
-            SolverResult::Mehrotra(s) => &s.multipliers,
         }
     }
 }

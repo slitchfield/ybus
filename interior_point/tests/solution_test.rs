@@ -105,8 +105,8 @@ fn mips_solutions_have_small_residuals() {
 
     let s = mips(
         &Nonlinear3,
-        &[1.0, 1.0, 0.0],
         &Constraints::default(),
+        &[1.0, 1.0, 0.0],
         &options,
     )
     .unwrap();
@@ -118,7 +118,7 @@ fn mips_solutions_have_small_residuals() {
         xmax: Some(vec![5.0; 4]),
         ..Constraints::default()
     };
-    let s = mips(&Hs71, &[1.0, 5.0, 5.0, 1.0], &bounds, &options).unwrap();
+    let s = mips(&Hs71, &bounds, &[1.0, 5.0, 5.0, 1.0], &options).unwrap();
     let r = kkt_residuals(&Hs71, &bounds, &s.x, &s.multipliers).unwrap();
     assert!(r.max() < 1e-5, "hs71: {r:?}");
 }

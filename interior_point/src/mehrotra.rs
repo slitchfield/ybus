@@ -89,7 +89,7 @@ use sparse_mat::compressed_matrix::Inertia;
 
 use crate::kkt::{KktFactorization, KktSolver};
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
-use crate::solution::Multipliers;
+use crate::solution::{History, Multipliers, Solution, Status};
 use crate::vector::{dot, norm_inf};
 
 /// The predictor-corrector method's options, with MIPS's termination defaults.
@@ -166,11 +166,6 @@ const DELTA_W_DECREASE: f64 = 1.0 / 3.0;
 const DELTA_W_FIRST_INCREASE: f64 = 100.0;
 const DELTA_W_INCREASE: f64 = 8.0;
 
-/// How a solve ended, the status the solvers share. Here `NumericalFailure` is a singular KKT
-/// system, a NaN or too long a step, a step length below `alpha_min`, or the average
-/// complementarity outside `[ε, 1/ε]`.
-pub use crate::solution::Status as MehrotraStatus;
-
 /// One iteration's record: the termination measures, the average complementarity and the
 /// centering it chose, the step's 2-norm, the objective and the step lengths.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -198,39 +193,6 @@ pub struct MehrotraIteration {
     /// The inertia correction's shift of `W`, `δ_w` (0 when the inertia was right, and always
     /// with LU)
     pub delta_w: f64,
-}
-
-/// The predictor-corrector method's result.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MehrotraSolution {
-    /// The final point
-    pub x: Vec<f64>,
-    /// The objective there
-    pub f: f64,
-    /// How the solve ended
-    pub status: MehrotraStatus,
-    /// The number of iterations taken
-    pub iterations: usize,
-    /// The multipliers, in MIPS's convention
-    pub multipliers: Multipliers,
-    /// One record for the starting point and one per iteration
-    pub history: Vec<MehrotraIteration>,
-    /// How many times the KKT matrix was analyzed: 1 if its pattern held from the first
-    /// iteration to the last (see [`KKT_ORDERING`](crate::mips::KKT_ORDERING)), 0 if no iteration
-    /// factored it
-    pub analyses: usize,
-    /// The refinement steps taken over every KKT solve: 0 with LU, which isn't refined
-    pub refinement_steps: usize,
-    /// How many times the KKT matrix was refactored with a larger `δ_w` to correct its inertia:
-    /// 0 with LU
-    pub inertia_corrections: usize,
-}
-
-impl MehrotraSolution {
-    /// Whether the solve converged.
-    pub fn converged(&self) -> bool {
-        self.status == MehrotraStatus::Converged
-    }
 }
 
 /// The linear rows and bounds, split as the method uses them.
@@ -495,14 +457,18 @@ impl Evaluation {
 /// inside each, and at most `bound_frac` of the distance between two bounds. The slacks start
 /// at `max(z0, −h(x0))` and the multipliers at `max(z0, 1/slack)`, as MIPS starts them.
 ///
+/// It fails numerically ([`Status::NumericalFailure`]) on a singular KKT system, a NaN or too
+/// long a step, a step length below `alpha_min`, or the average complementarity outside
+/// `[ε, 1/ε]`.
+///
 /// Returns `InteriorPointError::InvalidOption` for `xi` outside `[0.5, 1)`, and `Dimension` for
 /// inputs of the wrong length.
 pub fn mehrotra<P: Problem>(
     problem: &P,
-    x0: &[f64],
     constraints: &Constraints,
+    x0: &[f64],
     options: &MehrotraOptions,
-) -> Result<MehrotraSolution, InteriorPointError> {
+) -> Result<Solution, InteriorPointError> {
     let opt = options;
     if !(0.5..1.0).contains(&opt.xi) {
         return Err(InteriorPointError::InvalidOption { name: "xi" });
@@ -938,11 +904,11 @@ pub fn mehrotra<P: Problem>(
         }
     }
     let status = if failed {
-        MehrotraStatus::NumericalFailure
+        Status::NumericalFailure
     } else if converged {
-        MehrotraStatus::Converged
+        Status::Converged
     } else {
-        MehrotraStatus::MaxIterations
+        Status::MaxIterations
     };
 
     // Constraints well inside their limits lose a small multiplier, as in MIPS; then the scale
@@ -1010,7 +976,7 @@ pub fn mehrotra<P: Problem>(
             upper[k] = lam;
         }
     }
-    Ok(MehrotraSolution {
+    Ok(Solution {
         x,
         f: e.f / opt.cost_mult,
         status,
@@ -1023,7 +989,7 @@ pub fn mehrotra<P: Problem>(
             lower,
             upper,
         },
-        history,
+        history: History::Mehrotra(history),
         analyses: kkt.analyses(),
         refinement_steps: kkt.refinement_steps(),
         inertia_corrections: corrections,
@@ -1041,7 +1007,7 @@ pub fn qps_mehrotra(
     constraints: &Constraints,
     x0: Option<&[f64]>,
     options: &MehrotraOptions,
-) -> Result<MehrotraSolution, InteriorPointError> {
+) -> Result<Solution, InteriorPointError> {
     let nx = qp.c.len();
     if qp.h.is_none()
         && constraints.a.as_ref().is_none_or(|a| a.shape().0 == 0)
@@ -1056,5 +1022,5 @@ pub fn qps_mehrotra(
         }
     }
     let zeros = vec![0.0; nx];
-    mehrotra(qp, x0.unwrap_or(&zeros), constraints, options)
+    mehrotra(qp, constraints, x0.unwrap_or(&zeros), options)
 }

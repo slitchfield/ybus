@@ -10,8 +10,9 @@ use common::{
     dense, known, qp4_constraints, qp4_hessian, references, Banana, Hs71, Nonlinear2, Nonlinear3,
     Quadratic3,
 };
-use interior_point::mips::{mips, qps_mips, MipsOptions, MipsSolution, MipsStatus};
+use interior_point::mips::{mips, qps_mips, MipsOptions};
 use interior_point::problem::{Constraints, Problem, QuadraticProblem};
+use interior_point::solution::{Solution, Status};
 
 /// How far our results may be from MATPOWER's, relative to the larger magnitude (at least 1).
 /// Both solve the same small systems, but by different LU factorizations (UMFPACK's in
@@ -40,15 +41,15 @@ fn close_within(ours: &[f64], theirs: &[f64], tolerance: f64, what: &str) {
 }
 
 /// Checks a solution against MATPOWER's run of the same problem.
-fn check(name: &str, step_control: bool, solution: &MipsSolution) {
+fn check(name: &str, step_control: bool, solution: &Solution) {
     let runs = references();
     let reference = &runs[&(name.to_string(), step_control)];
     let field = |key: &str| reference.0.get(key);
     let eflag = field("eflag").unwrap()[0];
     let status = match eflag as i64 {
-        1 => MipsStatus::Converged,
-        0 => MipsStatus::MaxIterations,
-        _ => MipsStatus::NumericalFailure,
+        1 => Status::Converged,
+        0 => Status::MaxIterations,
+        _ => Status::NumericalFailure,
     };
     let what = format!("{name} (step control {step_control})");
     assert_eq!(solution.status, status, "{what}: status");
@@ -77,7 +78,7 @@ fn check(name: &str, step_control: bool, solution: &MipsSolution) {
         ("lower", &m.lower),
         ("upper", &m.upper),
     ] {
-        let tolerance = if status == MipsStatus::NumericalFailure {
+        let tolerance = if status == Status::NumericalFailure {
             DIVERGED
         } else {
             AGREEMENT
@@ -99,15 +100,15 @@ fn options(step_control: bool) -> MipsOptions {
 #[test]
 fn unconstrained_problems_match_matpower() {
     for sc in [false, true] {
-        let s = mips(&Banana, &[-1.9, 2.0], &Constraints::default(), &options(sc)).unwrap();
+        let s = mips(&Banana, &Constraints::default(), &[-1.9, 2.0], &options(sc)).unwrap();
         check("banana", sc, &s);
         known(&s.x, &[1.0, 1.0], 13, "banana x");
         known(&[s.f], &[0.0], 13, "banana f");
 
         let s = mips(
             &Quadratic3,
-            &[0.0; 3],
             &Constraints::default(),
+            &[0.0; 3],
             &options(sc),
         )
         .unwrap();
@@ -124,7 +125,7 @@ fn a_linearly_constrained_qp_matches_matpower() {
             h: Some(qp4_hessian()),
             c: vec![0.0; 4],
         };
-        let s = mips(&qp, &[1.0, 0.0, 0.0, 1.0], &qp4_constraints(), &options(sc)).unwrap();
+        let s = mips(&qp, &qp4_constraints(), &[1.0, 0.0, 0.0, 1.0], &options(sc)).unwrap();
         check("qp4", sc, &s);
         let third = |v: &[f64]| v.iter().map(|v| v / 3.0).collect::<Vec<_>>();
         known(&s.x, &third(&[0.0, 2.8, 0.2, 0.0]), 6, "qp4 x");
@@ -146,15 +147,15 @@ fn nonlinear_programs_match_matpower() {
             xmin: Some(vec![0.0; 2]),
             ..Constraints::default()
         };
-        let s = mips(&Nonlinear2, &[1.1, 0.0], &bounds, &options(sc)).unwrap();
+        let s = mips(&Nonlinear2, &bounds, &[1.1, 0.0], &options(sc)).unwrap();
         check("nonlinear2", sc, &s);
         known(&s.x, &[1.0, 1.0], 6, "nonlinear2 x");
         known(&s.multipliers.ineq_nonlin, &[0.0, 0.5], 6, "nonlinear2 mu");
 
         let s = mips(
             &Nonlinear3,
-            &[1.0, 1.0, 0.0],
             &Constraints::default(),
+            &[1.0, 1.0, 0.0],
             &options(sc),
         )
         .unwrap();
@@ -178,7 +179,7 @@ fn nonlinear_programs_match_matpower() {
             xmax: Some(vec![5.0; 4]),
             ..Constraints::default()
         };
-        let s = mips(&Hs71, &[1.0, 5.0, 5.0, 1.0], &bounds, &options(sc)).unwrap();
+        let s = mips(&Hs71, &bounds, &[1.0, 5.0, 5.0, 1.0], &options(sc)).unwrap();
         check("hs71", sc, &s);
         known(&s.x, &[1.0, 4.7429994, 3.8211503, 1.3794082], 6, "hs71 x");
         known(&[s.f], &[17.0140173], 6, "hs71 f");
@@ -202,8 +203,8 @@ fn step_control_and_the_iteration_limit_match_matpower() {
     };
     // From (4.5, 4.5, 4.5, 4.5), step control changes the run: without it MIPS stops at a
     //   local point (f ≈ 35.28) in 11 iterations, with it reaches the optimum in 12
-    let plain = mips(&Hs71, &[4.5; 4], &bounds, &options(false)).unwrap();
-    let controlled = mips(&Hs71, &[4.5; 4], &bounds, &options(true)).unwrap();
+    let plain = mips(&Hs71, &bounds, &[4.5; 4], &options(false)).unwrap();
+    let controlled = mips(&Hs71, &bounds, &[4.5; 4], &options(true)).unwrap();
     check("hs71_from_4.5", false, &plain);
     check("hs71_from_4.5", true, &controlled);
     assert_ne!(plain.iterations, controlled.iterations);
@@ -215,9 +216,9 @@ fn step_control_and_the_iteration_limit_match_matpower() {
     );
     // From (2, 2, 2, 2), MIPS reaches its iteration limit
     for sc in [false, true] {
-        let s = mips(&Hs71, &[2.0; 4], &bounds, &options(sc)).unwrap();
+        let s = mips(&Hs71, &bounds, &[2.0; 4], &options(sc)).unwrap();
         check("hs71_from_2", sc, &s);
-        assert_eq!(s.status, MipsStatus::MaxIterations);
+        assert_eq!(s.status, Status::MaxIterations);
         assert_eq!(s.history.len(), 151);
     }
 }

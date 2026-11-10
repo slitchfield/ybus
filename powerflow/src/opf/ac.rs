@@ -34,7 +34,7 @@ use interior_point::kkt::KktFactorization;
 use interior_point::mehrotra::{mehrotra, MehrotraOptions};
 use interior_point::mips::{mips, MipsOptions};
 use interior_point::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Problem};
-use interior_point::solution::{kkt_residuals, KktResiduals, Status};
+use interior_point::solution::{kkt_residuals, KktResiduals, Solution, Status};
 use sparse_mat::compressed_matrix::CsrMatrix;
 use sparse_mat::Complex;
 
@@ -45,7 +45,7 @@ use crate::opf::derivatives::{
     flows, squared_magnitude_hessian, squared_magnitudes, weighted_hessian, Flows,
 };
 use crate::opf::{
-    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver, SolverResult,
+    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver,
 };
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Network;
@@ -150,7 +150,7 @@ pub struct AcOpfSolution {
     pub residuals: KktResiduals,
     /// The solver's own result, on the model's variables `[Va, Vm, Pg, Qg, y]` and
     /// constraints, with each iteration's record
-    pub solver: SolverResult,
+    pub solver: Solution,
 }
 
 impl AcOpfSolution {
@@ -493,19 +493,17 @@ pub fn ac_opf_with_options(
     };
     let refused = |error| PowerflowError::Solver { error };
     let solution = match &options.solver {
-        OpfSolver::Mips(options) => {
-            SolverResult::Mips(mips(&problem, &x0, &constraints, options).map_err(refused)?)
-        }
+        OpfSolver::Mips(options) => mips(&problem, &constraints, &x0, options).map_err(refused)?,
         OpfSolver::Mehrotra(options) => {
-            SolverResult::Mehrotra(mehrotra(&problem, &x0, &constraints, options).map_err(refused)?)
+            mehrotra(&problem, &constraints, &x0, options).map_err(refused)?
         }
     };
-    let residuals = kkt_residuals(&problem, &constraints, solution.x(), solution.multipliers())
+    let residuals = kkt_residuals(&problem, &constraints, &solution.x, &solution.multipliers)
         .expect("the solver's multipliers fit its problem");
 
     // The results, back on the case's tables
-    let x = solution.x();
-    let multipliers = solution.multipliers();
+    let x = &solution.x;
+    let multipliers = &solution.multipliers;
     let v = problem.voltages(x);
     let nbus = case.bus.len();
     let mut vm_pu: Vec<f64> = case.bus.iter().map(|bus| bus.vm_pu).collect();
@@ -582,9 +580,9 @@ pub fn ac_opf_with_options(
         mu_st,
         mu_angmin,
         mu_angmax,
-        objective: solution.f(),
-        status: solution.status(),
-        iterations: solution.iterations(),
+        objective: solution.f,
+        status: solution.status,
+        iterations: solution.iterations,
         residuals,
         solver: solution,
     })
