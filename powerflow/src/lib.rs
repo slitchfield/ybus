@@ -13,6 +13,8 @@
 //!   outages and PTDF columns (`dc::DcStudy::gpu` and `dc::DcSensitivity::gpu`), on a `Gpu`
 //!   from `ybus_cuda`. (Plain code, not links: the items exist only with the feature.)
 //!
+//! [`Case`] and [`PowerflowError`] are re-exported here.
+//!
 //! Both power flows are validated against MATPOWER's own results; see the roadmap in
 //! `docs/PowerFlowChecklist.md`.
 
@@ -27,6 +29,9 @@ pub mod islands;
 pub mod opf;
 pub mod powerflow_error;
 mod topology;
+
+pub use case::Case;
+pub use powerflow_error::PowerflowError;
 
 /// The CUDA device the GPU path runs on (feature `cuda`).
 #[cfg(feature = "cuda")]

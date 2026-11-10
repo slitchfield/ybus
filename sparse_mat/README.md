@@ -28,9 +28,7 @@ sparse_mat = { git = "https://github.com/slitchfield/ybus" }
 ```
 
 ```rust
-use sparse_mat::compressed_matrix::CsrMatrix;
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::sparse_matrix::SparseMatrix;
+use sparse_mat::{CsrMatrix, SparseError, SparseMatrix};
 
 fn main() -> Result<(), SparseError> {
     // Assemble from (row, col, value) triplets. from_triplets has COO semantics: entries
