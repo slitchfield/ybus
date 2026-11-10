@@ -26,6 +26,87 @@ The Rust tests run with `cargo test -p ybus_ffi`. The C tests in [`tests/c/`](te
 small programs, compiled against the header and linked with the static library as a C program
 would be, then run, by `tests/c/run.sh`, which `check.sh` runs once.
 
+## Cases
+
+A `ybus_case` is an opaque handle to a case, made by one of three functions and freed by
+`ybus_case_free`:
+
+- **`ybus_case_from_path(path, &case)`** reads a MATPOWER file. The path is a NUL-terminated
+  UTF-8 string.
+- **`ybus_case_from_bytes(bytes, len, &case)`** parses the file's text from memory.
+- **`ybus_case_clone(case, &copy)`** copies a case, so the copy can change without changing the
+  original.
+
+Each sets `*out` to `NULL` first, and leaves it `NULL` on an error. `ybus_case_free(NULL)` does
+nothing. Rows are numbered from 0, as in C.
+
+Every getter returns a status and writes its value through an out-parameter, such as
+`ybus_case_bus_count(case, &buses)`. The sizes and scalars are:
+- `ybus_case_bus_count`, `ybus_case_gen_count` and `ybus_case_branch_count`
+- `ybus_case_base_mva`, and `ybus_case_set_base_mva`
+- `ybus_case_has_costs` and `ybus_case_has_bus_names`
+
+### Columns
+
+Each column of the bus, generator and branch tables is read whole, one entry per row in case
+order, by a field code. The code is the field's 1-based column number in MATPOWER's matrix for
+that table. For example, `YBUS_BUS_PD_MW` is 3, `YBUS_GEN_STATUS` is 8 and `YBUS_BRANCH_X` is
+4; the header lists them all.
+
+There's one getter per table and value type:
+
+```c
+double pd[3];
+ybus_case_get_bus_f64(case, YBUS_BUS_PD_MW, pd, 3);
+int64_t status[3];
+ybus_case_get_branch_i64(case, YBUS_BRANCH_STATUS, status, 3);
+```
+
+- **`int64_t` columns:** labels, areas, zones, bus types (MATPOWER's codes 1 to 4) and statuses
+  (1 in service, 0 not). Every other field is a `double` column.
+- **A code that's wrong for the function** gives `YBUS_ERROR_INVALID_FIELD`, whether the table
+  doesn't have it or it's of the other type.
+- **Too short a buffer** gives `YBUS_ERROR_BUFFER_TOO_SMALL` and is left untouched. A longer
+  one keeps its tail.
+
+Each getter has a setter, such as `ybus_case_set_bus_f64(case, YBUS_BUS_PD_MW, values, 3)`.
+- **Length:** the array must have exactly one entry per row, or it's
+  `YBUS_ERROR_LENGTH_MISMATCH`.
+- **`int64_t` columns** are checked whole before anything is written. A negative label, area or
+  zone, a bus type outside 1 to 4, or a status other than 0 or 1 is
+  `YBUS_ERROR_INVALID_VALUE`, and the column is left as it was.
+- **`double` columns** aren't checked. Data a solve can't use, such as a branch to a bus that
+  doesn't exist, is reported when the case is solved.
+
+`ybus_case_bus_name(case, row, buffer, len, &needed)` reads one bus name, as a NUL-terminated
+string. Call it with `NULL, 0` to learn the size. A case without names gives
+`YBUS_ERROR_MISSING_DATA`.
+
+### Costs
+
+The generator costs are read and set whole, as flat arrays. Each row has:
+- a model: `YBUS_COST_POLYNOMIAL` (2) or `YBUS_COST_PIECEWISE_LINEAR` (1), MATPOWER's codes
+- a startup cost and a shutdown cost
+- a run of values, `values[offsets[i]]` up to `values[offsets[i + 1]]`. A polynomial's values
+  are its coefficients, highest order first. A piecewise linear cost's values are its points,
+  interleaved as `p0, cost0, p1, cost1, …`.
+
+The rows are one per generator for real power, optionally followed by one per generator for
+reactive power, as in MATPOWER.
+
+```c
+size_t rows, count;
+ybus_case_cost_sizes(case, &rows, &count);
+/* model, startup and shutdown have rows entries, offsets rows + 1, values count */
+ybus_case_get_costs(case, model, startup, shutdown, offsets, rows, values, count);
+ybus_case_set_costs(case, model, startup, shutdown, offsets, rows, values, count);
+```
+
+Setting replaces the whole table, and setting 0 rows removes it. The structure is checked first:
+the models, an even number of values for each piecewise linear row, and offsets that start at
+0, never decrease, and end at the number of values. What a solve can't use is reported when the
+case is solved.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.

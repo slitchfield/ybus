@@ -4,15 +4,18 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::ffi::CString;
+use std::ffi::{c_char, CStr, CString};
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use powerflow::PowerflowError;
 
+use crate::case::columns::ybus_field;
 use crate::status::{
-    self, ybus_status, YBUS_ERROR_BUFFER_TOO_SMALL, YBUS_ERROR_INVALID_UTF8,
-    YBUS_ERROR_MISALIGNED_ARGUMENT, YBUS_ERROR_NULL_ARGUMENT, YBUS_ERROR_PANIC, YBUS_OK,
+    self, ybus_status, YBUS_ERROR_BUFFER_TOO_SMALL, YBUS_ERROR_INVALID_FIELD,
+    YBUS_ERROR_INVALID_UTF8, YBUS_ERROR_INVALID_VALUE, YBUS_ERROR_LENGTH_MISMATCH,
+    YBUS_ERROR_MISALIGNED_ARGUMENT, YBUS_ERROR_MISSING_DATA, YBUS_ERROR_NULL_ARGUMENT,
+    YBUS_ERROR_PANIC, YBUS_OK,
 };
 
 /// Why an export failed.
@@ -32,6 +35,19 @@ pub(crate) enum Failure {
         needed: usize,
         given: usize,
     },
+    /// An array's length doesn't match its table, or a cost table's offsets are inconsistent,
+    /// as this says.
+    LengthMismatch(String),
+    /// A value can't be held where it was given or asked for, for this reason.
+    InvalidValue(String),
+    /// A field code isn't one of the table's fields of this kind (`double` or `int64_t`).
+    InvalidField {
+        table: &'static str,
+        field: ybus_field,
+        kind: &'static str,
+    },
+    /// The case has none of the named data.
+    MissingData(&'static str),
     /// The call panicked, with this message.
     Panic(String),
 }
@@ -45,6 +61,10 @@ impl Failure {
             Failure::MisalignedArgument(_) => YBUS_ERROR_MISALIGNED_ARGUMENT,
             Failure::InvalidUtf8(_) => YBUS_ERROR_INVALID_UTF8,
             Failure::BufferTooSmall { .. } => YBUS_ERROR_BUFFER_TOO_SMALL,
+            Failure::LengthMismatch(_) => YBUS_ERROR_LENGTH_MISMATCH,
+            Failure::InvalidValue(_) => YBUS_ERROR_INVALID_VALUE,
+            Failure::InvalidField { .. } => YBUS_ERROR_INVALID_FIELD,
+            Failure::MissingData(_) => YBUS_ERROR_MISSING_DATA,
             Failure::Panic(_) => YBUS_ERROR_PANIC,
         }
     }
@@ -67,6 +87,12 @@ impl fmt::Display for Failure {
                 f,
                 "`{argument}` has room for {given} elements, but the result needs {needed}"
             ),
+            Failure::LengthMismatch(reason) => write!(f, "{reason}"),
+            Failure::InvalidValue(reason) => write!(f, "{reason}"),
+            Failure::InvalidField { table, field, kind } => {
+                write!(f, "{field} isn't a {kind} field of the {table} table")
+            }
+            Failure::MissingData(what) => write!(f, "the case has no {what}"),
             Failure::Panic(message) => write!(f, "a bug in ybus (a panic): {message}"),
         }
     }
@@ -136,6 +162,45 @@ fn check_pointer<T>(pointer: *const T, argument: &'static str) -> Result<(), Fai
     } else {
         Ok(())
     }
+}
+
+/// The UTF-8 string C passed as a NUL-terminated pointer.
+///
+/// # Safety
+///
+/// If `pointer` is non-null, it must point to a NUL-terminated string that lives, unchanged,
+/// for `'a`.
+pub(crate) unsafe fn arg_str<'a>(
+    pointer: *const c_char,
+    argument: &'static str,
+) -> Result<&'a str, Failure> {
+    if pointer.is_null() {
+        return Err(Failure::NullArgument(argument));
+    }
+    // SAFETY: non-null, and NUL-terminated and valid for 'a by the caller's promise
+    let string = unsafe { CStr::from_ptr(pointer) };
+    string.to_str().map_err(|_| Failure::InvalidUtf8(argument))
+}
+
+/// Makes a new handle for C: `out` is set to null first (when it can be written at all), then
+/// to the boxed result of `make` if it succeeds. The caller frees it with the handle's own
+/// `ybus_*_free`.
+///
+/// # Safety
+///
+/// If `out` is non-null and aligned, it must point to a writable pointer.
+pub(crate) unsafe fn new_handle<T>(
+    out: *mut *mut T,
+    make: impl FnOnce() -> Result<T, Failure>,
+) -> Result<(), Failure> {
+    if !out.is_null() && out.is_aligned() {
+        // SAFETY: non-null and aligned (just checked), and writable by the caller's promise
+        unsafe { out.write(std::ptr::null_mut()) };
+    }
+    // SAFETY: as above, by the caller's promise
+    let out = unsafe { arg_mut(out, "out") }?;
+    *out = Box::into_raw(Box::new(make()?));
+    Ok(())
 }
 
 /// The value C passed by pointer.
