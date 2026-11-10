@@ -35,6 +35,19 @@ would be, then run, by `tests/c/run.sh`, which `check.sh` runs once.
 - Before 1.0, any minor version may break the ABI.
 - From 1.0, minor versions only add functions and status codes.
 
+## Errors
+
+- **Status codes.** Every fallible function returns a `ybus_status` (an `int32_t`): `YBUS_OK`,
+  which is 0, or the code of what failed. The header lists the codes. A code is never
+  renumbered, and a failure without a code of its own, such as one added in a later version,
+  is `YBUS_ERROR_OTHER`.
+- **The last error.** Each thread keeps the message of its last failed call. It's set only on
+  failure, so it describes the most recent failure, not the most recent call.
+- **Panics.** A panic in the library is a bug. It's caught at the boundary and returned as
+  `YBUS_ERROR_PANIC`, rather than aborting the process. Afterwards, only free the handles that
+  were passed to that call. Rust's default panic hook prints the panic to stderr first; the
+  library doesn't replace the process-wide hook.
+
 ## Thread safety
 
 - Any handle can move between threads.

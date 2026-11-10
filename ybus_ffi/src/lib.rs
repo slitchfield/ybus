@@ -10,6 +10,12 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// The guard and pointer checks are for the exports of phase F3 on; until then only the tests
+//   use most of them
+#[allow(dead_code)]
+mod boundary;
+pub mod status;
+
 /// The library's major version.
 pub const YBUS_VERSION_MAJOR: u32 = 0;
 /// The library's minor version.

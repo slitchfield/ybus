@@ -22,6 +22,33 @@
 // versions compare as numbers.
 #define YBUS_VERSION (((YBUS_VERSION_MAJOR * 1000000) + (YBUS_VERSION_MINOR * 1000)) + YBUS_VERSION_PATCH)
 
+// A status code: `YBUS_OK` (0) on success, or the code of what failed, with a message that
+// `ybus_last_error_message` returns.
+typedef int32_t ybus_status;
+
+// Success.
+#define YBUS_OK 0
+
+// A failure without a code of its own, such as one added to `powerflow` after this version of
+// the library: its message says what it was.
+#define YBUS_ERROR_OTHER 1
+
+// A bug in ybus, caught before it could cross into C. The handles passed to the call should
+// only be freed.
+#define YBUS_ERROR_PANIC 2
+
+// A pointer argument was null where a value is needed.
+#define YBUS_ERROR_NULL_ARGUMENT 3
+
+// A pointer argument wasn't aligned for its type.
+#define YBUS_ERROR_MISALIGNED_ARGUMENT 4
+
+// A string argument wasn't valid UTF-8.
+#define YBUS_ERROR_INVALID_UTF8 5
+
+// A buffer was shorter than the result, so nothing was written to it.
+#define YBUS_ERROR_BUFFER_TOO_SMALL 6
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus

@@ -16,3 +16,7 @@ header = """
  * ybus_ffi/generate-header.sh. */"""
 sys_includes = ["stddef.h", "stdint.h"]
 no_includes = true
+
+[export]
+# The status type, though no export returns it yet
+include = ["ybus_status"]

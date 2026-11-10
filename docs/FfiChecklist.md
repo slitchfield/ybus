@@ -162,13 +162,18 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       `ybus_ffi/tests/c/run.sh` builds each `test_*.c` with `-std=c11 -Wall -Wextra -Wpedantic
       -Werror`, using one `CHECK` macro (`check.h`) rather than a framework; `check.sh` runs it
       once, after the Rust tests.
-- [ ] One guard that every export goes through:
+- [x] One guard that every export goes through:
       - `catch_unwind` turns a panic into `YBUS_ERROR_PANIC` and records its message
       - null and alignment checks on pointer arguments
       - the per-thread last error recorded on failure
 
       A panic reaching an `extern "C"` function aborts the process (since Rust 1.81), so the
-      guard turns that into a status code. A test forces a panic and checks the code.
+      guard turns that into a status code. A test forces a panic and checks the code. Done in
+      `ybus_ffi/src/boundary.rs`, with the boundary's own codes (`YBUS_OK` 0, then
+      `YBUS_ERROR_OTHER`, `PANIC`, `NULL_ARGUMENT`, `MISALIGNED_ARGUMENT`, `INVALID_UTF8` and
+      `BUFFER_TOO_SMALL`, 1 to 6) as a `typedef int32_t ybus_status` and `#define`s, as
+      decided with the maintainer (2026-11-10). The last error is set on failure only, so a
+      later success doesn't clear it.
 - [ ] `ybus_status` and the mapping from `PowerflowError`, with `YBUS_ERROR_OTHER` as the
       mapping's catch-all arm, since `#[non_exhaustive]` requires one outside `powerflow`.
       `ybus_last_error_message` copies the message into a caller's buffer and returns the length
