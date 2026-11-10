@@ -206,6 +206,24 @@ fn sparsemat_display_matches_compressed() {
 }
 
 #[test]
+fn sparsemat_display_sizes_columns_and_honors_precision() {
+    let mut local = SparseMatrix::empty_with_shape(2, 2);
+    local
+        .insert_triplets(vec![(0, 0, 1.0), (1, 0, 1234.5), (0, 1, -2.0)])
+        .unwrap();
+    let bar = " ".repeat(16);
+    assert_eq!(
+        format!("{local}"),
+        format!("\t/{bar}\\\n\t|    1.00, -2.00 |\n\t| 1234.50,  0.00 |\n\t\\{bar}/\n")
+    );
+    let bar = " ".repeat(14);
+    assert_eq!(
+        format!("{local:.1}"),
+        format!("\t/{bar}\\\n\t|    1.0, -2.0 |\n\t| 1234.5,  0.0 |\n\t\\{bar}/\n")
+    );
+}
+
+#[test]
 fn sparsemat_insert_zero_into_empty() {
     let mut local = SparseMatrix::empty_with_shape(3, 3);
     // Unwrap as OOB not a part of this test
