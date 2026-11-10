@@ -6,8 +6,6 @@
 //!   prepared for the solver as `opf_setup` and `makeAy` prepare them.
 //! - [`dc`]: the DC optimal power flow ([`dc::dc_opf`]), as `rundcopf` computes it with MIPS.
 //! - [`ac`]: the AC optimal power flow ([`ac::ac_opf`]), as `runopf` computes it with MIPS.
-//! - [`derivatives`]: the first and second derivatives of AC power injections and branch flows
-//!   that the AC optimal power flow uses, as MATPOWER Technical Note 2 gives them.
 //!
 //! The solvers' types this module's API names are re-exported here, from their options
 //! ([`MipsOptions`], [`MehrotraOptions`], [`KktFactorization`]) to their results ([`Status`],
@@ -19,6 +17,10 @@
 pub mod ac;
 pub mod cost;
 pub mod dc;
+// The derivatives of AC power injections and branch flows that the AC OPF uses, as MATPOWER
+//   Technical Note 2 gives them. Public only for opf_derivatives_test, and hidden from the docs:
+//   it isn't part of the API.
+#[doc(hidden)]
 pub mod derivatives;
 
 use std::f64::consts::PI;

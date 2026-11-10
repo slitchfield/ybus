@@ -27,8 +27,7 @@
 //! for the AC OPF (`feastol` = `opf.violation` = 5e-6, `cost_mult` = 1e-4, the rest MIPS's
 //! defaults), or, if the options choose it, by [`mehrotra`] from the same point with the same
 //! `feastol` and `cost_mult`, and with the constraints' derivatives from Technical Note 2's
-//! formulas (see the
-//! crate-private `opf::derivatives`). The results and multipliers are mapped back to the case
+//! formulas (in `opf::derivatives`, public only for its tests). The results and multipliers are mapped back to the case
 //! as `nlpopf_solver` and `opf` map them.
 
 use interior_point::kkt::KktFactorization;

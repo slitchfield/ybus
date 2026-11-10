@@ -5,8 +5,9 @@
 //! - [`dc`]: the DC power flow ([`dc::dc_power_flow`]), as MATPOWER's `rundcpf` computes it.
 //! - [`ac`]: the AC power flow by Newton's method ([`ac::ac_power_flow`]), as MATPOWER's
 //!   `runpf` computes it with its default options.
-//! - [`opf`]: the optimal power flow, as MATPOWER's `runopf` computes it with MIPS; so far,
-//!   the generator costs ([`opf::cost`]).
+//! - [`opf`]: the DC and AC optimal power flows ([`opf::dc::dc_opf`], [`opf::ac::ac_opf`]), as
+//!   MATPOWER's `rundcopf` and `runopf` compute them with MIPS, or by the predictor-corrector
+//!   method; and the generator costs ([`opf::cost`]).
 //! - [`islands`]: a network's islands and bridges ([`islands::find_islands`],
 //!   [`islands::find_bridges`]), as MATPOWER's `find_islands` and `find_bridges` define them.
 //! - With the `cuda` feature, the DC power flow on the GPU: batched solves, single-branch
