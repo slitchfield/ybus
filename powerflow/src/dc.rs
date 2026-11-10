@@ -266,7 +266,8 @@ pub struct DcSolution {
 pub struct DcOptions {
     /// The fill-reducing ordering B′ is factored under (by Cholesky, or by the LU fallback):
     /// [`Ordering::Amd`] by default. The others are for comparing orderings; every ordering
-    /// gives the same solution, to within rounding.
+    /// gives the same solution, to within rounding. [`Ordering::Colamd`] orders columns only,
+    /// which Cholesky can't use, so it always factors by LU.
     pub ordering: Ordering,
 }
 
@@ -371,13 +372,18 @@ impl DcModel {
             bus_label: self.bus_labels[unknown[position]],
         };
         // Bbus is built exactly symmetric, but LU is the fallback for NotSymmetric too, in
-        //   case that ever changes: a slower solve beats a panic
+        //   case that ever changes: a slower solve beats a panic. COLAMD orders columns only,
+        //   so Cholesky refuses it, and it goes straight to LU, which it's made for
         let cholesky = b_unknown
             .analyze_cholesky(ordering)
             .and_then(|symbolic| symbolic.factor(&b_unknown));
         let factor = match cholesky {
             Ok(factor) => Factor::Cholesky(factor),
-            Err(SparseError::NotPositiveDefinite { .. } | SparseError::NotSymmetric) => {
+            Err(
+                SparseError::NotPositiveDefinite { .. }
+                | SparseError::NotSymmetric
+                | SparseError::UnsupportedOrdering { .. },
+            ) => {
                 // If B′ is singular, LU's error names a column of the matrix it factored that
                 //   has no usable pivot, numbered as in B′ itself (not in the AMD order it
                 //   factored in). B′ was selected from Bbus with `unknown` as its columns, so
