@@ -174,10 +174,14 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       `BUFFER_TOO_SMALL`, 1 to 6) as a `typedef int32_t ybus_status` and `#define`s, as
       decided with the maintainer (2026-11-10). The last error is set on failure only, so a
       later success doesn't clear it.
-- [ ] `ybus_status` and the mapping from `PowerflowError`, with `YBUS_ERROR_OTHER` as the
+- [x] `ybus_status` and the mapping from `PowerflowError`, with `YBUS_ERROR_OTHER` as the
       mapping's catch-all arm, since `#[non_exhaustive]` requires one outside `powerflow`.
       `ybus_last_error_message` copies the message into a caller's buffer and returns the length
-      it needs. Tests trigger a representative error of each kind from C.
+      it needs. Each variant's code is from 100, in declaration order (`YBUS_ERROR_GPU` is
+      reserved, since the C build has no `cuda`). No export can fail with a `PowerflowError`
+      yet, so as decided with the maintainer (2026-11-10), a Rust test maps every current
+      variant to its own code, and C tests trigger real errors from phase F3 on, starting with
+      a missing case file.
 
 ## Phase F3: Cases
 

@@ -41,8 +41,14 @@ would be, then run, by `tests/c/run.sh`, which `check.sh` runs once.
   which is 0, or the code of what failed. The header lists the codes. A code is never
   renumbered, and a failure without a code of its own, such as one added in a later version,
   is `YBUS_ERROR_OTHER`.
-- **The last error.** Each thread keeps the message of its last failed call. It's set only on
-  failure, so it describes the most recent failure, not the most recent call.
+  - 1 to 6 are the boundary's own failures, such as a null argument or a buffer too short.
+  - From 100, each `PowerflowError` variant has its own code, in declaration order, named
+    after it: `YBUS_ERROR_NO_CASE_FILE` is 100, and `YBUS_ERROR_TOPOLOGY_MISMATCH` is 116.
+- **The last error.** Each thread keeps the message of its last failed call, which
+  `ybus_last_error_message(buffer, len)` copies out. It returns the bytes the message needs,
+  counting the NUL, or 0 if no call on the thread has failed. It writes nothing unless the
+  buffer is big enough, so call it with `NULL, 0` first to learn the size. The message is set
+  only on failure, so it describes the most recent failure, not the most recent call.
 - **Panics.** A panic in the library is a bug. It's caught at the boundary and returned as
   `YBUS_ERROR_PANIC`, rather than aborting the process. Afterwards, only free the handles that
   were passed to that call. Rust's default panic hook prints the panic to stderr first; the

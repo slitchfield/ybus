@@ -11,9 +11,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use powerflow::PowerflowError;
 
 use crate::status::{
-    ybus_status, YBUS_ERROR_BUFFER_TOO_SMALL, YBUS_ERROR_INVALID_UTF8,
-    YBUS_ERROR_MISALIGNED_ARGUMENT, YBUS_ERROR_NULL_ARGUMENT, YBUS_ERROR_OTHER, YBUS_ERROR_PANIC,
-    YBUS_OK,
+    self, ybus_status, YBUS_ERROR_BUFFER_TOO_SMALL, YBUS_ERROR_INVALID_UTF8,
+    YBUS_ERROR_MISALIGNED_ARGUMENT, YBUS_ERROR_NULL_ARGUMENT, YBUS_ERROR_PANIC, YBUS_OK,
 };
 
 /// Why an export failed.
@@ -41,7 +40,7 @@ impl Failure {
     /// The status code C sees.
     fn code(&self) -> ybus_status {
         match self {
-            Failure::Powerflow(_) => YBUS_ERROR_OTHER,
+            Failure::Powerflow(error) => status::powerflow_code(error),
             Failure::NullArgument(_) => YBUS_ERROR_NULL_ARGUMENT,
             Failure::MisalignedArgument(_) => YBUS_ERROR_MISALIGNED_ARGUMENT,
             Failure::InvalidUtf8(_) => YBUS_ERROR_INVALID_UTF8,
@@ -319,10 +318,10 @@ mod tests {
     }
 
     #[test]
-    fn a_powerflow_error_keeps_its_message() {
+    fn a_powerflow_error_is_its_code_and_message() {
         assert_eq!(
             guard(|| Err(PowerflowError::NoBuses.into())),
-            YBUS_ERROR_OTHER
+            crate::status::YBUS_ERROR_NO_BUSES
         );
         assert_eq!(last_error(), Some(PowerflowError::NoBuses.to_string()));
     }
