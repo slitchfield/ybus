@@ -19,10 +19,10 @@ mod common;
 use std::path::Path;
 
 use common::reference::{committed_dir, read_acopf, read_dcopf, relative_difference};
-use interior_point::solution::KktResiduals;
 use powerflow::case::Case;
 use powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
+use powerflow::opf::KktResiduals;
 use powerflow::opf::{KktFactorization, OpfSolver};
 
 /// The objective's bar, relative to its magnitude (at least 1)
@@ -67,7 +67,7 @@ impl Floors {
 }
 
 /// The largest magnitude among a result's multipliers
-fn largest_multiplier(m: &interior_point::solution::Multipliers) -> f64 {
+fn largest_multiplier(m: &powerflow::opf::Multipliers) -> f64 {
     m.eq_nonlin
         .iter()
         .chain(&m.ineq_nonlin)

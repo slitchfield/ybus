@@ -10,11 +10,10 @@
 mod common;
 
 use common::ac_fixture::{ac_fixture, AcBranch, AcBus, AcGen};
-use interior_point::interior_point_error::InteriorPointError;
 use powerflow::case::{BusType, Case, GenCost};
 use powerflow::opf::ac::{ac_opf, ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use powerflow::opf::cost::total_cost;
-use powerflow::opf::OpfSolver;
+use powerflow::opf::{InteriorPointError, OpfSolver};
 use powerflow::powerflow_error::PowerflowError;
 
 /// Both solvers, at MATPOWER's AC OPF settings

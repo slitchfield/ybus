@@ -5,10 +5,9 @@
 mod common;
 
 use common::dc_fixture::{fixture, B, G, L};
-use interior_point::interior_point_error::InteriorPointError;
 use powerflow::case::{Case, GenCost};
 use powerflow::opf::dc::{dc_opf, dc_opf_with_options, DcOpfOptions};
-use powerflow::opf::OpfSolver;
+use powerflow::opf::{InteriorPointError, OpfSolver};
 use powerflow::powerflow_error::PowerflowError;
 
 fn linear(cost_per_mwh: f64) -> GenCost {
