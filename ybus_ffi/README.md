@@ -145,6 +145,11 @@ ybus_dc_solution_free(solution);
 
 - **DC:** bus `YBUS_BUS_VA_DEG`, gen `YBUS_GEN_PG_MW`, and branch `YBUS_BRANCH_PF_MW` (14).
   `ybus_dc_solution_solver` says which factorization solved B′.
+- **AC:** bus `VM_PU` and `VA_DEG`; gen `PG_MW` and `QG_MVAR`; and branch `PF_MW`, `QF_MVAR`,
+  `PT_MW` and `QT_MVAR` (14 to 17).
+  - The scalars are `ybus_ac_solution_iterations`, `_mismatch_pu` and `_full_factorizations`.
+  - `ybus_ac_solution_limited_generators` gives the generator rows held at a reactive limit,
+    numbered from 0. Call it with `NULL, 0` to ask the count.
 - **A code the solution doesn't have** in that table gives `YBUS_ERROR_INVALID_FIELD`.
 
 ## ABI policy

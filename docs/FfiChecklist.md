@@ -244,8 +244,10 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       That test found that `Ordering::Colamd` panicked in `DcModel::study`. COLAMD orders
       columns only, so Cholesky refuses it; B′ now goes straight to LU under it, a fix in
       `powerflow` in its own commit.
-- [ ] `ybus_ac_power_flow`, in the same form, with the iteration count, mismatch, limited
-      generators and factorization count.
+- [x] `ybus_ac_power_flow`, in the same form, with the iteration count, mismatch, limited
+      generators and factorization count. Tested as the DC power flow is: in Rust, against
+      `powerflow`'s own results under each method and both kinds of reactive limits; in C,
+      case14 against MATPOWER's `runpf`, without and with reactive limits.
 - [ ] The DC and AC models: build from a case, solve against a case (with F1's stricter
       `check_case`), restamp (AC), and free. A C test solves several load scenarios against one
       model.

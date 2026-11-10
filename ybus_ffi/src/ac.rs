@@ -1,8 +1,16 @@
-//! The AC power flow through C: its options.
+//! The AC power flow through C: its options, its solution, and the power flow itself.
 
-use powerflow::ac::{AcMethod, AcOptions, ReactiveLimits};
+use powerflow::ac::{ac_power_flow_with_options, AcMethod, AcOptions, AcSolution, ReactiveLimits};
 
-use crate::boundary::{arg_mut, free_handle, get_value, guard, new_handle, Failure};
+use crate::boundary::{
+    arg_mut, arg_ref, arg_slice_mut, check_room, free_handle, get_value, guard, new_handle, Failure,
+};
+use crate::case::columns::{
+    ybus_field, YBUS_BRANCH_PF_MW, YBUS_BRANCH_PT_MW, YBUS_BRANCH_QF_MVAR, YBUS_BRANCH_QT_MVAR,
+    YBUS_BUS_VA_DEG, YBUS_BUS_VM_PU, YBUS_GEN_PG_MW, YBUS_GEN_QG_MVAR,
+};
+use crate::case::YbusCase;
+use crate::solution::get_column;
 use crate::status::ybus_status;
 
 /// How to solve the AC power flow.
@@ -282,6 +290,235 @@ pub unsafe extern "C" fn ybus_ac_options_get_reactive_limits(
     }
 }
 
+/// The options `options` points to, or Newton's defaults for a null pointer.
+///
+/// # Safety
+///
+/// `options` must be null or live options.
+pub(crate) unsafe fn options_or_default(
+    options: *const YbusAcOptions,
+) -> Result<AcOptions, Failure> {
+    if options.is_null() {
+        Ok(AcOptions::default())
+    } else {
+        // SAFETY: options is as the caller promised
+        Ok(unsafe { arg_ref(options, "options") }?.options)
+    }
+}
+
+/// An AC power flow's results, indexed like the case's tables, made by `ybus_ac_power_flow` or
+/// `ybus_ac_model_solve` and freed by `ybus_ac_solution_free`.
+pub struct YbusAcSolution {
+    pub(crate) solution: AcSolution,
+}
+
+/// Solves the AC power flow for `case`, as MATPOWER's `runpf` does, with `options` (`NULL`
+/// for Newton's defaults), into a new solution in `*out`. `*out` is set to `NULL` first and
+/// stays `NULL` on an error, such as `YBUS_ERROR_NO_CONVERGENCE` or
+/// `YBUS_ERROR_SINGULAR_NETWORK`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, `options` null or live options, and `out` null or a
+/// writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_power_flow(
+    case: *const YbusCase,
+    options: *const YbusAcOptions,
+    out: *mut *mut YbusAcSolution,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: out, case and options are as the caller promised
+        unsafe {
+            new_handle(out, || {
+                let case = arg_ref(case, "case")?;
+                let options = options_or_default(options)?;
+                Ok(YbusAcSolution {
+                    solution: ac_power_flow_with_options(&case.case, &options)?,
+                })
+            })
+        }
+    })
+}
+
+/// Frees `solution`, which mustn't be used again. Does nothing if `solution` is null.
+///
+/// # Safety
+///
+/// `solution` must be null or a solution made by this library and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_solution_free(solution: *mut YbusAcSolution) {
+    // SAFETY: as the caller promised
+    unsafe { free_handle(solution) }
+}
+
+/// Writes the solution's bus column `field` into `out`, which has room for `len` entries: one
+/// per bus. The columns are `YBUS_BUS_VM_PU` and `YBUS_BUS_VA_DEG`, each bus's voltage
+/// magnitude (p.u.) and angle (degrees); an isolated bus keeps its voltage from the case.
+/// Returns `YBUS_ERROR_INVALID_FIELD` for any other code, and `YBUS_ERROR_BUFFER_TOO_SMALL`,
+/// writing nothing, if `len` is less than the number of buses.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_solution_get_bus(
+    solution: *const YbusAcSolution,
+    field: ybus_field,
+    out: *mut f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_column(solution, "bus", field, out, len, |s, field| match field {
+            YBUS_BUS_VM_PU => Some(&s.solution.vm_pu),
+            YBUS_BUS_VA_DEG => Some(&s.solution.va_deg),
+            _ => None,
+        })
+    }
+}
+
+/// [`ybus_ac_solution_get_bus`] for the generators: `YBUS_GEN_PG_MW` and `YBUS_GEN_QG_MVAR`,
+/// each generator's real (MW) and reactive (MVAr) output, as MATPOWER's `pfsoln` computes
+/// them. 0 for a generator that's out of service or at an isolated bus.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_solution_get_gen(
+    solution: *const YbusAcSolution,
+    field: ybus_field,
+    out: *mut f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_column(solution, "gen", field, out, len, |s, field| match field {
+            YBUS_GEN_PG_MW => Some(&s.solution.pg_mw),
+            YBUS_GEN_QG_MVAR => Some(&s.solution.qg_mvar),
+            _ => None,
+        })
+    }
+}
+
+/// [`ybus_ac_solution_get_bus`] for the branches: `YBUS_BRANCH_PF_MW`, `YBUS_BRANCH_QF_MVAR`,
+/// `YBUS_BRANCH_PT_MW` and `YBUS_BRANCH_QT_MVAR`, the real (MW) and reactive (MVAr) power
+/// flowing into each branch at its from and to ends. 0 for a branch that's out of service or
+/// touches an isolated bus.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_solution_get_branch(
+    solution: *const YbusAcSolution,
+    field: ybus_field,
+    out: *mut f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_column(
+            solution,
+            "branch",
+            field,
+            out,
+            len,
+            |s, field| match field {
+                YBUS_BRANCH_PF_MW => Some(&s.solution.pf_mw),
+                YBUS_BRANCH_QF_MVAR => Some(&s.solution.qf_mvar),
+                YBUS_BRANCH_PT_MW => Some(&s.solution.pt_mw),
+                YBUS_BRANCH_QT_MVAR => Some(&s.solution.qt_mvar),
+                _ => None,
+            },
+        )
+    }
+}
+
+/// Writes how many iterations were taken through `out`: Newton iterations, or for
+/// fast-decoupled, P half-iterations, as MATPOWER counts them, summed over every solve when
+/// reactive limits are enforced.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or a writable `size_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_solution_iterations(
+    solution: *const YbusAcSolution,
+    out: *mut usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get_value(solution, "solution", out, |s| Ok(s.solution.iterations)) }
+}
+
+/// Writes the largest real or reactive power mismatch at the solution (p.u.) through `out`.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or a writable `double`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_solution_mismatch_pu(
+    solution: *const YbusAcSolution,
+    out: *mut f64,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get_value(solution, "solution", out, |s| Ok(s.solution.mismatch_pu)) }
+}
+
+/// Writes how many matrices were factored afresh through `out`: for Newton's method, 1 when
+/// every later iteration refactored the Jacobian with the first factorization's pivots; for
+/// fast-decoupled, 2, B′ and B″; 0 when no iteration was needed.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or a writable `size_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_solution_full_factorizations(
+    solution: *const YbusAcSolution,
+    out: *mut usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_value(solution, "solution", out, |s| {
+            Ok(s.solution.full_factorizations)
+        })
+    }
+}
+
+/// Writes the (0-based) generator rows held at a reactive power limit into `out`, which has
+/// room for `len`, in the order they were found, and how many there are through `count`. A
+/// null `out` with `len` 0 only asks the count. Returns `YBUS_ERROR_BUFFER_TOO_SMALL`, writing
+/// nothing into `out`, if they don't fit. None are held when reactive limits are ignored.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, `out` null or `len` writable `size_t`s, and
+/// `count` null or a writable `size_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_solution_limited_generators(
+    solution: *const YbusAcSolution,
+    out: *mut usize,
+    len: usize,
+    count: *mut usize,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: solution and count are as the caller promised
+        let (solution, count) =
+            unsafe { (arg_ref(solution, "solution")?, arg_mut(count, "count")?) };
+        let limited = &solution.solution.limited_generators;
+        *count = limited.len();
+        if out.is_null() && len == 0 {
+            return Ok(());
+        }
+        // SAFETY: out is as the caller promised
+        let out = unsafe { arg_slice_mut(out, len, "out") }?;
+        check_room("out", limited.len(), len)?;
+        out[..limited.len()].copy_from_slice(limited);
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::ptr;
@@ -387,6 +624,143 @@ mod tests {
             );
             ybus_ac_options_free(options);
             ybus_ac_options_free(ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn the_ac_power_flow_is_powerflows_bit_for_bit() {
+        // Each method, and Newton with each kind of reactive limits
+        let runs = [
+            (YBUS_AC_NEWTON, YBUS_REACTIVE_LIMITS_IGNORE),
+            (YBUS_AC_FAST_DECOUPLED_XB, YBUS_REACTIVE_LIMITS_IGNORE),
+            (YBUS_AC_FAST_DECOUPLED_BX, YBUS_REACTIVE_LIMITS_IGNORE),
+            (YBUS_AC_NEWTON, YBUS_REACTIVE_LIMITS_ALL_AT_ONCE),
+            (YBUS_AC_NEWTON, YBUS_REACTIVE_LIMITS_ONE_AT_A_TIME),
+        ];
+        for (name, case) in crate::dc::tests::cases() {
+            for (method, limits) in runs {
+                let options = new(method);
+                let mut solution = ptr::null_mut();
+                // SAFETY: each handle is live until freed, and each out writable
+                unsafe {
+                    assert_eq!(
+                        ybus_ac_options_set_reactive_limits(options, limits),
+                        YBUS_OK
+                    );
+                    let status = ybus_ac_power_flow(case, options, &mut solution);
+                    let what = format!("{name} method {method} limits {limits}");
+                    match ac_power_flow_with_options(&(*case).case, &(*options).options) {
+                        Ok(expected) => {
+                            assert_eq!(status, YBUS_OK, "{what}");
+                            assert_eq!((*solution).solution, expected, "{what}");
+                        }
+                        Err(error) => {
+                            assert_eq!(status, crate::status::powerflow_code(&error), "{what}");
+                            assert!(solution.is_null());
+                        }
+                    }
+                    ybus_ac_solution_free(solution);
+                    ybus_ac_options_free(options);
+                }
+            }
+            // SAFETY: case is live until this free
+            unsafe { crate::case::ybus_case_free(case) };
+        }
+    }
+
+    #[test]
+    fn an_ac_solution_reads_its_columns_and_scalars() {
+        let case = crate::case::tests::three_bus();
+        let mut solution = ptr::null_mut();
+        // SAFETY: each handle is live until freed, and each buffer has room for its length
+        unsafe {
+            assert_eq!(
+                ybus_ac_power_flow(case, ptr::null(), &mut solution),
+                YBUS_OK
+            );
+            let expected =
+                ac_power_flow_with_options(&(*case).case, &AcOptions::default()).unwrap();
+            let read = |get: unsafe extern "C" fn(
+                *const YbusAcSolution,
+                ybus_field,
+                *mut f64,
+                usize,
+            ) -> ybus_status,
+                        field,
+                        rows: usize| {
+                let mut out = vec![0.0; rows];
+                assert_eq!(get(solution, field, out.as_mut_ptr(), rows), YBUS_OK);
+                out
+            };
+            assert_eq!(
+                read(ybus_ac_solution_get_bus, YBUS_BUS_VM_PU, 3),
+                expected.vm_pu
+            );
+            assert_eq!(
+                read(ybus_ac_solution_get_bus, YBUS_BUS_VA_DEG, 3),
+                expected.va_deg
+            );
+            assert_eq!(
+                read(ybus_ac_solution_get_gen, YBUS_GEN_PG_MW, 2),
+                expected.pg_mw
+            );
+            assert_eq!(
+                read(ybus_ac_solution_get_gen, YBUS_GEN_QG_MVAR, 2),
+                expected.qg_mvar
+            );
+            assert_eq!(
+                read(ybus_ac_solution_get_branch, YBUS_BRANCH_PF_MW, 3),
+                expected.pf_mw
+            );
+            assert_eq!(
+                read(ybus_ac_solution_get_branch, YBUS_BRANCH_QF_MVAR, 3),
+                expected.qf_mvar
+            );
+            assert_eq!(
+                read(ybus_ac_solution_get_branch, YBUS_BRANCH_PT_MW, 3),
+                expected.pt_mw
+            );
+            assert_eq!(
+                read(ybus_ac_solution_get_branch, YBUS_BRANCH_QT_MVAR, 3),
+                expected.qt_mvar
+            );
+            let (mut iterations, mut mismatch, mut factorizations, mut count) = (0, 0.0, 0, 9);
+            assert_eq!(
+                ybus_ac_solution_iterations(solution, &mut iterations),
+                YBUS_OK
+            );
+            assert_eq!(
+                ybus_ac_solution_mismatch_pu(solution, &mut mismatch),
+                YBUS_OK
+            );
+            assert_eq!(
+                ybus_ac_solution_full_factorizations(solution, &mut factorizations),
+                YBUS_OK
+            );
+            assert_eq!(
+                ybus_ac_solution_limited_generators(solution, ptr::null_mut(), 0, &mut count),
+                YBUS_OK
+            );
+            assert_eq!(
+                (iterations, mismatch, factorizations, count),
+                (
+                    expected.iterations,
+                    expected.mismatch_pu,
+                    expected.full_factorizations,
+                    0
+                )
+            );
+            assert_eq!(
+                ybus_ac_solution_get_gen(
+                    solution,
+                    crate::case::columns::YBUS_GEN_VG_PU,
+                    ptr::null_mut(),
+                    0
+                ),
+                crate::status::YBUS_ERROR_INVALID_FIELD
+            );
+            ybus_ac_solution_free(solution);
+            crate::case::ybus_case_free(case);
         }
     }
 }

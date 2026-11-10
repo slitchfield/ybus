@@ -27,3 +27,4 @@ include = ["ybus_status"]
 "YbusDcOptions" = "ybus_dc_options"
 "YbusAcOptions" = "ybus_ac_options"
 "YbusDcSolution" = "ybus_dc_solution"
+"YbusAcSolution" = "ybus_ac_solution"

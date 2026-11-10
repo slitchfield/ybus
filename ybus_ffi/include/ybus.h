@@ -34,6 +34,10 @@
 // wherever one is taken.
 typedef struct ybus_ac_options ybus_ac_options;
 
+// An AC power flow's results, indexed like the case's tables, made by `ybus_ac_power_flow` or
+// `ybus_ac_model_solve` and freed by `ybus_ac_solution_free`.
+typedef struct ybus_ac_solution ybus_ac_solution;
+
 // A power system case: its buses, generators, branches and optional costs and bus names, as
 // read from a MATPOWER case file. Made by `ybus_case_from_path`, `ybus_case_from_bytes` or
 // `ybus_case_clone`, and freed by `ybus_case_free`.
@@ -493,6 +497,105 @@ ybus_status ybus_ac_options_set_reactive_limits(struct ybus_ac_options *options,
 // `ybus_reactive_limits`.
 ybus_status ybus_ac_options_get_reactive_limits(const struct ybus_ac_options *options,
                                                 ybus_reactive_limits *out);
+
+// Solves the AC power flow for `case`, as MATPOWER's `runpf` does, with `options` (`NULL`
+// for Newton's defaults), into a new solution in `*out`. `*out` is set to `NULL` first and
+// stays `NULL` on an error, such as `YBUS_ERROR_NO_CONVERGENCE` or
+// `YBUS_ERROR_SINGULAR_NETWORK`.
+//
+// # Safety
+//
+// `case` must be null or a live case, `options` null or live options, and `out` null or a
+// writable pointer.
+ybus_status ybus_ac_power_flow(const struct ybus_case *case_,
+                               const struct ybus_ac_options *options,
+                               struct ybus_ac_solution **out);
+
+// Frees `solution`, which mustn't be used again. Does nothing if `solution` is null.
+//
+// # Safety
+//
+// `solution` must be null or a solution made by this library and not yet freed.
+void ybus_ac_solution_free(struct ybus_ac_solution *solution);
+
+// Writes the solution's bus column `field` into `out`, which has room for `len` entries: one
+// per bus. The columns are `YBUS_BUS_VM_PU` and `YBUS_BUS_VA_DEG`, each bus's voltage
+// magnitude (p.u.) and angle (degrees); an isolated bus keeps its voltage from the case.
+// Returns `YBUS_ERROR_INVALID_FIELD` for any other code, and `YBUS_ERROR_BUFFER_TOO_SMALL`,
+// writing nothing, if `len` is less than the number of buses.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+ybus_status ybus_ac_solution_get_bus(const struct ybus_ac_solution *solution,
+                                     ybus_field field,
+                                     double *out,
+                                     size_t len);
+
+// [`ybus_ac_solution_get_bus`] for the generators: `YBUS_GEN_PG_MW` and `YBUS_GEN_QG_MVAR`,
+// each generator's real (MW) and reactive (MVAr) output, as MATPOWER's `pfsoln` computes
+// them. 0 for a generator that's out of service or at an isolated bus.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+ybus_status ybus_ac_solution_get_gen(const struct ybus_ac_solution *solution,
+                                     ybus_field field,
+                                     double *out,
+                                     size_t len);
+
+// [`ybus_ac_solution_get_bus`] for the branches: `YBUS_BRANCH_PF_MW`, `YBUS_BRANCH_QF_MVAR`,
+// `YBUS_BRANCH_PT_MW` and `YBUS_BRANCH_QT_MVAR`, the real (MW) and reactive (MVAr) power
+// flowing into each branch at its from and to ends. 0 for a branch that's out of service or
+// touches an isolated bus.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+ybus_status ybus_ac_solution_get_branch(const struct ybus_ac_solution *solution,
+                                        ybus_field field,
+                                        double *out,
+                                        size_t len);
+
+// Writes how many iterations were taken through `out`: Newton iterations, or for
+// fast-decoupled, P half-iterations, as MATPOWER counts them, summed over every solve when
+// reactive limits are enforced.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or a writable `size_t`.
+ybus_status ybus_ac_solution_iterations(const struct ybus_ac_solution *solution, size_t *out);
+
+// Writes the largest real or reactive power mismatch at the solution (p.u.) through `out`.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or a writable `double`.
+ybus_status ybus_ac_solution_mismatch_pu(const struct ybus_ac_solution *solution, double *out);
+
+// Writes how many matrices were factored afresh through `out`: for Newton's method, 1 when
+// every later iteration refactored the Jacobian with the first factorization's pivots; for
+// fast-decoupled, 2, B′ and B″; 0 when no iteration was needed.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or a writable `size_t`.
+ybus_status ybus_ac_solution_full_factorizations(const struct ybus_ac_solution *solution,
+                                                 size_t *out);
+
+// Writes the (0-based) generator rows held at a reactive power limit into `out`, which has
+// room for `len`, in the order they were found, and how many there are through `count`. A
+// null `out` with `len` 0 only asks the count. Returns `YBUS_ERROR_BUFFER_TOO_SMALL`, writing
+// nothing into `out`, if they don't fit. None are held when reactive limits are ignored.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, `out` null or `len` writable `size_t`s, and
+// `count` null or a writable `size_t`.
+ybus_status ybus_ac_solution_limited_generators(const struct ybus_ac_solution *solution,
+                                                size_t *out,
+                                                size_t len,
+                                                size_t *count);
 
 // Reads and validates the MATPOWER case file at `path`, a NUL-terminated UTF-8 path, into a
 // new case in `*out`.

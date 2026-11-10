@@ -296,7 +296,7 @@ pub unsafe extern "C" fn ybus_dc_solution_solver(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::ptr;
 
     use super::*;
