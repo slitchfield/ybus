@@ -29,6 +29,11 @@
 // A polynomial cost, MATPOWER's model 2: its values are coefficients, highest order first.
 #define YBUS_COST_POLYNOMIAL 2
 
+// An AC model of a case's network (Ybus, Yf, Yt and the bus roles), made by
+// `ybus_ac_model_new` and freed by `ybus_ac_model_free`, for solving many scenarios of the
+// same network.
+typedef struct ybus_ac_model ybus_ac_model;
+
 // Options for the AC power flow, made by `ybus_ac_options_new` at MATPOWER's defaults for a
 // method and freed by `ybus_ac_options_free`. A null options handle means Newton's defaults
 // wherever one is taken.
@@ -42,6 +47,10 @@ typedef struct ybus_ac_solution ybus_ac_solution;
 // read from a MATPOWER case file. Made by `ybus_case_from_path`, `ybus_case_from_bytes` or
 // `ybus_case_clone`, and freed by `ybus_case_free`.
 typedef struct ybus_case ybus_case;
+
+// A DC model of a case's network (B′, Bf and the bus roles), made by `ybus_dc_model_new` and
+// freed by `ybus_dc_model_free`, for solving many scenarios of the same network.
+typedef struct ybus_dc_model ybus_dc_model;
 
 // Options for the DC power flow, made by `ybus_dc_options_new` at MATPOWER's defaults and
 // freed by `ybus_dc_options_free`. A null options handle means the defaults wherever one is
@@ -597,6 +606,53 @@ ybus_status ybus_ac_solution_limited_generators(const struct ybus_ac_solution *s
                                                 size_t len,
                                                 size_t *count);
 
+// Builds the AC model of `case`'s network into a new model in `*out`, which is set to `NULL`
+// first and stays `NULL` on an error, such as `YBUS_ERROR_ZERO_IMPEDANCE`.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or a writable pointer.
+ybus_status ybus_ac_model_new(const struct ybus_case *case_, struct ybus_ac_model **out);
+
+// Solves the AC power flow of `case` on `model`, with `options` (`NULL` for Newton's
+// defaults), into a new solution in `*out`: the same result as `ybus_ac_power_flow` on
+// `case`, without rebuilding the network.
+//
+// `case` must be the case the model was built (or last re-stamped) from, or a copy with
+// different injections, setpoints or starting voltages (`pd_mw`, `qd_mvar`, `pg_mw`,
+// `qg_mvar`, `vg_pu`, `qmax_mvar`, `qmin_mvar`, `vm_pu` and `va_deg`). Returns
+// `YBUS_ERROR_CASE_MISMATCH` if its tables' lengths differ, and
+// `YBUS_ERROR_TOPOLOGY_MISMATCH` if its topology does. Changed impedances need
+// `ybus_ac_model_restamp` first. `*out` is set to `NULL` first and stays `NULL` on an error.
+//
+// # Safety
+//
+// `model` must be null or a live model, `case` null or a live case, `options` null or live
+// options, and `out` null or a writable pointer.
+ybus_status ybus_ac_model_solve(const struct ybus_ac_model *model,
+                                const struct ybus_case *case_,
+                                const struct ybus_ac_options *options,
+                                struct ybus_ac_solution **out);
+
+// Re-stamps `model`'s Ybus, Yf and Yt from `case`'s branch impedances, charging, taps and
+// phase shifts and its bus shunts, without rebuilding the matrices. `case` must have the
+// model's topology: `YBUS_ERROR_CASE_MISMATCH` or `YBUS_ERROR_TOPOLOGY_MISMATCH` otherwise,
+// and `YBUS_ERROR_ZERO_IMPEDANCE` for an in-service branch with `r = x = 0`. On an error the
+// model is unchanged.
+//
+// # Safety
+//
+// `model` must be null or a live model that nothing else is using, and `case` null or a live
+// case.
+ybus_status ybus_ac_model_restamp(struct ybus_ac_model *model, const struct ybus_case *case_);
+
+// Frees `model`, which mustn't be used again. Does nothing if `model` is null.
+//
+// # Safety
+//
+// `model` must be null or a model made by this library and not yet freed.
+void ybus_ac_model_free(struct ybus_ac_model *model);
+
 // Reads and validates the MATPOWER case file at `path`, a NUL-terminated UTF-8 path, into a
 // new case in `*out`.
 //
@@ -992,6 +1048,42 @@ ybus_status ybus_dc_solution_get_branch(const struct ybus_dc_solution *solution,
 //
 // `solution` must be null or a live solution, and `out` null or a writable `ybus_dc_solver`.
 ybus_status ybus_dc_solution_solver(const struct ybus_dc_solution *solution, ybus_dc_solver *out);
+
+// Builds the DC model of `case`'s network into a new model in `*out`, which is set to `NULL`
+// first and stays `NULL` on an error, such as `YBUS_ERROR_ZERO_REACTANCE`.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or a writable pointer.
+ybus_status ybus_dc_model_new(const struct ybus_case *case_, struct ybus_dc_model **out);
+
+// Solves the DC power flow of `case`'s injections on `model`, with `options` (`NULL` for the
+// defaults), into a new solution in `*out`: the same result as `ybus_dc_power_flow` on
+// `case`, without rebuilding the network. B′ is still factored on each call.
+//
+// `case` must be the case the model was built from, or a copy with different injections or
+// reference angles (`pd_mw`, `gs_mw`, `pg_mw` and `va_deg`). Returns
+// `YBUS_ERROR_CASE_MISMATCH` if its tables' lengths differ, and
+// `YBUS_ERROR_TOPOLOGY_MISMATCH` if its topology does: a bus's label or type, a generator's
+// bus or status, or a branch's ends or status. Other changes, such as a reactance, are
+// ignored; either needs a new model. `*out` is set to `NULL` first and stays `NULL` on an
+// error.
+//
+// # Safety
+//
+// `model` must be null or a live model, `case` null or a live case, `options` null or live
+// options, and `out` null or a writable pointer.
+ybus_status ybus_dc_model_solve(const struct ybus_dc_model *model,
+                                const struct ybus_case *case_,
+                                const struct ybus_dc_options *options,
+                                struct ybus_dc_solution **out);
+
+// Frees `model`, which mustn't be used again. Does nothing if `model` is null.
+//
+// # Safety
+//
+// `model` must be null or a model made by this library and not yet freed.
+void ybus_dc_model_free(struct ybus_dc_model *model);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -248,9 +248,11 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       generators and factorization count. Tested as the DC power flow is: in Rust, against
       `powerflow`'s own results under each method and both kinds of reactive limits; in C,
       case14 against MATPOWER's `runpf`, without and with reactive limits.
-- [ ] The DC and AC models: build from a case, solve against a case (with F1's stricter
+- [x] The DC and AC models: build from a case, solve against a case (with F1's stricter
       `check_case`), restamp (AC), and free. A C test solves several load scenarios against one
-      model.
+      model. Each solve on a model is, bit for bit, the power flow of the same case, and a
+      branch switched out is `YBUS_ERROR_TOPOLOGY_MISMATCH`. The DC model refactors B′ on
+      each solve, as `DcModel::solve` does; factoring once waits for `DcStudy` in phase F7.
 
 ## Phase F5: Optimal power flows
 

@@ -1,6 +1,7 @@
-//! The DC power flow through C: its options, its solution, and the power flow itself.
+//! The DC power flow through C: its options, its solution, the power flow itself, and the
+//! model, built once from a case and solved for many scenarios.
 
-use powerflow::dc::{dc_power_flow_with_options, DcOptions, DcSolution, DcSolver};
+use powerflow::dc::{dc_power_flow_with_options, DcModel, DcOptions, DcSolution, DcSolver};
 use sparse_mat::compressed_matrix::Ordering;
 
 use crate::boundary::{arg_mut, arg_ref, free_handle, get_value, guard, new_handle, Failure};
@@ -295,6 +296,84 @@ pub unsafe extern "C" fn ybus_dc_solution_solver(
     }
 }
 
+/// A DC model of a case's network (B′, Bf and the bus roles), made by `ybus_dc_model_new` and
+/// freed by `ybus_dc_model_free`, for solving many scenarios of the same network.
+pub struct YbusDcModel {
+    pub(crate) model: DcModel,
+}
+
+/// Builds the DC model of `case`'s network into a new model in `*out`, which is set to `NULL`
+/// first and stays `NULL` on an error, such as `YBUS_ERROR_ZERO_REACTANCE`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, and `out` null or a writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_model_new(
+    case: *const YbusCase,
+    out: *mut *mut YbusDcModel,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: out and case are as the caller promised
+        unsafe {
+            new_handle(out, || {
+                Ok(YbusDcModel {
+                    model: DcModel::new(&arg_ref(case, "case")?.case)?,
+                })
+            })
+        }
+    })
+}
+
+/// Solves the DC power flow of `case`'s injections on `model`, with `options` (`NULL` for the
+/// defaults), into a new solution in `*out`: the same result as `ybus_dc_power_flow` on
+/// `case`, without rebuilding the network. B′ is still factored on each call.
+///
+/// `case` must be the case the model was built from, or a copy with different injections or
+/// reference angles (`pd_mw`, `gs_mw`, `pg_mw` and `va_deg`). Returns
+/// `YBUS_ERROR_CASE_MISMATCH` if its tables' lengths differ, and
+/// `YBUS_ERROR_TOPOLOGY_MISMATCH` if its topology does: a bus's label or type, a generator's
+/// bus or status, or a branch's ends or status. Other changes, such as a reactance, are
+/// ignored; either needs a new model. `*out` is set to `NULL` first and stays `NULL` on an
+/// error.
+///
+/// # Safety
+///
+/// `model` must be null or a live model, `case` null or a live case, `options` null or live
+/// options, and `out` null or a writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_model_solve(
+    model: *const YbusDcModel,
+    case: *const YbusCase,
+    options: *const YbusDcOptions,
+    out: *mut *mut YbusDcSolution,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: out, model, case and options are as the caller promised
+        unsafe {
+            new_handle(out, || {
+                let model = arg_ref(model, "model")?;
+                let case = arg_ref(case, "case")?;
+                let options = options_or_default(options)?;
+                Ok(YbusDcSolution {
+                    solution: model.model.solve(&case.case, &options)?,
+                })
+            })
+        }
+    })
+}
+
+/// Frees `model`, which mustn't be used again. Does nothing if `model` is null.
+///
+/// # Safety
+///
+/// `model` must be null or a model made by this library and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_model_free(model: *mut YbusDcModel) {
+    // SAFETY: as the caller promised
+    unsafe { free_handle(model) }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::ptr;
@@ -445,6 +524,38 @@ pub(crate) mod tests {
                 crate::status::YBUS_ERROR_BUFFER_TOO_SMALL
             );
             ybus_dc_solution_free(solution);
+            crate::case::ybus_case_free(case);
+        }
+    }
+
+    #[test]
+    fn a_dc_model_solves_scenarios_as_the_power_flow_does() {
+        let case = crate::case::tests::three_bus();
+        let (mut model, mut solution) = (ptr::null_mut(), ptr::null_mut());
+        // SAFETY: each handle is live until freed, and each out writable
+        unsafe {
+            assert_eq!(ybus_dc_model_new(case, &mut model), YBUS_OK);
+            for scale in [1.0, 0.5, 1.5] {
+                for bus in &mut (*case).case.bus {
+                    bus.pd_mw *= scale;
+                }
+                assert_eq!(
+                    ybus_dc_model_solve(model, case, ptr::null(), &mut solution),
+                    YBUS_OK
+                );
+                let expected = dc_power_flow_with_options(&(*case).case, &DcOptions::default());
+                assert_eq!(Ok(&(*solution).solution), expected.as_ref());
+                ybus_dc_solution_free(solution);
+            }
+            // Another topology is refused
+            (&mut (*case).case.branch)[0].status = false;
+            assert_eq!(
+                ybus_dc_model_solve(model, case, ptr::null(), &mut solution),
+                crate::status::YBUS_ERROR_TOPOLOGY_MISMATCH
+            );
+            assert!(solution.is_null());
+            ybus_dc_model_free(model);
+            ybus_dc_model_free(ptr::null_mut());
             crate::case::ybus_case_free(case);
         }
     }

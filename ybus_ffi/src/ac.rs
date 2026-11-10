@@ -1,6 +1,9 @@
-//! The AC power flow through C: its options, its solution, and the power flow itself.
+//! The AC power flow through C: its options, its solution, the power flow itself, and the
+//! model, built once from a case and solved (or re-stamped) for many scenarios.
 
-use powerflow::ac::{ac_power_flow_with_options, AcMethod, AcOptions, AcSolution, ReactiveLimits};
+use powerflow::ac::{
+    ac_power_flow_with_options, AcMethod, AcModel, AcOptions, AcSolution, ReactiveLimits,
+};
 
 use crate::boundary::{
     arg_mut, arg_ref, arg_slice_mut, check_room, free_handle, get_value, guard, new_handle, Failure,
@@ -519,6 +522,106 @@ pub unsafe extern "C" fn ybus_ac_solution_limited_generators(
     })
 }
 
+/// An AC model of a case's network (Ybus, Yf, Yt and the bus roles), made by
+/// `ybus_ac_model_new` and freed by `ybus_ac_model_free`, for solving many scenarios of the
+/// same network.
+pub struct YbusAcModel {
+    pub(crate) model: AcModel,
+}
+
+/// Builds the AC model of `case`'s network into a new model in `*out`, which is set to `NULL`
+/// first and stays `NULL` on an error, such as `YBUS_ERROR_ZERO_IMPEDANCE`.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, and `out` null or a writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_model_new(
+    case: *const YbusCase,
+    out: *mut *mut YbusAcModel,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: out and case are as the caller promised
+        unsafe {
+            new_handle(out, || {
+                Ok(YbusAcModel {
+                    model: AcModel::new(&arg_ref(case, "case")?.case)?,
+                })
+            })
+        }
+    })
+}
+
+/// Solves the AC power flow of `case` on `model`, with `options` (`NULL` for Newton's
+/// defaults), into a new solution in `*out`: the same result as `ybus_ac_power_flow` on
+/// `case`, without rebuilding the network.
+///
+/// `case` must be the case the model was built (or last re-stamped) from, or a copy with
+/// different injections, setpoints or starting voltages (`pd_mw`, `qd_mvar`, `pg_mw`,
+/// `qg_mvar`, `vg_pu`, `qmax_mvar`, `qmin_mvar`, `vm_pu` and `va_deg`). Returns
+/// `YBUS_ERROR_CASE_MISMATCH` if its tables' lengths differ, and
+/// `YBUS_ERROR_TOPOLOGY_MISMATCH` if its topology does. Changed impedances need
+/// `ybus_ac_model_restamp` first. `*out` is set to `NULL` first and stays `NULL` on an error.
+///
+/// # Safety
+///
+/// `model` must be null or a live model, `case` null or a live case, `options` null or live
+/// options, and `out` null or a writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_model_solve(
+    model: *const YbusAcModel,
+    case: *const YbusCase,
+    options: *const YbusAcOptions,
+    out: *mut *mut YbusAcSolution,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: out, model, case and options are as the caller promised
+        unsafe {
+            new_handle(out, || {
+                let model = arg_ref(model, "model")?;
+                let case = arg_ref(case, "case")?;
+                let options = options_or_default(options)?;
+                Ok(YbusAcSolution {
+                    solution: model.model.solve(&case.case, &options)?,
+                })
+            })
+        }
+    })
+}
+
+/// Re-stamps `model`'s Ybus, Yf and Yt from `case`'s branch impedances, charging, taps and
+/// phase shifts and its bus shunts, without rebuilding the matrices. `case` must have the
+/// model's topology: `YBUS_ERROR_CASE_MISMATCH` or `YBUS_ERROR_TOPOLOGY_MISMATCH` otherwise,
+/// and `YBUS_ERROR_ZERO_IMPEDANCE` for an in-service branch with `r = x = 0`. On an error the
+/// model is unchanged.
+///
+/// # Safety
+///
+/// `model` must be null or a live model that nothing else is using, and `case` null or a live
+/// case.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_model_restamp(
+    model: *mut YbusAcModel,
+    case: *const YbusCase,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: model and case are as the caller promised
+        let (model, case) = unsafe { (arg_mut(model, "model")?, arg_ref(case, "case")?) };
+        Ok(model.model.restamp(&case.case)?)
+    })
+}
+
+/// Frees `model`, which mustn't be used again. Does nothing if `model` is null.
+///
+/// # Safety
+///
+/// `model` must be null or a model made by this library and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_ac_model_free(model: *mut YbusAcModel) {
+    // SAFETY: as the caller promised
+    unsafe { free_handle(model) }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ptr;
@@ -760,6 +863,53 @@ mod tests {
                 crate::status::YBUS_ERROR_INVALID_FIELD
             );
             ybus_ac_solution_free(solution);
+            crate::case::ybus_case_free(case);
+        }
+    }
+
+    #[test]
+    fn an_ac_model_solves_and_restamps_as_the_power_flow_does() {
+        let case = crate::case::tests::three_bus();
+        let (mut model, mut solution) = (ptr::null_mut(), ptr::null_mut());
+        // The model's solve of the case as it is now, against the power flow's
+        let check = move |model: *const YbusAcModel, solution: &mut *mut YbusAcSolution| {
+            // SAFETY: model, case and solution are live and writable
+            unsafe {
+                assert_eq!(
+                    ybus_ac_model_solve(model, case, ptr::null(), solution),
+                    YBUS_OK
+                );
+                let expected = ac_power_flow_with_options(&(*case).case, &AcOptions::default());
+                assert_eq!(Ok(&(**solution).solution), expected.as_ref());
+                ybus_ac_solution_free(*solution);
+            }
+        };
+        // SAFETY: each handle is live until freed, and each out writable
+        unsafe {
+            assert_eq!(ybus_ac_model_new(case, &mut model), YBUS_OK);
+            for scale in [1.0, 0.8, 1.2] {
+                for bus in &mut (*case).case.bus {
+                    bus.pd_mw *= scale;
+                    bus.qd_mvar *= scale;
+                }
+                check(model, &mut solution);
+            }
+            // A changed reactance, re-stamped
+            (&mut (*case).case.branch)[1].x = 0.3;
+            assert_eq!(ybus_ac_model_restamp(model, case), YBUS_OK);
+            check(model, &mut solution);
+
+            // A refused re-stamp leaves the model as it was
+            let before = (*model).model.ybus().values().to_vec();
+            (&mut (*case).case.branch)[0].status = false;
+            (&mut (*case).case.branch)[1].x = 0.4;
+            assert_eq!(
+                ybus_ac_model_restamp(model, case),
+                crate::status::YBUS_ERROR_TOPOLOGY_MISMATCH
+            );
+            assert_eq!((*model).model.ybus().values(), &before[..]);
+            ybus_ac_model_free(model);
+            ybus_ac_model_free(ptr::null_mut());
             crate::case::ybus_case_free(case);
         }
     }

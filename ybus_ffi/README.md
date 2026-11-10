@@ -152,6 +152,22 @@ ybus_dc_solution_free(solution);
     numbered from 0. Call it with `NULL, 0` to ask the count.
 - **A code the solution doesn't have** in that table gives `YBUS_ERROR_INVALID_FIELD`.
 
+### Models
+
+A model is built once from a case's network and solves many scenarios of it, giving the same
+result as the power flow of each:
+
+- **`ybus_dc_model_new(case, &model)` and `ybus_dc_model_solve(model, case, options,
+  &solution)`.** The DC model refactors B′ on each solve, as `DcModel::solve` does.
+- **`ybus_ac_model_new(case, &model)` and `ybus_ac_model_solve(model, case, options,
+  &solution)`.** `ybus_ac_model_restamp(model, case)` takes in changed impedances, charging,
+  taps, shifts and shunts.
+
+The case solved can change its injections, setpoints and starting voltages, but not its
+network. A case whose tables' lengths differ is `YBUS_ERROR_CASE_MISMATCH`, and one whose
+topology differs (a bus's label or type, a generator's bus or status, or a branch's ends or
+status) is `YBUS_ERROR_TOPOLOGY_MISMATCH`.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.
