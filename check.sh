@@ -18,6 +18,9 @@ else
 fi
 cargo clippy --workspace --all-targets --all-features --  -D warnings -W clippy::all
 cargo test --workspace --all-targets
+# The C tests, against the generated header and the static library; once, since the C build has
+#   only powerflow's default features
+ybus_ffi/tests/c/run.sh
 # The other test passes leave out the benchmarks (--all-targets without --benches). Their
 #   test runs, one iteration each, take seconds in debug builds and don't depend on the
 #   features, and the clippy runs still build them with every feature set.

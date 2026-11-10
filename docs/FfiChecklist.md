@@ -157,8 +157,11 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       CI, which fails when it differs. `ybus_ffi/generate-header.sh` runs cbindgen 0.29.4 (CI
       installs that version); `check.sh` runs it with `--verify`, and skips the check, saying
       so, on a machine without cbindgen, unless `YBUS_REQUIRE_CBINDGEN=1`, as CI sets.
-- [ ] A C test harness: a small C program per area, compiled against the header and linked
+- [x] A C test harness: a small C program per area, compiled against the header and linked
       against the static library, run by `check.sh` and CI. Later items each add their C tests.
+      `ybus_ffi/tests/c/run.sh` builds each `test_*.c` with `-std=c11 -Wall -Wextra -Wpedantic
+      -Werror`, using one `CHECK` macro (`check.h`) rather than a framework; `check.sh` runs it
+      once, after the Rust tests.
 - [ ] One guard that every export goes through:
       - `catch_unwind` turns a panic into `YBUS_ERROR_PANIC` and records its message
       - null and alignment checks on pointer arguments

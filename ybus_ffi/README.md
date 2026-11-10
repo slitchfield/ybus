@@ -12,11 +12,19 @@ cargo build -p ybus_ffi --release
 
 This builds `target/release/libybus.so` and `target/release/libybus.a`. Compile against the
 header and link with `-lybus`. A program linking the static library on Linux also needs the
-system libraries Rust's standard library uses:
+system libraries Rust's standard library uses, which
+`cargo rustc -p ybus_ffi --lib --crate-type staticlib -- --print native-static-libs` lists:
 
 ```sh
-cc -I ybus_ffi/include program.c target/release/libybus.a -lpthread -ldl -lm
+cc -I ybus_ffi/include program.c target/release/libybus.a \
+    -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc
 ```
+
+## Tests
+
+The Rust tests run with `cargo test -p ybus_ffi`. The C tests in [`tests/c/`](tests/c/) are
+small programs, compiled against the header and linked with the static library as a C program
+would be, then run, by `tests/c/run.sh`, which `check.sh` runs once.
 
 ## ABI policy
 
