@@ -13,8 +13,10 @@
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+pub mod ac;
 mod boundary;
 pub mod case;
+pub mod dc;
 pub mod status;
 
 /// The library's major version.

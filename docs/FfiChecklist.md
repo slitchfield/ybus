@@ -221,9 +221,15 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
 
 ## Phase F4: Power flows
 
-- [ ] Options handles for the DC and AC power flows: create at the defaults, free, and one typed
+- [x] Options handles for the DC and AC power flows: create at the defaults, free, and one typed
       setter per field: the ordering; the method, tolerance, iteration limit and reactive
-      limits.
+      limits. Decided with the maintainer for phase F4 (2026-11-10):
+      - **The AC method is chosen when the options are made,** as `AcOptions::for_method`
+        does: `ybus_ac_options_new(method, &options)` starts at that method's defaults (30
+        fast-decoupled iterations, 10 Newton), and `set_method` changes only the method.
+      - **Each setting also has a getter,** an addition that lets a binding show the settings.
+      - **The codes:** the orderings are 1 to 4, and the methods 1 to 3 (MATPOWER's `NR`,
+        `FDXB` and `FDBX`). The reactive limits take MATPOWER's `enforce_q_lims` codes, 0 to 2.
 - [ ] `ybus_dc_power_flow`: a case and options (null for the defaults) in, a solution handle out,
       with its column accessors and free. Tests against the committed MATPOWER references.
 - [ ] `ybus_ac_power_flow`, in the same form, with the iteration count, mismatch, limited

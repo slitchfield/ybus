@@ -29,17 +29,57 @@
 // A polynomial cost, MATPOWER's model 2: its values are coefficients, highest order first.
 #define YBUS_COST_POLYNOMIAL 2
 
+// Options for the AC power flow, made by `ybus_ac_options_new` at MATPOWER's defaults for a
+// method and freed by `ybus_ac_options_free`. A null options handle means Newton's defaults
+// wherever one is taken.
+typedef struct ybus_ac_options ybus_ac_options;
+
 // A power system case: its buses, generators, branches and optional costs and bus names, as
 // read from a MATPOWER case file. Made by `ybus_case_from_path`, `ybus_case_from_bytes` or
 // `ybus_case_clone`, and freed by `ybus_case_free`.
 typedef struct ybus_case ybus_case;
 
+// Options for the DC power flow, made by `ybus_dc_options_new` at MATPOWER's defaults and
+// freed by `ybus_dc_options_free`. A null options handle means the defaults wherever one is
+// taken.
+typedef struct ybus_dc_options ybus_dc_options;
+
 // A status code: `YBUS_OK` (0) on success, or the code of what failed, with a message that
 // `ybus_last_error_message` returns.
 typedef int32_t ybus_status;
 
+// How to solve the AC power flow.
+typedef int32_t ybus_ac_method;
+
+// Whether and how to enforce generators' reactive power limits, with MATPOWER's
+// `pf.enforce_q_lims` codes.
+typedef int32_t ybus_reactive_limits;
+
 // A column's field code: its 1-based column number in MATPOWER's matrix for the table.
 typedef int32_t ybus_field;
+
+// A fill-reducing ordering, for the DC power flow's B′.
+typedef int32_t ybus_ordering;
+
+// Newton's method in polar form, as MATPOWER's `newtonpf` (`pf.alg = 'NR'`, the default).
+#define YBUS_AC_NEWTON 1
+
+// Fast-decoupled, XB version, as MATPOWER's `fdpf` (`pf.alg = 'FDXB'`): B′ ignores
+// resistance.
+#define YBUS_AC_FAST_DECOUPLED_XB 2
+
+// Fast-decoupled, BX version (`pf.alg = 'FDBX'`): B″ ignores resistance.
+#define YBUS_AC_FAST_DECOUPLED_BX 3
+
+// Ignore them, MATPOWER's default.
+#define YBUS_REACTIVE_LIMITS_IGNORE 0
+
+// After each solve, hold every generator outside its limits at the limit, make its bus PQ,
+// and solve again, until none is.
+#define YBUS_REACTIVE_LIMITS_ALL_AT_ONCE 1
+
+// The same, but only the largest violation each round.
+#define YBUS_REACTIVE_LIMITS_ONE_AT_A_TIME 2
 
 // The bus number: a label other rows refer to, not a position (`int64_t`).
 #define YBUS_BUS_LABEL 1
@@ -181,6 +221,18 @@ typedef int32_t ybus_field;
 
 // Maximum angle difference, angle(Vf) − angle(Vt) (degrees).
 #define YBUS_BRANCH_ANGMAX_DEG 13
+
+// No reordering.
+#define YBUS_ORDERING_NATURAL 1
+
+// Reverse Cuthill–McKee, which keeps entries near the diagonal.
+#define YBUS_ORDERING_RCM 2
+
+// Approximate minimum degree, which keeps the factor's fill small: the default.
+#define YBUS_ORDERING_AMD 3
+
+// Column approximate minimum degree (COLAMD), for LU.
+#define YBUS_ORDERING_COLAMD 4
 
 // Success.
 #define YBUS_OK 0
@@ -328,6 +380,89 @@ uint32_t ybus_version(void);
 //
 // Unless `buffer` is null, it must point to `len` bytes that can be written.
 size_t ybus_last_error_message(char *buffer, size_t len);
+
+// Makes AC power flow options at MATPOWER's defaults for `method` in `*out`: tolerance 1e-8,
+// at most 10 Newton iterations or 30 fast-decoupled ones, and reactive limits ignored. `*out`
+// is set to `NULL` first and stays `NULL` on an error, such as `YBUS_ERROR_INVALID_VALUE` for
+// a code that isn't a method.
+//
+// # Safety
+//
+// `out` must be null or a writable pointer.
+ybus_status ybus_ac_options_new(ybus_ac_method method, struct ybus_ac_options **out);
+
+// Frees `options`, which mustn't be used again. Does nothing if `options` is null.
+//
+// # Safety
+//
+// `options` must be null or options made by this library and not yet freed.
+void ybus_ac_options_free(struct ybus_ac_options *options);
+
+// Sets the solution method. Only the method changes: the iteration limit stays as it was,
+// though fast-decoupled's default is 30 to Newton's 10. Returns `YBUS_ERROR_INVALID_VALUE` for
+// a code that isn't a method.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_options_set_method(struct ybus_ac_options *options, ybus_ac_method code);
+
+// Writes the solution method through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `ybus_ac_method`.
+ybus_status ybus_ac_options_get_method(const struct ybus_ac_options *options, ybus_ac_method *out);
+
+// Sets the tolerance: convergence when the largest real or reactive power mismatch is below
+// it (p.u.), MATPOWER's `pf.tol`. Returns `YBUS_ERROR_INVALID_VALUE` unless it's positive and
+// finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_options_set_tolerance(struct ybus_ac_options *options, double tolerance);
+
+// Writes the tolerance (p.u.) through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_ac_options_get_tolerance(const struct ybus_ac_options *options, double *out);
+
+// Sets the most iterations before giving up: Newton iterations, or for fast-decoupled, P
+// half-iterations, MATPOWER's `pf.nr.max_it` or `pf.fd.max_it`.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_options_set_max_iterations(struct ybus_ac_options *options,
+                                               size_t max_iterations);
+
+// Writes the iteration limit through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `size_t`.
+ybus_status ybus_ac_options_get_max_iterations(const struct ybus_ac_options *options, size_t *out);
+
+// Sets whether and how generators' reactive power limits are enforced. Returns
+// `YBUS_ERROR_INVALID_VALUE` for a code that isn't a setting.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_options_set_reactive_limits(struct ybus_ac_options *options,
+                                                ybus_reactive_limits code);
+
+// Writes the reactive limits setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable
+// `ybus_reactive_limits`.
+ybus_status ybus_ac_options_get_reactive_limits(const struct ybus_ac_options *options,
+                                                ybus_reactive_limits *out);
 
 // Reads and validates the MATPOWER case file at `path`, a NUL-terminated UTF-8 path, into a
 // new case in `*out`.
@@ -629,6 +764,36 @@ ybus_status ybus_case_set_costs(struct ybus_case *case_,
                                 size_t rows,
                                 const double *values,
                                 size_t values_len);
+
+// Makes DC power flow options at the defaults (B′ ordered by `YBUS_ORDERING_AMD`) in `*out`,
+// which is set to `NULL` first and stays `NULL` on an error.
+//
+// # Safety
+//
+// `out` must be null or a writable pointer.
+ybus_status ybus_dc_options_new(struct ybus_dc_options **out);
+
+// Frees `options`, which mustn't be used again. Does nothing if `options` is null.
+//
+// # Safety
+//
+// `options` must be null or options made by this library and not yet freed.
+void ybus_dc_options_free(struct ybus_dc_options *options);
+
+// Sets the ordering B′ is factored under. Every ordering gives the same solution, to within
+// rounding. Returns `YBUS_ERROR_INVALID_VALUE` for a code that isn't an ordering.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_dc_options_set_ordering(struct ybus_dc_options *options, ybus_ordering code);
+
+// Writes the ordering B′ is factored under through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `ybus_ordering`.
+ybus_status ybus_dc_options_get_ordering(const struct ybus_dc_options *options, ybus_ordering *out);
 
 #ifdef __cplusplus
 }  // extern "C"

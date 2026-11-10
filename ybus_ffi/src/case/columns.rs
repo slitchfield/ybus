@@ -9,7 +9,9 @@ use powerflow::case::{Branch, Bus, BusType, Gen};
 use powerflow::Case;
 
 use super::YbusCase;
-use crate::boundary::{arg_mut, arg_ref, arg_slice, arg_slice_mut, guard, Failure};
+use crate::boundary::{
+    arg_mut, arg_ref, arg_slice, arg_slice_mut, check_length, check_room, guard, Failure,
+};
 use crate::status::ybus_status;
 
 /// A column's field code: its 1-based column number in MATPOWER's matrix for the table.
@@ -325,23 +327,6 @@ fn field<C>(
     column.ok_or(Failure::InvalidField { table, field, kind })
 }
 
-/// `BufferTooSmall` unless a buffer of `given` entries holds `needed`
-pub(crate) fn check_room(
-    argument: &'static str,
-    needed: usize,
-    given: usize,
-) -> Result<(), Failure> {
-    if given < needed {
-        Err(Failure::BufferTooSmall {
-            argument,
-            needed,
-            given,
-        })
-    } else {
-        Ok(())
-    }
-}
-
 /// Writes a `double` column into `out`, one entry per row.
 ///
 /// # Safety
@@ -400,21 +385,6 @@ unsafe fn get_ints<R>(
         out[..values.len()].copy_from_slice(&values);
         Ok(())
     })
-}
-
-/// `LengthMismatch` unless an array of `given` entries is one per row of `rows`
-pub(crate) fn check_length(
-    argument: &'static str,
-    rows: usize,
-    given: usize,
-) -> Result<(), Failure> {
-    if given == rows {
-        Ok(())
-    } else {
-        Err(Failure::LengthMismatch(format!(
-            "`{argument}` has {given} entries, but its table has {rows} rows"
-        )))
-    }
 }
 
 /// Sets a `double` column from `values`, one entry per row.

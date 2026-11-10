@@ -18,3 +18,6 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 # Default features only: the C build has neither rayon nor cuda (docs/FfiChecklist.md, F0)
 powerflow = { path = "../powerflow" }
+# For the DC power flow's ordering, sparse_mat::compressed_matrix::Ordering, which powerflow
+#   uses but doesn't re-export
+sparse_mat = { path = "../sparse_mat" }

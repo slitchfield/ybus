@@ -107,6 +107,28 @@ the models, an even number of values for each piecewise linear row, and offsets 
 0, never decrease, and end at the number of values. What a solve can't use is reported when the
 case is solved.
 
+## Power flows
+
+### Options
+
+Options are handles made at MATPOWER's defaults and freed with their own `_free`. Wherever a
+solve takes options, `NULL` means the defaults.
+
+- **DC:** `ybus_dc_options_new(&options)` makes the options. The one setting is
+  `ybus_dc_options_set_ordering`, B′'s fill-reducing ordering: `YBUS_ORDERING_AMD` by default,
+  or `NATURAL`, `RCM` or `COLAMD`.
+- **AC:** `ybus_ac_options_new(method, &options)` takes the method: `YBUS_AC_NEWTON`,
+  `YBUS_AC_FAST_DECOUPLED_XB` or `YBUS_AC_FAST_DECOUPLED_BX`. It starts at that method's
+  defaults: tolerance 1e-8, at most 10 Newton or 30 fast-decoupled iterations, and reactive
+  limits ignored.
+  - The setters are `set_method` (which changes only the method), `set_tolerance` (positive and
+    finite), `set_max_iterations` and `set_reactive_limits`.
+  - The reactive limits use MATPOWER's `enforce_q_lims` codes: `YBUS_REACTIVE_LIMITS_IGNORE` 0,
+    `ALL_AT_ONCE` 1 and `ONE_AT_A_TIME` 2.
+
+Every setter has a getter, and a code that isn't one of the setting's is
+`YBUS_ERROR_INVALID_VALUE`.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.
