@@ -19,6 +19,7 @@ use powerflow::case::Case;
 use powerflow::dc::DcModel;
 use sparse_mat::compressed_matrix::{CsrMatrix, LuOptions, Ordering};
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 use ybus_cuda::{Gpu, GpuFactor};
 
 const HEADER: &str = "case,matrix,n,factor_entries,rhs,cpu_serial_ms,cpu_parallel_ms,upload_factor_ms,width,gpu_ms,gpu_upload_ms,gpu_solve_ms,gpu_download_ms,worst_relative_difference";

@@ -6,6 +6,8 @@ use num_traits::NumCast;
 
 use super::bunch_kaufman::{factor_front, DBlock};
 use super::cholesky::SymbolicCholesky;
+use super::factorization::sealed::Substitute;
+use super::factorization::Factorization;
 use super::{CompressedMatrix, CsrMatrix, Inertia, Ordering};
 use crate::sparse_error::SparseError;
 use crate::Scalar;
@@ -659,43 +661,10 @@ impl<T: Scalar + ComplexFloat> IndefiniteLdlt<T> {
         &self.perm
     }
 
-    /// Solves `A x = b`. Returns `SparseError::ShapeMismatch` unless `b` has one entry per row
-    /// of `A`.
-    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
-        self.check_rhs(b.len())?;
-        let mut y: Vec<T> = self.perm.iter().map(|&row| b[row]).collect();
-        self.substitute(&mut y);
-        let mut x = vec![T::zero(); self.n];
-        for (&row, &value) in self.perm.iter().zip(&y) {
-            x[row] = value;
-        }
-        Ok(x)
-    }
-
-    /// Solves `A x = b` for each right-hand side in `rhs`, each bit for bit what `solve` gives.
-    /// Returns `SparseError::ShapeMismatch` naming the first right-hand side of the wrong length.
-    pub fn solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
-        for b in rhs {
-            self.check_rhs(b.len())?;
-        }
-        rhs.iter().map(|b| self.solve(b)).collect()
-    }
-
-    fn check_rhs(&self, len: usize) -> Result<(), SparseError> {
-        if len == self.n {
-            Ok(())
-        } else {
-            Err(SparseError::ShapeMismatch {
-                left: (self.n, self.n),
-                right: (len, 1),
-            })
-        }
-    }
-
     /// Overwrites `y`, in `P A Pᵀ`'s numbering, with the solution of `P A Pᵀ y' = y`: forward
     /// substitution front by front in elimination order, `D`'s blocks, then back substitution in
     /// reverse
-    fn substitute(&self, y: &mut [T]) {
+    fn substitute_permuted(&self, y: &mut [T]) {
         for front in &self.fronts {
             let m = front.vars.len();
             for j in 0..front.eliminated {
@@ -739,17 +708,21 @@ impl<T: Scalar + ComplexFloat> IndefiniteLdlt<T> {
     }
 }
 
-#[cfg(feature = "rayon")]
-impl<T: Scalar + ComplexFloat + Send + Sync> IndefiniteLdlt<T> {
-    /// [`IndefiniteLdlt::solve_many`] with the right-hand sides solved in parallel (feature
-    /// `rayon`), each by one thread with exactly `solve`'s operations, so the results are bit for
-    /// bit `solve_many`'s. Returns `SparseError::ShapeMismatch` as `solve_many` does, before
-    /// solving any.
-    pub fn par_solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
-        use rayon::prelude::*;
-        for b in rhs {
-            self.check_rhs(b.len())?;
+impl<T: Scalar + ComplexFloat> Factorization<T> for IndefiniteLdlt<T> {
+    fn dim(&self) -> usize {
+        self.n
+    }
+}
+
+impl<T: Scalar + ComplexFloat> Substitute<T> for IndefiniteLdlt<T> {
+    /// `P b` into `scratch`, the substitution there in `P A Pᵀ`'s numbering, and the result
+    /// back through `P`
+    fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
+        scratch.clear();
+        scratch.extend(self.perm.iter().map(|&row| x[row]));
+        self.substitute_permuted(scratch);
+        for (&row, &value) in self.perm.iter().zip(scratch.iter()) {
+            x[row] = value;
         }
-        rhs.par_iter().map(|b| self.solve(b)).collect()
     }
 }

@@ -2,6 +2,7 @@
 
 use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
 use sparse_mat::sparse_error::SparseError;
+use sparse_mat::Factorization;
 
 /// Deterministic pseudo-random sparse matrix with small entries.
 fn pseudo_random(rows: usize, cols: usize, seed: u64, fill_percent: u64) -> CsrMatrix<f64> {

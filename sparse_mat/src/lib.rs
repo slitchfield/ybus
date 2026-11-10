@@ -2,9 +2,10 @@
 //!
 //! [`sparse_matrix::SparseMatrix`] builds and edits a matrix, and
 //! [`compressed_matrix::CompressedMatrix`] (as `CsrMatrix` or `CscMatrix`) does the numerical
-//! work; [`sparse_error::SparseError`] is the error type. All three, and the `CsrMatrix` and
-//! `CscMatrix` aliases, are re-exported here, so `use sparse_mat::{CsrMatrix, SparseError}`
-//! reaches them.
+//! work; [`sparse_error::SparseError`] is the error type. Every factorization's solves come
+//! from one trait, [`Factorization`]. All four, and the `CsrMatrix` and `CscMatrix` aliases,
+//! are re-exported here, so `use sparse_mat::{CsrMatrix, Factorization, SparseError}` reaches
+//! them.
 
 // No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
 //   API
@@ -24,7 +25,7 @@ impl<T: Copy + PartialEq + num_traits::Num> Scalar for T {}
 /// The error type returned by `SparseMatrix` operations.
 pub mod sparse_error;
 
-pub use compressed_matrix::{CompressedMatrix, CscMatrix, CsrMatrix};
+pub use compressed_matrix::{CompressedMatrix, CscMatrix, CsrMatrix, Factorization};
 pub use sparse_error::SparseError;
 pub use sparse_matrix::SparseMatrix;
 

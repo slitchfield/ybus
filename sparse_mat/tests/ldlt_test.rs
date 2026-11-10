@@ -8,6 +8,7 @@
 use sparse_mat::compressed_matrix::{CsrMatrix, Inertia, Ordering, PivotReplacement};
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 
 /// Deterministic pseudo-random numbers (a linear congruential generator).
 struct Lcg(u64);

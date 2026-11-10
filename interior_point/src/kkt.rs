@@ -32,6 +32,7 @@ use sparse_mat::compressed_matrix::{
     SymbolicIndefinite, SymbolicLu,
 };
 use sparse_mat::sparse_error::SparseError;
+use sparse_mat::Factorization;
 
 use crate::mips::KKT_ORDERING;
 

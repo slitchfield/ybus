@@ -9,6 +9,7 @@ use sparse_mat::compressed_matrix::{
 };
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 
 type C = Complex<f64>;
 

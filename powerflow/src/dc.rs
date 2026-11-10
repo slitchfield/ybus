@@ -25,6 +25,7 @@ use sparse_mat::compressed_matrix::{
 };
 use sparse_mat::sparse_error::SparseError;
 use sparse_mat::sparse_matrix::SparseVector;
+use sparse_mat::Factorization;
 
 use crate::case::{BusType, Case};
 use crate::powerflow_error::PowerflowError;

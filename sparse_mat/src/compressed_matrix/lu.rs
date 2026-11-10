@@ -13,6 +13,8 @@ use num_traits::NumCast;
 
 use super::access::check_permutation;
 use super::cholesky::inverse_permutation;
+use super::factorization::sealed::Substitute;
+use super::factorization::Factorization;
 use super::solvers::{reach_into, SparseSolveWorkspace};
 use super::{CompressedMatrix, CscMatrix, Ordering};
 use crate::sparse_error::SparseError;
@@ -196,33 +198,6 @@ impl SymbolicLu {
             return Err(SparseError::PatternMismatch);
         }
         gilbert_peierls(matrix, &self.col_perm, options, self.prefer_diagonal)
-    }
-}
-
-#[cfg(feature = "rayon")]
-impl<T: Scalar + ComplexFloat + Send + Sync> Lu<T> {
-    /// [`Lu::solve_many`] with the right-hand sides solved in parallel (feature `rayon`).
-    /// Each is solved by one thread, with its own scratch vector and exactly the operations
-    /// `solve` uses, so the results are bit for bit `solve_many`'s, in the same order. Returns
-    /// `SparseError::ShapeMismatch` naming the first right-hand side whose length isn't the
-    /// number of rows of `A`, before solving any.
-    pub fn par_solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
-        use rayon::prelude::*;
-        for b in rhs {
-            self.check_rhs(b.len())?;
-        }
-        let n = self.row_perm.len();
-        Ok(rhs
-            .par_iter()
-            .map_init(
-                || Vec::with_capacity(n),
-                |scratch, b| {
-                    let mut x = b.clone();
-                    self.substitute(&mut x, scratch);
-                    x
-                },
-            )
-            .collect())
     }
 }
 
@@ -475,45 +450,6 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
         (0..n).fold(sign, |det, j| det * self.u.data[self.u.ptr[j + 1] - 1])
     }
 
-    /// Solves `A x = b`: permutes `b` by `P`, substitutes forward with `L` and back with `U`,
-    /// and permutes the result by `Q`. Returns `SparseError::ShapeMismatch` unless `b` has one
-    /// entry per row of `A`.
-    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
-        let mut x = b.to_vec();
-        self.solve_in_place(&mut x)?;
-        Ok(x)
-    }
-
-    /// Solves `A x = b`, overwriting `rhs` (which holds `b`) with `x`. It saves returning a new
-    /// vector, though permuting still uses one scratch vector of the same length. The result is
-    /// bit for bit `solve`'s. Returns `SparseError::ShapeMismatch`, leaving `rhs` untouched,
-    /// unless `rhs` has one entry per row of `A`.
-    pub fn solve_in_place(&self, rhs: &mut [T]) -> Result<(), SparseError> {
-        self.check_rhs(rhs.len())?;
-        let mut scratch = Vec::with_capacity(rhs.len());
-        self.substitute(rhs, &mut scratch);
-        Ok(())
-    }
-
-    /// Solves `A x = b` for each right-hand side `b` in `rhs`, returning the solutions in the
-    /// same order. One scratch vector serves them all, and each solution is bit for bit what
-    /// `solve` gives. Returns `SparseError::ShapeMismatch` naming the first right-hand side
-    /// whose length isn't the number of rows of `A`.
-    pub fn solve_many(&self, rhs: &[Vec<T>]) -> Result<Vec<Vec<T>>, SparseError> {
-        for b in rhs {
-            self.check_rhs(b.len())?;
-        }
-        let mut scratch = Vec::with_capacity(self.row_perm.len());
-        Ok(rhs
-            .iter()
-            .map(|b| {
-                let mut x = b.clone();
-                self.substitute(&mut x, &mut scratch);
-                x
-            })
-            .collect())
-    }
-
     /// Solves `Aᵀ x = b` (the plain transpose, not conjugated, for a complex matrix) with the same
     /// factors: `Aᵀ = Q Uᵀ Lᵀ P`, so it substitutes forward with `Uᵀ` and back with `Lᵀ`,
     /// reading their stored columns as rows. Returns `SparseError::ShapeMismatch` unless `b`
@@ -650,26 +586,6 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
         }
     }
 
-    /// Overwrites `x` (holding `b`, already checked) with the solution: `P b` into `scratch`,
-    /// forward substitution with `L` (unit diagonal, stored first in each column) and back
-    /// substitution with `U` (diagonal stored last), by columns, then through `Q` into `x`.
-    fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
-        let n = self.row_perm.len();
-        scratch.clear();
-        scratch.extend(self.row_perm.iter().map(|&row| x[row]));
-        let y = scratch.as_mut_slice();
-        for j in 0..n {
-            let y_j = y[j];
-            for p in self.l.ptr[j] + 1..self.l.ptr[j + 1] {
-                y[self.l.idx[p]] = y[self.l.idx[p]] - self.l.data[p] * y_j;
-            }
-        }
-        self.back_substitute(y);
-        for (&col, &value) in self.col_perm.iter().zip(y.iter()) {
-            x[col] = value;
-        }
-    }
-
     /// Overwrites `y` with `U⁻¹ y`: back substitution with `U` by columns, its diagonal stored
     /// last.
     fn back_substitute(&self, y: &mut [T]) {
@@ -783,5 +699,33 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
         self.spare_u = std::mem::replace(&mut self.u.data, u_val);
         self.refactor_x = x;
         Ok(RefactorOutcome::Reused)
+    }
+}
+
+impl<T: Scalar + ComplexFloat> Factorization<T> for Lu<T> {
+    fn dim(&self) -> usize {
+        self.row_perm.len()
+    }
+}
+
+impl<T: Scalar + ComplexFloat> Substitute<T> for Lu<T> {
+    /// Overwrites `x` (holding `b`, already checked) with the solution: `P b` into `scratch`,
+    /// forward substitution with `L` (unit diagonal, stored first in each column) and back
+    /// substitution with `U` (diagonal stored last), by columns, then through `Q` into `x`.
+    fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
+        let n = self.row_perm.len();
+        scratch.clear();
+        scratch.extend(self.row_perm.iter().map(|&row| x[row]));
+        let y = scratch.as_mut_slice();
+        for j in 0..n {
+            let y_j = y[j];
+            for p in self.l.ptr[j] + 1..self.l.ptr[j + 1] {
+                y[self.l.idx[p]] = y[self.l.idx[p]] - self.l.data[p] * y_j;
+            }
+        }
+        self.back_substitute(y);
+        for (&col, &value) in self.col_perm.iter().zip(y.iter()) {
+            x[col] = value;
+        }
     }
 }

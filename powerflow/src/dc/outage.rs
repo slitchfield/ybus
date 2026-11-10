@@ -15,6 +15,7 @@
 
 use sparse_mat::compressed_matrix::{CscMatrix, SparseSolveWorkspace};
 use sparse_mat::sparse_matrix::SparseVector;
+use sparse_mat::Factorization;
 
 use super::reach::ReachScratch;
 use super::{DcSolution, DcStudy};

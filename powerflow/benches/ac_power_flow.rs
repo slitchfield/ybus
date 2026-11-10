@@ -24,6 +24,7 @@ use powerflow::ac::{AcMethod, AcModel, AcOptions};
 use powerflow::case::Case;
 use sparse_mat::compressed_matrix::{LuOptions, Ordering};
 use sparse_mat::Complex;
+use sparse_mat::Factorization;
 
 const CASE: &str = "case2383wp";
 

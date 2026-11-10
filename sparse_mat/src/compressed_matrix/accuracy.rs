@@ -22,6 +22,7 @@
 use num_complex::ComplexFloat;
 use num_traits::{Float, Zero};
 
+use super::factorization::Factorization;
 use super::{CompressedMatrix, CscMatrix, CsrMatrix, Orientation};
 use crate::compressed_matrix::{Cholesky, IndefiniteLdlt, Ldlt, Lu};
 use crate::sparse_error::SparseError;

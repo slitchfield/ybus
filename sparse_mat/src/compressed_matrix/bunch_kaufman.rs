@@ -5,6 +5,8 @@
 use num_complex::ComplexFloat;
 use num_traits::{Float, NumCast, Zero};
 
+use super::factorization::sealed::Substitute;
+use super::factorization::Factorization;
 use crate::compressed_matrix::Inertia;
 use crate::sparse_error::SparseError;
 use crate::Scalar;
@@ -508,19 +510,22 @@ impl<T: Scalar + ComplexFloat> DenseLdlt<T> {
             .fold((0, 0), |(p, n), (bp, bn)| (p + bp, n + bn));
         Inertia { positive, negative }
     }
+}
 
-    /// Solves `A x = b`: permutes `b`, substitutes forward with `L`, solves with each block of
-    /// `D`, substitutes back with `Lᴴ`, and permutes back. Returns `SparseError::ShapeMismatch`
-    /// unless `b` has one entry per row of `A`.
-    pub fn solve(&self, b: &[T]) -> Result<Vec<T>, SparseError> {
+impl<T: Scalar + ComplexFloat> Factorization<T> for DenseLdlt<T> {
+    fn dim(&self) -> usize {
+        self.n
+    }
+}
+
+impl<T: Scalar + ComplexFloat> Substitute<T> for DenseLdlt<T> {
+    /// `P b` into `scratch`; forward substitution with `L`, `D`'s blocks and back substitution
+    /// with `Lᴴ` there; and the result back through `P`
+    fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
+        scratch.clear();
+        scratch.extend(self.perm.iter().map(|&row| x[row]));
         let n = self.n;
-        if b.len() != n {
-            return Err(SparseError::ShapeMismatch {
-                left: (n, n),
-                right: (b.len(), 1),
-            });
-        }
-        let mut y: Vec<T> = self.perm.iter().map(|&row| b[row]).collect();
+        let y = scratch.as_mut_slice();
         for j in 0..n {
             let y_j = y[j];
             for (i, y_i) in y.iter_mut().enumerate().skip(j + 1) {
@@ -547,10 +552,8 @@ impl<T: Scalar + ComplexFloat> DenseLdlt<T> {
             }
             y[j] = y_j;
         }
-        let mut x = vec![T::zero(); n];
-        for (&row, &value) in self.perm.iter().zip(&y) {
+        for (&row, &value) in self.perm.iter().zip(scratch.iter()) {
             x[row] = value;
         }
-        Ok(x)
     }
 }
