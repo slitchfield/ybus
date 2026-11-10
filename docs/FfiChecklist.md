@@ -207,8 +207,10 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       matrix for the table, so the format fixes the codes; a test reads every code against the
       case file's column of that number. New codes: `YBUS_ERROR_INVALID_VALUE` 7,
       `LENGTH_MISMATCH` 8, `INVALID_FIELD` 9 and `MISSING_DATA` 10.
-- [ ] Column setters for the same fields. A set isn't validated; invalid data is reported when
-      the case is solved, as in Rust, where building a model runs `Case::validate`.
+- [x] Column setters for the same fields. A set isn't validated; invalid data is reported when
+      the case is solved, as in Rust, where building a model runs `Case::validate`. Only what an
+      `int64_t` column can't hold is refused when set, the whole column checked first; a test
+      sets each column to its values rotated and checks that no other column changes.
 - [ ] Generator costs, read and set in a form for both cost models. The form (flattened
       coefficients with offsets, or one generator at a time) is decided with the item.
 

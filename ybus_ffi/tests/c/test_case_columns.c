@@ -1,4 +1,5 @@
-/* A case's columns, read whole by field code, and its bus names, read one at a time. */
+/* A case's columns, read and written whole by field code, and its bus names, read one at a
+ * time. */
 
 #include <stdint.h>
 #include <string.h>
@@ -59,6 +60,27 @@ int main(void) {
     CHECK(needed == 6 && short_name[0] == 'x');
     char name[16];
     CHECK(ybus_case_bus_name(three, 3, name, sizeof name, NULL) == YBUS_ERROR_ROW_OUT_OF_RANGE);
+
+    /* Set a load and a status column, and read them back */
+    const double loads[3] = {10.0, 20.0, 30.0};
+    CHECK(ybus_case_set_bus_f64(three, YBUS_BUS_PD_MW, loads, 3) == YBUS_OK);
+    CHECK(ybus_case_get_bus_f64(three, YBUS_BUS_PD_MW, pd, 3) == YBUS_OK);
+    CHECK(pd[0] == 10.0 && pd[1] == 20.0 && pd[2] == 30.0);
+    const int64_t switched[3] = {0, 1, 1};
+    CHECK(ybus_case_set_branch_i64(three, YBUS_BRANCH_STATUS, switched, 3) == YBUS_OK);
+    CHECK(ybus_case_get_branch_i64(three, YBUS_BRANCH_STATUS, status, 3) == YBUS_OK);
+    CHECK(status[0] == 0 && status[1] == 1 && status[2] == 1);
+
+    /* A value the field can't hold leaves the whole column as it was */
+    const int64_t bad_types[3] = {1, 2, 7};
+    CHECK(ybus_case_set_bus_i64(three, YBUS_BUS_TYPE, bad_types, 3) == YBUS_ERROR_INVALID_VALUE);
+    CHECK(strcmp(last_message(), "bus row 2's value 7 for field 2 isn't a bus type, 1 to 4") == 0);
+    CHECK(ybus_case_get_bus_i64(three, YBUS_BUS_TYPE, types, 3) == YBUS_OK);
+    CHECK(types[0] == 3 && types[1] == 2 && types[2] == 1);
+
+    /* One entry per row, no more and no fewer */
+    CHECK(ybus_case_set_gen_f64(three, YBUS_GEN_PG_MW, loads, 3) == YBUS_ERROR_LENGTH_MISMATCH);
+    CHECK(ybus_case_set_gen_f64(three, YBUS_GEN_PG_MW, loads, 2) == YBUS_OK);
 
     ybus_case_free(three);
     return check_result();

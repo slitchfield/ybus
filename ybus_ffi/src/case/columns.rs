@@ -9,7 +9,7 @@ use powerflow::case::{Branch, Bus, BusType, Gen};
 use powerflow::Case;
 
 use super::YbusCase;
-use crate::boundary::{arg_mut, arg_ref, arg_slice_mut, guard, Failure};
+use crate::boundary::{arg_mut, arg_ref, arg_slice, arg_slice_mut, guard, Failure};
 use crate::status::ybus_status;
 
 /// A column's field code: its 1-based column number in MATPOWER's matrix for the table.
@@ -116,7 +116,6 @@ pub const YBUS_BRANCH_ANGMAX_DEG: ybus_field = 13;
 /// How to read and write one `double` field of a row.
 pub(crate) struct Float<R> {
     pub(crate) get: fn(&R) -> f64,
-    #[allow(dead_code)] // Until the column setters
     pub(crate) set: fn(&mut R, f64),
 }
 
@@ -125,10 +124,8 @@ pub(crate) struct Int<R> {
     /// The row's value, or `None` if it doesn't fit an `int64_t`
     pub(crate) get: fn(&R) -> Option<i64>,
     /// Whether the field can hold a value, and if not, why
-    #[allow(dead_code)] // Until the column setters
     pub(crate) check: fn(i64) -> Result<(), &'static str>,
     /// Sets the row's value, which `check` has accepted
-    #[allow(dead_code)] // Until the column setters
     pub(crate) set: fn(&mut R, i64),
 }
 
@@ -136,7 +133,6 @@ pub(crate) struct Int<R> {
 pub(crate) struct Table<R: 'static> {
     pub(crate) name: &'static str,
     pub(crate) rows: fn(&Case) -> &[R],
-    #[allow(dead_code)] // Until the column setters
     pub(crate) rows_mut: fn(&mut Case) -> &mut [R],
     pub(crate) float: fn(ybus_field) -> Option<Float<R>>,
     pub(crate) int: fn(ybus_field) -> Option<Int<R>>,
@@ -402,6 +398,80 @@ unsafe fn get_ints<R>(
     })
 }
 
+/// `LengthMismatch` unless an array of `given` entries is one per row of `rows`
+fn check_length(argument: &'static str, rows: usize, given: usize) -> Result<(), Failure> {
+    if given == rows {
+        Ok(())
+    } else {
+        Err(Failure::LengthMismatch {
+            argument,
+            expected: rows,
+            given,
+        })
+    }
+}
+
+/// Sets a `double` column from `values`, one entry per row.
+///
+/// # Safety
+///
+/// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+/// readable `double`s.
+unsafe fn set_floats<R>(
+    table: &Table<R>,
+    case: *mut YbusCase,
+    code: ybus_field,
+    values: *const f64,
+    len: usize,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: case and values are as the caller promised
+        let (case, values) = unsafe { (arg_mut(case, "case")?, arg_slice(values, len, "values")?) };
+        let column = field((table.float)(code), table.name, code, "double")?;
+        let rows = (table.rows_mut)(&mut case.case);
+        check_length("values", rows.len(), len)?;
+        for (row, &value) in rows.iter_mut().zip(values) {
+            (column.set)(row, value);
+        }
+        Ok(())
+    })
+}
+
+/// Sets an `int64_t` column from `values`, one entry per row, after checking every value, so a
+/// column with one the field can't hold is left unchanged.
+///
+/// # Safety
+///
+/// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+/// readable `int64_t`s.
+unsafe fn set_ints<R>(
+    table: &Table<R>,
+    case: *mut YbusCase,
+    code: ybus_field,
+    values: *const i64,
+    len: usize,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: case and values are as the caller promised
+        let (case, values) = unsafe { (arg_mut(case, "case")?, arg_slice(values, len, "values")?) };
+        let column = field((table.int)(code), table.name, code, "int64_t")?;
+        let rows = (table.rows_mut)(&mut case.case);
+        check_length("values", rows.len(), len)?;
+        for (row, &value) in values.iter().enumerate() {
+            (column.check)(value).map_err(|reason| {
+                Failure::InvalidValue(format!(
+                    "{} row {row}'s value {value} for field {code} {reason}",
+                    table.name
+                ))
+            })?;
+        }
+        for (row, &value) in rows.iter_mut().zip(values) {
+            (column.set)(row, value);
+        }
+        Ok(())
+    })
+}
+
 /// Writes the bus table's `double` column `field` into `out`, which has room for `len`
 /// entries: one per bus, in case order. Returns `YBUS_ERROR_INVALID_FIELD` if `field` isn't
 /// one of the bus table's `double` fields, and `YBUS_ERROR_BUFFER_TOO_SMALL`, writing nothing,
@@ -504,6 +574,116 @@ pub unsafe extern "C" fn ybus_case_get_branch_i64(
     unsafe { get_ints(&branch_table(), case, field, out, len) }
 }
 
+/// Sets the bus table's `double` column `field` from `values`, which has `len` entries: one
+/// per bus, in case order. Nothing is checked beyond the length: data a solve can't use is
+/// reported when the case is solved. Returns `YBUS_ERROR_INVALID_FIELD` if `field` isn't one
+/// of the bus table's `double` fields, and `YBUS_ERROR_LENGTH_MISMATCH`, changing nothing, if
+/// `len` isn't the number of buses.
+///
+/// # Safety
+///
+/// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+/// readable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_set_bus_f64(
+    case: *mut YbusCase,
+    field: ybus_field,
+    values: *const f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { set_floats(&bus_table(), case, field, values, len) }
+}
+
+/// [`ybus_case_set_bus_f64`] for the bus table's `int64_t` fields: the label, type, area and
+/// zone. Every value is checked first, and `YBUS_ERROR_INVALID_VALUE`, changing nothing, is
+/// returned for a negative label, area or zone, or a type outside 1 to 4.
+///
+/// # Safety
+///
+/// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+/// readable `int64_t`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_set_bus_i64(
+    case: *mut YbusCase,
+    field: ybus_field,
+    values: *const i64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { set_ints(&bus_table(), case, field, values, len) }
+}
+
+/// [`ybus_case_set_bus_f64`] for the generator table: one entry per generator.
+///
+/// # Safety
+///
+/// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+/// readable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_set_gen_f64(
+    case: *mut YbusCase,
+    field: ybus_field,
+    values: *const f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { set_floats(&gen_table(), case, field, values, len) }
+}
+
+/// [`ybus_case_set_bus_i64`] for the generator table's `int64_t` fields: the bus label and the
+/// status, which must be 0 or 1.
+///
+/// # Safety
+///
+/// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+/// readable `int64_t`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_set_gen_i64(
+    case: *mut YbusCase,
+    field: ybus_field,
+    values: *const i64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { set_ints(&gen_table(), case, field, values, len) }
+}
+
+/// [`ybus_case_set_bus_f64`] for the branch table: one entry per branch.
+///
+/// # Safety
+///
+/// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+/// readable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_set_branch_f64(
+    case: *mut YbusCase,
+    field: ybus_field,
+    values: *const f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { set_floats(&branch_table(), case, field, values, len) }
+}
+
+/// [`ybus_case_set_bus_i64`] for the branch table's `int64_t` fields: the from and to labels
+/// and the status, which must be 0 or 1.
+///
+/// # Safety
+///
+/// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+/// readable `int64_t`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_case_set_branch_i64(
+    case: *mut YbusCase,
+    field: ybus_field,
+    values: *const i64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { set_ints(&branch_table(), case, field, values, len) }
+}
+
 /// Writes bus `row`'s name, a NUL-terminated string, into `buffer`, which has room for `len`
 /// bytes, and the bytes it needs, counting the NUL, through `needed` unless it's null.
 ///
@@ -570,8 +750,8 @@ mod tests {
     use crate::case::tests::{three_bus, THREE_BUS};
     use crate::case::ybus_case_free;
     use crate::status::{
-        YBUS_ERROR_BUFFER_TOO_SMALL, YBUS_ERROR_INVALID_FIELD, YBUS_ERROR_MISSING_DATA,
-        YBUS_ERROR_ROW_OUT_OF_RANGE, YBUS_OK,
+        YBUS_ERROR_BUFFER_TOO_SMALL, YBUS_ERROR_INVALID_FIELD, YBUS_ERROR_INVALID_VALUE,
+        YBUS_ERROR_LENGTH_MISMATCH, YBUS_ERROR_MISSING_DATA, YBUS_ERROR_ROW_OUT_OF_RANGE, YBUS_OK,
     };
 
     /// The rows of `mpc.<name>` in THREE_BUS's text, as numbers: the columns the codes name
@@ -706,6 +886,155 @@ mod tests {
             assert_eq!(
                 last_error().unwrap().to_str().unwrap(),
                 "the case has no bus names"
+            );
+            ybus_case_free(case);
+        }
+    }
+
+    type GetF64 = unsafe extern "C" fn(*const YbusCase, ybus_field, *mut f64, usize) -> ybus_status;
+    type GetI64 = unsafe extern "C" fn(*const YbusCase, ybus_field, *mut i64, usize) -> ybus_status;
+    type SetF64 = unsafe extern "C" fn(*mut YbusCase, ybus_field, *const f64, usize) -> ybus_status;
+    type SetI64 = unsafe extern "C" fn(*mut YbusCase, ybus_field, *const i64, usize) -> ybus_status;
+
+    /// Every column of a table, read through whichever getter takes its code, as numbers
+    fn columns(
+        case: *const YbusCase,
+        width: ybus_field,
+        rows: usize,
+        get: (GetF64, GetI64),
+    ) -> Vec<Vec<f64>> {
+        (1..=width)
+            .map(|code| {
+                let (mut floats, mut ints) = (vec![0.0; rows], vec![0; rows]);
+                // SAFETY: case is live, and each buffer has room for rows entries
+                unsafe {
+                    if get.0(case, code, floats.as_mut_ptr(), rows) == YBUS_OK {
+                        floats
+                    } else {
+                        assert_eq!(get.1(case, code, ints.as_mut_ptr(), rows), YBUS_OK);
+                        ints.iter().map(|&v| v as f64).collect()
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// Setting each column to its own values rotated by a row changes that column alone, so
+    /// every setter writes the field its code names
+    fn check_setters(width: ybus_field, rows: usize, get: (GetF64, GetI64), set: (SetF64, SetI64)) {
+        let case = three_bus();
+        for code in 1..=width {
+            let before = columns(case, width, rows, get);
+            let mut rotated = before[code as usize - 1].clone();
+            rotated.rotate_left(1);
+            let ints: Vec<i64> = rotated.iter().map(|&v| v as i64).collect();
+            // SAFETY: case is live and unshared, and each array has rows entries
+            let status = unsafe {
+                match set.0(case, code, rotated.as_ptr(), rows) {
+                    YBUS_ERROR_INVALID_FIELD => set.1(case, code, ints.as_ptr(), rows),
+                    status => status,
+                }
+            };
+            assert_eq!(status, YBUS_OK, "field {code}");
+            let mut expected = before;
+            expected[code as usize - 1] = rotated;
+            assert_eq!(columns(case, width, rows, get), expected, "field {code}");
+        }
+        // SAFETY: case is live until this free
+        unsafe { ybus_case_free(case) };
+    }
+
+    #[test]
+    fn every_setter_writes_its_own_column() {
+        check_setters(
+            13,
+            3,
+            (ybus_case_get_bus_f64, ybus_case_get_bus_i64),
+            (ybus_case_set_bus_f64, ybus_case_set_bus_i64),
+        );
+        check_setters(
+            21,
+            2,
+            (ybus_case_get_gen_f64, ybus_case_get_gen_i64),
+            (ybus_case_set_gen_f64, ybus_case_set_gen_i64),
+        );
+        check_setters(
+            13,
+            3,
+            (ybus_case_get_branch_f64, ybus_case_get_branch_i64),
+            (ybus_case_set_branch_f64, ybus_case_set_branch_i64),
+        );
+    }
+
+    #[test]
+    fn an_integer_column_is_checked_whole_before_it_is_set() {
+        let case = three_bus();
+        let read = |code| {
+            let mut out = [0; 3];
+            // SAFETY: case is live, and out has room for 3 entries
+            assert_eq!(
+                unsafe { ybus_case_get_bus_i64(case, code, out.as_mut_ptr(), 3) },
+                YBUS_OK
+            );
+            out
+        };
+        // SAFETY: case is live and unshared until freed, and each array has its length
+        unsafe {
+            for (code, values) in [
+                (YBUS_BUS_LABEL, [1, -2, 3]),
+                (YBUS_BUS_TYPE, [1, 2, 5]),
+                (YBUS_BUS_TYPE, [0, 2, 1]),
+                (YBUS_BUS_ZONE, [i64::MIN, 0, 0]),
+            ] {
+                let before = read(code);
+                assert_eq!(
+                    ybus_case_set_bus_i64(case, code, values.as_ptr(), 3),
+                    YBUS_ERROR_INVALID_VALUE
+                );
+                assert_eq!(read(code), before);
+            }
+            assert_eq!(
+                last_error().unwrap().to_str().unwrap(),
+                format!(
+                    "bus row 0's value {} for field 11 isn't a non-negative integer that fits \
+                     a size_t",
+                    i64::MIN
+                )
+            );
+            let statuses = [1, 2, 0];
+            assert_eq!(
+                ybus_case_set_branch_i64(case, YBUS_BRANCH_STATUS, statuses.as_ptr(), 3),
+                YBUS_ERROR_INVALID_VALUE
+            );
+            assert_eq!(
+                last_error().unwrap().to_str().unwrap(),
+                "branch row 1's value 2 for field 11 isn't a status, 0 or 1"
+            );
+            let off = [0, 1];
+            assert_eq!(
+                ybus_case_set_gen_i64(case, YBUS_GEN_STATUS, off.as_ptr(), 2),
+                YBUS_OK
+            );
+            let generators = &(*case).case.generator;
+            assert!(!generators[0].status && generators[1].status);
+
+            // The length must be one per row, even for a null array
+            let pd = [1.0, 2.0];
+            assert_eq!(
+                ybus_case_set_bus_f64(case, YBUS_BUS_PD_MW, pd.as_ptr(), 2),
+                YBUS_ERROR_LENGTH_MISMATCH
+            );
+            assert_eq!(
+                ybus_case_set_bus_f64(case, YBUS_BUS_PD_MW, ptr::null(), 0),
+                YBUS_ERROR_LENGTH_MISMATCH
+            );
+            assert_eq!(
+                last_error().unwrap().to_str().unwrap(),
+                "`values` has 0 entries, but its table has 3 rows"
+            );
+            assert_eq!(
+                ybus_case_set_bus_f64(case, YBUS_BUS_TYPE, pd.as_ptr(), 2),
+                YBUS_ERROR_INVALID_FIELD
             );
             ybus_case_free(case);
         }

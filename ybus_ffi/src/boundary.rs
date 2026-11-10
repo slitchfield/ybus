@@ -13,8 +13,9 @@ use powerflow::PowerflowError;
 use crate::case::columns::ybus_field;
 use crate::status::{
     self, ybus_status, YBUS_ERROR_BUFFER_TOO_SMALL, YBUS_ERROR_INVALID_FIELD,
-    YBUS_ERROR_INVALID_UTF8, YBUS_ERROR_INVALID_VALUE, YBUS_ERROR_MISALIGNED_ARGUMENT,
-    YBUS_ERROR_MISSING_DATA, YBUS_ERROR_NULL_ARGUMENT, YBUS_ERROR_PANIC, YBUS_OK,
+    YBUS_ERROR_INVALID_UTF8, YBUS_ERROR_INVALID_VALUE, YBUS_ERROR_LENGTH_MISMATCH,
+    YBUS_ERROR_MISALIGNED_ARGUMENT, YBUS_ERROR_MISSING_DATA, YBUS_ERROR_NULL_ARGUMENT,
+    YBUS_ERROR_PANIC, YBUS_OK,
 };
 
 /// Why an export failed.
@@ -32,6 +33,12 @@ pub(crate) enum Failure {
     BufferTooSmall {
         argument: &'static str,
         needed: usize,
+        given: usize,
+    },
+    /// The named array's length doesn't match its table.
+    LengthMismatch {
+        argument: &'static str,
+        expected: usize,
         given: usize,
     },
     /// A value can't be held where it was given or asked for, for this reason.
@@ -57,6 +64,7 @@ impl Failure {
             Failure::MisalignedArgument(_) => YBUS_ERROR_MISALIGNED_ARGUMENT,
             Failure::InvalidUtf8(_) => YBUS_ERROR_INVALID_UTF8,
             Failure::BufferTooSmall { .. } => YBUS_ERROR_BUFFER_TOO_SMALL,
+            Failure::LengthMismatch { .. } => YBUS_ERROR_LENGTH_MISMATCH,
             Failure::InvalidValue(_) => YBUS_ERROR_INVALID_VALUE,
             Failure::InvalidField { .. } => YBUS_ERROR_INVALID_FIELD,
             Failure::MissingData(_) => YBUS_ERROR_MISSING_DATA,
@@ -81,6 +89,14 @@ impl fmt::Display for Failure {
             } => write!(
                 f,
                 "`{argument}` has room for {given} elements, but the result needs {needed}"
+            ),
+            Failure::LengthMismatch {
+                argument,
+                expected,
+                given,
+            } => write!(
+                f,
+                "`{argument}` has {given} entries, but its table has {expected} rows"
             ),
             Failure::InvalidValue(reason) => write!(f, "{reason}"),
             Failure::InvalidField { table, field, kind } => {

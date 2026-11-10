@@ -478,6 +478,80 @@ ybus_status ybus_case_get_branch_i64(const struct ybus_case *case_,
                                      int64_t *out,
                                      size_t len);
 
+// Sets the bus table's `double` column `field` from `values`, which has `len` entries: one
+// per bus, in case order. Nothing is checked beyond the length: data a solve can't use is
+// reported when the case is solved. Returns `YBUS_ERROR_INVALID_FIELD` if `field` isn't one
+// of the bus table's `double` fields, and `YBUS_ERROR_LENGTH_MISMATCH`, changing nothing, if
+// `len` isn't the number of buses.
+//
+// # Safety
+//
+// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+// readable `double`s.
+ybus_status ybus_case_set_bus_f64(struct ybus_case *case_,
+                                  ybus_field field,
+                                  const double *values,
+                                  size_t len);
+
+// [`ybus_case_set_bus_f64`] for the bus table's `int64_t` fields: the label, type, area and
+// zone. Every value is checked first, and `YBUS_ERROR_INVALID_VALUE`, changing nothing, is
+// returned for a negative label, area or zone, or a type outside 1 to 4.
+//
+// # Safety
+//
+// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+// readable `int64_t`s.
+ybus_status ybus_case_set_bus_i64(struct ybus_case *case_,
+                                  ybus_field field,
+                                  const int64_t *values,
+                                  size_t len);
+
+// [`ybus_case_set_bus_f64`] for the generator table: one entry per generator.
+//
+// # Safety
+//
+// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+// readable `double`s.
+ybus_status ybus_case_set_gen_f64(struct ybus_case *case_,
+                                  ybus_field field,
+                                  const double *values,
+                                  size_t len);
+
+// [`ybus_case_set_bus_i64`] for the generator table's `int64_t` fields: the bus label and the
+// status, which must be 0 or 1.
+//
+// # Safety
+//
+// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+// readable `int64_t`s.
+ybus_status ybus_case_set_gen_i64(struct ybus_case *case_,
+                                  ybus_field field,
+                                  const int64_t *values,
+                                  size_t len);
+
+// [`ybus_case_set_bus_f64`] for the branch table: one entry per branch.
+//
+// # Safety
+//
+// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+// readable `double`s.
+ybus_status ybus_case_set_branch_f64(struct ybus_case *case_,
+                                     ybus_field field,
+                                     const double *values,
+                                     size_t len);
+
+// [`ybus_case_set_bus_i64`] for the branch table's `int64_t` fields: the from and to labels
+// and the status, which must be 0 or 1.
+//
+// # Safety
+//
+// `case` must be null or a live case that nothing else is using, and `values` null or `len`
+// readable `int64_t`s.
+ybus_status ybus_case_set_branch_i64(struct ybus_case *case_,
+                                     ybus_field field,
+                                     const int64_t *values,
+                                     size_t len);
+
 // Writes bus `row`'s name, a NUL-terminated string, into `buffer`, which has room for `len`
 // bytes, and the bytes it needs, counting the NUL, through `needed` unless it's null.
 //

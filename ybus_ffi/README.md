@@ -69,6 +69,15 @@ ybus_case_get_branch_i64(case, YBUS_BRANCH_STATUS, status, 3);
 - **Too short a buffer** gives `YBUS_ERROR_BUFFER_TOO_SMALL` and is left untouched. A longer
   one keeps its tail.
 
+Each getter has a setter, such as `ybus_case_set_bus_f64(case, YBUS_BUS_PD_MW, values, 3)`.
+- **Length:** the array must have exactly one entry per row, or it's
+  `YBUS_ERROR_LENGTH_MISMATCH`.
+- **`int64_t` columns** are checked whole before anything is written. A negative label, area or
+  zone, a bus type outside 1 to 4, or a status other than 0 or 1 is
+  `YBUS_ERROR_INVALID_VALUE`, and the column is left as it was.
+- **`double` columns** aren't checked. Data a solve can't use, such as a branch to a bus that
+  doesn't exist, is reported when the case is solved.
+
 `ybus_case_bus_name(case, row, buffer, len, &needed)` reads one bus name, as a NUL-terminated
 string. Call it with `NULL, 0` to learn the size. A case without names gives
 `YBUS_ERROR_MISSING_DATA`.
