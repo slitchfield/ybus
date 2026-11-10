@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use common::dc_fixture::{fixture, B, G, L};
 use powerflow::case::{BusType, Case};
-use powerflow::dc::{dc_power_flow, DcModel, DcSolver, PtdfSlack};
+use powerflow::dc::{dc_power_flow, DcModel, DcOptions, DcSolver, PtdfSlack};
 use powerflow::powerflow_error::PowerflowError;
 
 /// A labelled dense matrix as `generate_reference.m` writes it: the column labels, and each
@@ -65,7 +65,7 @@ fn load_weights(case: &Case) -> Vec<f64> {
 /// columns (rows labelled by 1-based branch row, columns by bus number).
 fn ptdf_deviation(case: &Case, reference: &Labelled, slack: PtdfSlack) -> f64 {
     let model = DcModel::new(case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let sensitivity = study.sensitivity(slack).unwrap();
     let buses: Vec<usize> = reference
         .columns
@@ -107,7 +107,7 @@ fn rows_columns_transfers_and_the_full_matrix_agree() {
     };
     let case = Case::from_path(&path).unwrap();
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     for slack in [
         PtdfSlack::Reference,
         PtdfSlack::Bus(7),
@@ -189,7 +189,7 @@ fn a_ptdf_column_is_the_change_in_flows() {
     let (buses, gens, mut branches) = ring();
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     assert_eq!(study.solver(), DcSolver::Cholesky);
     let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
     assert_eq!(sensitivity.slack_bus(), 0);
@@ -209,7 +209,7 @@ fn a_ptdf_column_is_the_change_in_flows() {
     branches[5] = L(1, 3, -0.05, 0.0, 0.0, true);
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     assert_eq!(study.solver(), DcSolver::Lu);
     let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
     for bus in 1..4 {
@@ -229,7 +229,7 @@ fn another_slack_bus_and_several_references_follow_makeptdf() {
     let (mut buses, gens, branches) = ring();
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let at_three = study.sensitivity(PtdfSlack::Bus(2)).unwrap();
     assert_eq!(at_three.slack_bus(), 2);
     buses[0].1 = 2;
@@ -251,7 +251,7 @@ fn another_slack_bus_and_several_references_follow_makeptdf() {
     let two = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&two).unwrap();
     assert_eq!(model.ref_buses(), [0, 2]);
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
     assert_eq!(sensitivity.slack_bus(), 0);
     for bus in [1, 2, 3] {
@@ -272,7 +272,7 @@ fn a_distributed_slack_withdraws_in_proportion() {
     let (buses, gens, branches) = ring();
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let single = study.sensitivity(PtdfSlack::Reference).unwrap();
     let weights = vec![0.0, 1.0, 0.0, 3.0, 0.0];
     let distributed = study.sensitivity(PtdfSlack::Weights(weights)).unwrap();
@@ -296,7 +296,7 @@ fn unusable_slacks_and_rows_are_errors() {
     let (buses, gens, branches) = ring();
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let invalid = |slack| match study.sensitivity(slack) {
         Err(PowerflowError::InvalidSlack { .. }) => true,
         other => panic!("{other:?}"),
@@ -341,7 +341,7 @@ fn two_islands_need_a_slack_each() {
         &[L(1, 2, 0.1, 0.0, 0.0, true), L(3, 4, 0.1, 0.0, 0.0, true)],
     );
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     assert_eq!(
         study.sensitivity(PtdfSlack::Reference).unwrap_err(),
         PowerflowError::IslandWithoutReference { bus_label: 3 }
@@ -409,7 +409,7 @@ fn ptdf_matches_makeptdf_on_every_local_case() {
 /// every other branch an |1 − h| far from it.
 fn lodf_deviation(case: &Case, reference: &Labelled, name: &str) -> (f64, usize) {
     let model = DcModel::new(case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
     let outaged: Vec<usize> = reference.columns.iter().map(|row| row - 1).collect();
     let columns = sensitivity.lodf_columns(&outaged).unwrap();
@@ -461,7 +461,7 @@ fn an_lodf_column_predicts_the_flows_after_an_outage() {
     let case = fixture(&buses, &gens, &branches);
     let base = dc_power_flow(&case).unwrap();
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
     let full = sensitivity.lodf();
     for k in 0..6 {
@@ -504,7 +504,7 @@ fn a_bridge_has_a_nan_column_but_a_parallel_pair_doesnt() {
     branches.push(L(4, 6, 0.1, 0.0, 0.0, true));
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
     let columns = sensitivity.lodf_columns(&[7, 0, 1]).unwrap();
     assert!(columns[0].iter().all(|value| value.is_nan()));

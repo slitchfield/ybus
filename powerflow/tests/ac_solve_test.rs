@@ -146,7 +146,7 @@ fn convergence_control() {
     // AcOptions is non-exhaustive, so a caller changes a default rather than writing a literal
     let mut one = AcOptions::default();
     one.max_iterations = 1;
-    match model.solve(&case, one) {
+    match model.solve(&case, &one) {
         Err(PowerflowError::NoConvergence {
             iterations,
             mismatch_pu,
@@ -159,8 +159,8 @@ fn convergence_control() {
     // A looser tolerance stops sooner
     let mut loose = AcOptions::default();
     loose.tolerance = 1e-3;
-    let full = model.solve(&case, AcOptions::default()).unwrap();
-    let rough = model.solve(&case, loose).unwrap();
+    let full = model.solve(&case, &AcOptions::default()).unwrap();
+    let rough = model.solve(&case, &loose).unwrap();
     assert!(rough.iterations < full.iterations);
     assert!(rough.mismatch_pu < 1e-3);
     assert_eq!(AcOptions::default().tolerance, 1e-8);
@@ -176,14 +176,14 @@ fn convergence_control() {
         bus.vm_pu = *vm;
         bus.va_deg = *va;
     }
-    let again = model.solve(&solved, AcOptions::default()).unwrap();
+    let again = model.solve(&solved, &AcOptions::default()).unwrap();
     assert_eq!((again.iterations, again.full_factorizations), (0, 0));
 
     // Another case's tables are refused
     let mut shorter = case.clone();
     shorter.branch.pop();
     assert!(matches!(
-        model.solve(&shorter, AcOptions::default()),
+        model.solve(&shorter, &AcOptions::default()),
         Err(PowerflowError::CaseMismatch { .. })
     ));
 }
@@ -260,9 +260,9 @@ fn shifted_network() -> Case {
 fn fast_decoupled_reaches_newtons_solution() {
     for case in [network(), shifted_network()] {
         let model = AcModel::new(&case).unwrap();
-        let newton = model.solve(&case, AcOptions::default()).unwrap();
+        let newton = model.solve(&case, &AcOptions::default()).unwrap();
         for method in [AcMethod::FastDecoupledXb, AcMethod::FastDecoupledBx] {
-            let solution = model.solve(&case, AcOptions::for_method(method)).unwrap();
+            let solution = model.solve(&case, &AcOptions::for_method(method)).unwrap();
             assert_physical(&case, &solution);
             assert_eq!(solution.full_factorizations, 2);
             // Each converged to within the tolerance (1e-8 p.u. on a 100 MVA base), from the
@@ -291,7 +291,7 @@ fn fast_decoupled_options_and_errors() {
     let model = AcModel::new(&case).unwrap();
     let mut one = AcOptions::for_method(AcMethod::FastDecoupledBx);
     one.max_iterations = 1;
-    match model.solve(&case, one) {
+    match model.solve(&case, &one) {
         Err(PowerflowError::NoConvergence {
             iterations,
             mismatch_pu,
@@ -304,10 +304,12 @@ fn fast_decoupled_options_and_errors() {
     let mut resistive = case.clone();
     resistive.branch[0].x = 0.0;
     let model = AcModel::new(&resistive).unwrap();
-    assert!(model.solve(&resistive, AcOptions::default()).is_ok());
+    assert!(model.solve(&resistive, &AcOptions::default()).is_ok());
     for method in [AcMethod::FastDecoupledXb, AcMethod::FastDecoupledBx] {
         assert_eq!(
-            model.solve(&resistive, AcOptions::for_method(method)).err(),
+            model
+                .solve(&resistive, &AcOptions::for_method(method))
+                .err(),
             Some(PowerflowError::ZeroReactance { row: 1 })
         );
     }
@@ -373,7 +375,7 @@ fn a_generator_past_its_upper_limit_is_held_there() {
     case.generator[1].qmax_mvar = unlimited.qg_mvar[1] - 5.0;
     let model = AcModel::new(&case).unwrap();
     for mode in [ReactiveLimits::AllAtOnce, ReactiveLimits::OneAtATime] {
-        let solution = model.solve(&case, with_limits(mode)).unwrap();
+        let solution = model.solve(&case, &with_limits(mode)).unwrap();
         assert_physical(&case, &solution);
         assert_eq!(solution.limited_generators, [1]);
         assert_eq!(solution.qg_mvar[1], case.generator[1].qmax_mvar);
@@ -395,7 +397,7 @@ fn a_generator_past_its_lower_limit_is_held_there() {
     case.generator[1].qmin_mvar = unlimited.qg_mvar[1] + 3.0;
     let solution = AcModel::new(&case)
         .unwrap()
-        .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+        .solve(&case, &with_limits(ReactiveLimits::AllAtOnce))
         .unwrap();
     assert_physical(&case, &solution);
     assert_eq!(solution.limited_generators, [1]);
@@ -420,7 +422,7 @@ fn generators_sharing_a_bus_are_held_at_their_limits_together() {
     }
     let solution = AcModel::new(&case)
         .unwrap()
-        .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+        .solve(&case, &with_limits(ReactiveLimits::AllAtOnce))
         .unwrap();
     assert_physical(&case, &solution);
     assert_eq!(solution.limited_generators, [1, 2]);
@@ -438,12 +440,12 @@ fn inverted_limits_are_refused_rather_than_looping() {
     let model = AcModel::new(&case).unwrap();
     assert_eq!(
         model
-            .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+            .solve(&case, &with_limits(ReactiveLimits::AllAtOnce))
             .err(),
         Some(PowerflowError::InvertedReactiveLimits { row: 2 })
     );
     // Ignoring limits, they don't matter
-    assert!(model.solve(&case, AcOptions::default()).is_ok());
+    assert!(model.solve(&case, &AcOptions::default()).is_ok());
 }
 
 #[test]
@@ -454,7 +456,7 @@ fn a_reference_generator_at_its_limit_hands_the_reference_to_a_pv_bus() {
     case.generator[0].qmax_mvar = unlimited.qg_mvar[0] - 5.0;
     let solution = AcModel::new(&case)
         .unwrap()
-        .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+        .solve(&case, &with_limits(ReactiveLimits::AllAtOnce))
         .unwrap();
     assert_physical(&case, &solution);
     assert_eq!(solution.limited_generators, [0]);
@@ -484,7 +486,7 @@ fn several_references_cannot_lose_one_to_a_limit() {
     assert_eq!(
         AcModel::new(&case)
             .unwrap()
-            .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+            .solve(&case, &with_limits(ReactiveLimits::AllAtOnce))
             .err(),
         Some(PowerflowError::ReferenceAtReactiveLimit { bus_label: 4 })
     );
@@ -500,7 +502,7 @@ fn every_generator_past_the_same_limit_is_infeasible() {
     assert_eq!(
         AcModel::new(&case)
             .unwrap()
-            .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+            .solve(&case, &with_limits(ReactiveLimits::AllAtOnce))
             .err(),
         Some(PowerflowError::ReactiveLimitsInfeasible { generators: 2 })
     );
@@ -515,10 +517,10 @@ fn one_at_a_time_converts_the_largest_violation_first() {
     case.generator[2].qmax_mvar = unlimited.qg_mvar[2] - 6.0;
     let model = AcModel::new(&case).unwrap();
     let all = model
-        .solve(&case, with_limits(ReactiveLimits::AllAtOnce))
+        .solve(&case, &with_limits(ReactiveLimits::AllAtOnce))
         .unwrap();
     let one = model
-        .solve(&case, with_limits(ReactiveLimits::OneAtATime))
+        .solve(&case, &with_limits(ReactiveLimits::OneAtATime))
         .unwrap();
     assert_physical(&case, &all);
     assert_physical(&case, &one);

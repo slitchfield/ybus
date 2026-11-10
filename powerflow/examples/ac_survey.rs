@@ -126,7 +126,7 @@ fn survey(
     let model = model.map_err(|err| err.to_string())?;
     let mut options = AcOptions::for_method(method);
     options.reactive_limits = limits;
-    let (solve, solve_runs, solution) = time(|| model.solve(&case, options));
+    let (solve, solve_runs, solution) = time(|| model.solve(&case, &options));
 
     let (outcome, iterations, mismatch, factorizations) = match &solution {
         Ok(solution) => (

@@ -32,7 +32,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use powerflow::case::Case;
-use powerflow::dc::{DcModel, DcSolution, DcStudy, OutageLoading, PtdfSlack};
+use powerflow::dc::{DcModel, DcOptions, DcSolution, DcStudy, OutageLoading, PtdfSlack};
 use powerflow::powerflow_error::PowerflowError;
 use powerflow::Gpu;
 use rayon::prelude::*;
@@ -230,7 +230,9 @@ fn run(path: &Path) -> Result<(), String> {
         .map_or("?".into(), |s| s.to_string_lossy().into_owned());
     let case = Case::from_path(path).map_err(|err| err.to_string())?;
     let model = DcModel::new(&case).map_err(|err| err.to_string())?;
-    let study = model.study().map_err(|err| err.to_string())?;
+    let study = model
+        .study(&DcOptions::default())
+        .map_err(|err| err.to_string())?;
     let unknowns = model.pv_buses().len() + model.pq_buses().len();
     let prefix = Prefix(format!(
         "{name},{},{},{unknowns},{:?}",

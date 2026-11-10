@@ -28,7 +28,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use powerflow::case::Case;
-use powerflow::dc::{DcModel, DcSolver};
+use powerflow::dc::{DcModel, DcOptions, DcSolver};
 use sparse_mat::compressed_matrix::{LuOptions, Ordering};
 
 /// `ordering` is the factorization's, Cholesky or LU. `negative_branches` counts the in-service
@@ -107,7 +107,9 @@ fn survey(path: &Path, references: Option<&Path>, ordering: Ordering) -> Result<
     let case = case.map_err(|err| err.to_string())?;
     let (model_time, _, model) = time(|| DcModel::new(&case));
     let model = model.map_err(|err| err.to_string())?;
-    let (solve, solve_runs, solution) = time(|| model.solve_with_ordering(&case, ordering));
+    let mut options = DcOptions::default();
+    options.ordering = ordering;
+    let (solve, solve_runs, solution) = time(|| model.solve(&case, &options));
     let solution = solution.map_err(|err| err.to_string())?;
     let negative_branches = model
         .branch_rows()

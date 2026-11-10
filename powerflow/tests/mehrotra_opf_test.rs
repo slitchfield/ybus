@@ -143,11 +143,7 @@ fn compare_dc(
         mips_residuals: dc_opf_with_options(&case, &DcOpfOptions::default())
             .unwrap()
             .residuals,
-        floors: Floors::new(
-            &s.solver.x,
-            largest_multiplier(&s.solver.multipliers),
-            1.0,
-        ),
+        floors: Floors::new(&s.solver.x, largest_multiplier(&s.solver.multipliers), 1.0),
     };
     (s, c, reference.success)
 }
@@ -171,11 +167,7 @@ fn compare_ac(
         mips_residuals: ac_opf_with_options(&case, &AcOpfOptions::default())
             .unwrap()
             .residuals,
-        floors: Floors::new(
-            &s.solver.x,
-            largest_multiplier(&s.solver.multipliers),
-            1e-4,
-        ),
+        floors: Floors::new(&s.solver.x, largest_multiplier(&s.solver.multipliers), 1e-4),
     };
     (s, c, reference.success)
 }

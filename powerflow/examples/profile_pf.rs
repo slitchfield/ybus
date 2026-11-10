@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use powerflow::ac::{AcMethod, AcModel, AcOptions, ReactiveLimits};
 use powerflow::case::Case;
-use powerflow::dc::DcModel;
+use powerflow::dc::{DcModel, DcOptions};
 use powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions};
 use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions};
 use powerflow::opf::KktFactorization;
@@ -76,14 +76,14 @@ fn run(workload: &str, path: &Path) -> Result<(), String> {
         let mut options = AcOptions::for_method(method);
         options.reactive_limits = limits;
         // The outcome doesn't matter here, only the work
-        let _ = model.solve(&case, options);
+        let _ = model.solve(&case, &options);
         Ok(())
     };
     match workload {
         "parse" => Ok(()),
         "dc" => {
             let model = DcModel::new(&case).map_err(|err| err.to_string())?;
-            let _ = model.solve(&case);
+            let _ = model.solve(&case, &DcOptions::default());
             Ok(())
         }
         "nr" => ac(AcMethod::Newton, ReactiveLimits::Ignore),
@@ -92,7 +92,9 @@ fn run(workload: &str, path: &Path) -> Result<(), String> {
         "qlim2" => ac(AcMethod::Newton, ReactiveLimits::OneAtATime),
         "n1" | "n1-parallel" => {
             let model = DcModel::new(&case).map_err(|err| err.to_string())?;
-            let study = model.study().map_err(|err| err.to_string())?;
+            let study = model
+                .study(&DcOptions::default())
+                .map_err(|err| err.to_string())?;
             for chunk in model.branch_rows().chunks(CHUNK) {
                 let sets: Vec<Vec<usize>> = chunk.iter().map(|&row| vec![row]).collect();
                 let _ = if workload == "n1" {

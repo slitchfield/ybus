@@ -20,7 +20,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use powerflow::case::Case;
-use powerflow::dc::{dc_power_flow, DcModel, DcSolution, DcSolver, DcStudy};
+use powerflow::dc::{dc_power_flow, DcModel, DcOptions, DcSolution, DcSolver, DcStudy};
 use powerflow::powerflow_error::PowerflowError;
 
 /// `study_ms` is factoring B′ once. `outages` counts the in-service branches, each taken out
@@ -88,7 +88,7 @@ fn survey(path: &Path, parallel: bool) -> Result<String, String> {
         .ok_or("the case path has no file name")?;
     let case = Case::from_path(path).map_err(|err| err.to_string())?;
     let model = DcModel::new(&case).map_err(|err| err.to_string())?;
-    let (study_time, _, study) = time(|| model.study());
+    let (study_time, _, study) = time(|| model.study(&DcOptions::default()));
     let study = study.map_err(|err| err.to_string())?;
     let rows = model.branch_rows().to_vec();
 

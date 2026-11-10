@@ -14,7 +14,7 @@ use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use powerflow::case::Case;
-use powerflow::dc::DcModel;
+use powerflow::dc::{DcModel, DcOptions};
 
 /// MATPOWER's case2383wp, the Polish grid at its 1999–2000 winter peak: 2,383 buses, 2,896
 /// branches (6 of them phase shifters) and 327 generators. It's a common benchmark, it parses
@@ -38,7 +38,11 @@ fn dc_power_flow(c: &mut Criterion) {
         b.iter(|| DcModel::new(black_box(&case)).unwrap())
     });
     group.bench_function("solve", |b| {
-        b.iter(|| model.solve(black_box(&case)).unwrap())
+        b.iter(|| {
+            model
+                .solve(black_box(&case), &DcOptions::default())
+                .unwrap()
+        })
     });
     group.finish();
 }

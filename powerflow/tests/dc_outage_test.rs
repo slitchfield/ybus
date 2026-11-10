@@ -6,7 +6,7 @@ mod common;
 
 use common::dc_fixture::{fixture, B, G, L};
 use powerflow::case::Case;
-use powerflow::dc::{dc_power_flow, DcModel, DcSolution, DcSolver, PtdfSlack};
+use powerflow::dc::{dc_power_flow, DcModel, DcOptions, DcSolution, DcSolver, PtdfSlack};
 use powerflow::powerflow_error::PowerflowError;
 
 /// The case with `rows` out of service, solved by a new model
@@ -36,7 +36,7 @@ fn relative_deviation(actual: &DcSolution, expected: &DcSolution) -> f64 {
 /// Checks the outage of `rows` against refactoring: the same error, or results within 1e-9
 /// relative. Returns the deviation (0 for matching errors).
 fn check(case: &Case, model: &DcModel, rows: &[usize]) -> f64 {
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let ours = study.solve_outage(case, rows);
     match (ours, refactored(case, rows)) {
         (Ok(ours), Ok(expected)) => {
@@ -75,7 +75,7 @@ fn check_every_small_set(case: &Case) -> (usize, usize) {
     for rows in sets {
         // Out-of-service rows can't be outaged; refactoring would just ignore them
         if rows.iter().any(|&row| !case.branch[row].status) {
-            let study = model.study().unwrap();
+            let study = model.study(&DcOptions::default()).unwrap();
             let row = *rows.iter().find(|&&row| !case.branch[row].status).unwrap();
             assert_eq!(
                 study.solve_outage(case, &rows).unwrap_err(),
@@ -83,7 +83,11 @@ fn check_every_small_set(case: &Case) -> (usize, usize) {
             );
             continue;
         }
-        match model.study().unwrap().solve_outage(case, &rows) {
+        match model
+            .study(&DcOptions::default())
+            .unwrap()
+            .solve_outage(case, &rows)
+        {
             Ok(_) => solved += 1,
             Err(_) => errors += 1,
         }
@@ -177,7 +181,10 @@ fn outages_match_refactoring_on_the_lu_path() {
     branches[5] = L(1, 3, -0.05, 0.0, 0.0, true);
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
-    assert_eq!(model.study().unwrap().solver(), DcSolver::Lu);
+    assert_eq!(
+        model.study(&DcOptions::default()).unwrap().solver(),
+        DcSolver::Lu
+    );
     check_every_small_set(&case);
 }
 
@@ -190,7 +197,7 @@ fn an_island_with_its_own_reference_is_solved() {
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
     assert_eq!(model.ref_buses(), [0, 2]);
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let alone = study.solve_outage(&case, &[2, 3, 5]).unwrap();
     // Alone, bus 3's generator is its island's slack, so it serves exactly its bus's 30 MW
     assert!((alone.pg_mw[1] - 30.0).abs() <= 1e-9, "{}", alone.pg_mw[1]);
@@ -203,7 +210,7 @@ fn outage_rows_are_checked() {
     let (buses, gens, branches) = ring();
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     assert_eq!(
         study.solve_outage(&case, &[8]).unwrap_err(),
         PowerflowError::RowOutOfRange {
@@ -237,7 +244,7 @@ fn a_batch_matches_one_at_a_time() {
     let (buses, gens, branches) = ring();
     let case = fixture(&buses, &gens, &branches);
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let outages: Vec<Vec<usize>> = vec![vec![0], vec![7], vec![2, 4], vec![6], vec![1, 3, 5]];
     let batch = study.solve_outages(&case, &outages).unwrap();
     for (rows, result) in outages.iter().zip(batch) {
@@ -252,7 +259,7 @@ fn single_outages_agree_with_the_lodf() {
     };
     let case = Case::from_path(&path).unwrap();
     let model = DcModel::new(&case).unwrap();
-    let study = model.study().unwrap();
+    let study = model.study(&DcOptions::default()).unwrap();
     let base = study.solve(&case).unwrap();
     let sensitivity = study.sensitivity(PtdfSlack::Reference).unwrap();
     let mut checked = 0;
@@ -298,7 +305,11 @@ fn outages_match_refactoring_on_the_committed_cases() {
             let mut rows = rows;
             rows.sort_unstable();
             rows.dedup();
-            match model.study().unwrap().solve_outage(&case, &rows) {
+            match model
+                .study(&DcOptions::default())
+                .unwrap()
+                .solve_outage(&case, &rows)
+            {
                 Ok(_) => solved += 1,
                 Err(_) => islanding += 1,
             }
