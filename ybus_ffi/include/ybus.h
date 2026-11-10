@@ -32,6 +32,150 @@ typedef struct ybus_case ybus_case;
 // `ybus_last_error_message` returns.
 typedef int32_t ybus_status;
 
+// A column's field code: its 1-based column number in MATPOWER's matrix for the table.
+typedef int32_t ybus_field;
+
+// The bus number: a label other rows refer to, not a position (`int64_t`).
+#define YBUS_BUS_LABEL 1
+
+// The bus type, MATPOWER's code: 1 PQ, 2 PV, 3 reference, 4 isolated (`int64_t`).
+#define YBUS_BUS_TYPE 2
+
+// Real power demand (MW).
+#define YBUS_BUS_PD_MW 3
+
+// Reactive power demand (MVAr).
+#define YBUS_BUS_QD_MVAR 4
+
+// Shunt conductance, as the MW it draws at 1.0 p.u. voltage.
+#define YBUS_BUS_GS_MW 5
+
+// Shunt susceptance, as the MVAr it injects at 1.0 p.u. voltage.
+#define YBUS_BUS_BS_MVAR 6
+
+// The area number (`int64_t`).
+#define YBUS_BUS_AREA 7
+
+// Voltage magnitude (p.u.).
+#define YBUS_BUS_VM_PU 8
+
+// Voltage angle (degrees).
+#define YBUS_BUS_VA_DEG 9
+
+// Base voltage (kV).
+#define YBUS_BUS_BASE_KV 10
+
+// The loss zone (`int64_t`).
+#define YBUS_BUS_ZONE 11
+
+// Maximum voltage magnitude (p.u.).
+#define YBUS_BUS_VMAX_PU 12
+
+// Minimum voltage magnitude (p.u.).
+#define YBUS_BUS_VMIN_PU 13
+
+// The label of the bus the generator is connected to (`int64_t`).
+#define YBUS_GEN_BUS_LABEL 1
+
+// Real power output (MW).
+#define YBUS_GEN_PG_MW 2
+
+// Reactive power output (MVAr).
+#define YBUS_GEN_QG_MVAR 3
+
+// Maximum reactive power output (MVAr).
+#define YBUS_GEN_QMAX_MVAR 4
+
+// Minimum reactive power output (MVAr).
+#define YBUS_GEN_QMIN_MVAR 5
+
+// Voltage magnitude setpoint (p.u.).
+#define YBUS_GEN_VG_PU 6
+
+// The machine's MVA base.
+#define YBUS_GEN_MBASE_MVA 7
+
+// 1 if the generator is in service, 0 if not (`int64_t`).
+#define YBUS_GEN_STATUS 8
+
+// Maximum real power output (MW).
+#define YBUS_GEN_PMAX_MW 9
+
+// Minimum real power output (MW).
+#define YBUS_GEN_PMIN_MW 10
+
+// Lower real power output of the PQ capability curve (MW).
+#define YBUS_GEN_PC1_MW 11
+
+// Upper real power output of the PQ capability curve (MW).
+#define YBUS_GEN_PC2_MW 12
+
+// Minimum reactive power output at `PC1` (MVAr).
+#define YBUS_GEN_QC1MIN_MVAR 13
+
+// Maximum reactive power output at `PC1` (MVAr).
+#define YBUS_GEN_QC1MAX_MVAR 14
+
+// Minimum reactive power output at `PC2` (MVAr).
+#define YBUS_GEN_QC2MIN_MVAR 15
+
+// Maximum reactive power output at `PC2` (MVAr).
+#define YBUS_GEN_QC2MAX_MVAR 16
+
+// Ramp rate for load following and AGC (MW/min).
+#define YBUS_GEN_RAMP_AGC_MW_PER_MIN 17
+
+// Ramp rate for 10 minute reserves (MW).
+#define YBUS_GEN_RAMP_10_MW 18
+
+// Ramp rate for 30 minute reserves (MW).
+#define YBUS_GEN_RAMP_30_MW 19
+
+// Ramp rate for reactive power, 2 second timescale (MVAr/min).
+#define YBUS_GEN_RAMP_Q_MVAR_PER_MIN 20
+
+// Area participation factor.
+#define YBUS_GEN_APF 21
+
+// The label of the "from" bus, where a transformer's tap is (`int64_t`).
+#define YBUS_BRANCH_FROM_LABEL 1
+
+// The label of the "to" bus (`int64_t`).
+#define YBUS_BRANCH_TO_LABEL 2
+
+// Resistance (p.u.).
+#define YBUS_BRANCH_R 3
+
+// Reactance (p.u.).
+#define YBUS_BRANCH_X 4
+
+// Total line charging susceptance (p.u.).
+#define YBUS_BRANCH_B 5
+
+// Long-term MVA rating; 0 means unlimited.
+#define YBUS_BRANCH_RATE_A_MVA 6
+
+// Short-term MVA rating; 0 means unlimited.
+#define YBUS_BRANCH_RATE_B_MVA 7
+
+// Emergency MVA rating; 0 means unlimited.
+#define YBUS_BRANCH_RATE_C_MVA 8
+
+// Transformer off-nominal turns ratio, where 0 means a line (equivalent to 1).
+#define YBUS_BRANCH_TAP_RATIO 9
+
+// Transformer phase shift angle (degrees); positive is a delay.
+#define YBUS_BRANCH_SHIFT_DEG 10
+
+// 1 if the branch is in service, 0 if not (`int64_t`).
+#define YBUS_BRANCH_STATUS 11
+
+// Minimum angle difference, angle(Vf) − angle(Vt) (degrees).
+#define YBUS_BRANCH_ANGMIN_DEG 12
+
+// Maximum angle difference, angle(Vf) − angle(Vt) (degrees).
+#define YBUS_BRANCH_ANGMAX_DEG 13
+
 // Success.
 #define YBUS_OK 0
 
@@ -54,6 +198,20 @@ typedef int32_t ybus_status;
 
 // A buffer was shorter than the result, so nothing was written to it.
 #define YBUS_ERROR_BUFFER_TOO_SMALL 6
+
+// A value can't be held where it was given or asked for: a negative label, a bus type outside 1
+// to 4, a status other than 0 or 1, or a cost model other than 1 or 2. Nothing was changed.
+#define YBUS_ERROR_INVALID_VALUE 7
+
+// An array's length doesn't match the table it's for, or a cost table's offsets are
+// inconsistent. Nothing was changed.
+#define YBUS_ERROR_LENGTH_MISMATCH 8
+
+// A field code isn't one of the table's, or is one of its fields of the other value type.
+#define YBUS_ERROR_INVALID_FIELD 9
+
+// The case has no such data: no bus names, or no costs.
+#define YBUS_ERROR_MISSING_DATA 10
 
 // A case file couldn't be read.
 #define YBUS_ERROR_NO_CASE_FILE 100
@@ -253,6 +411,90 @@ ybus_status ybus_case_has_costs(const struct ybus_case *case_, bool *out);
 //
 // `case` must be null or a live case, and `out` null or a writable `bool`.
 ybus_status ybus_case_has_bus_names(const struct ybus_case *case_, bool *out);
+
+// Writes the bus table's `double` column `field` into `out`, which has room for `len`
+// entries: one per bus, in case order. Returns `YBUS_ERROR_INVALID_FIELD` if `field` isn't
+// one of the bus table's `double` fields, and `YBUS_ERROR_BUFFER_TOO_SMALL`, writing nothing,
+// if `len` is less than the number of buses.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or `len` writable `double`s.
+ybus_status ybus_case_get_bus_f64(const struct ybus_case *case_,
+                                  ybus_field field,
+                                  double *out,
+                                  size_t len);
+
+// [`ybus_case_get_bus_f64`] for the bus table's `int64_t` fields: the label, type, area and
+// zone.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or `len` writable `int64_t`s.
+ybus_status ybus_case_get_bus_i64(const struct ybus_case *case_,
+                                  ybus_field field,
+                                  int64_t *out,
+                                  size_t len);
+
+// [`ybus_case_get_bus_f64`] for the generator table: one entry per generator.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or `len` writable `double`s.
+ybus_status ybus_case_get_gen_f64(const struct ybus_case *case_,
+                                  ybus_field field,
+                                  double *out,
+                                  size_t len);
+
+// [`ybus_case_get_bus_f64`] for the generator table's `int64_t` fields: the bus label and
+// status.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or `len` writable `int64_t`s.
+ybus_status ybus_case_get_gen_i64(const struct ybus_case *case_,
+                                  ybus_field field,
+                                  int64_t *out,
+                                  size_t len);
+
+// [`ybus_case_get_bus_f64`] for the branch table: one entry per branch.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or `len` writable `double`s.
+ybus_status ybus_case_get_branch_f64(const struct ybus_case *case_,
+                                     ybus_field field,
+                                     double *out,
+                                     size_t len);
+
+// [`ybus_case_get_bus_f64`] for the branch table's `int64_t` fields: the from and to labels
+// and the status.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or `len` writable `int64_t`s.
+ybus_status ybus_case_get_branch_i64(const struct ybus_case *case_,
+                                     ybus_field field,
+                                     int64_t *out,
+                                     size_t len);
+
+// Writes bus `row`'s name, a NUL-terminated string, into `buffer`, which has room for `len`
+// bytes, and the bytes it needs, counting the NUL, through `needed` unless it's null.
+//
+// A null `buffer` with `len` 0 only asks the size. Otherwise, returns
+// `YBUS_ERROR_BUFFER_TOO_SMALL`, writing nothing into `buffer`, if the name doesn't fit.
+// Returns `YBUS_ERROR_MISSING_DATA` if the case has no bus names, `YBUS_ERROR_ROW_OUT_OF_RANGE`
+// if `row` is past the last bus, and `YBUS_ERROR_INVALID_VALUE` if the name holds a NUL.
+//
+// # Safety
+//
+// `case` must be null or a live case, `buffer` null or `len` writable bytes, and `needed`
+// null or a writable `size_t`.
+ybus_status ybus_case_bus_name(const struct ybus_case *case_,
+                               size_t row,
+                               char *buffer,
+                               size_t len,
+                               size_t *needed);
 
 #ifdef __cplusplus
 }  // extern "C"

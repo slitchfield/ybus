@@ -24,6 +24,16 @@ pub const YBUS_ERROR_MISALIGNED_ARGUMENT: ybus_status = 4;
 pub const YBUS_ERROR_INVALID_UTF8: ybus_status = 5;
 /// A buffer was shorter than the result, so nothing was written to it.
 pub const YBUS_ERROR_BUFFER_TOO_SMALL: ybus_status = 6;
+/// A value can't be held where it was given or asked for: a negative label, a bus type outside 1
+/// to 4, a status other than 0 or 1, or a cost model other than 1 or 2. Nothing was changed.
+pub const YBUS_ERROR_INVALID_VALUE: ybus_status = 7;
+/// An array's length doesn't match the table it's for, or a cost table's offsets are
+/// inconsistent. Nothing was changed.
+pub const YBUS_ERROR_LENGTH_MISMATCH: ybus_status = 8;
+/// A field code isn't one of the table's, or is one of its fields of the other value type.
+pub const YBUS_ERROR_INVALID_FIELD: ybus_status = 9;
+/// The case has no such data: no bus names, or no costs.
+pub const YBUS_ERROR_MISSING_DATA: ybus_status = 10;
 
 // `powerflow`'s errors, from 100, one per `PowerflowError` variant in its declaration order
 
@@ -144,6 +154,10 @@ mod tests {
             YBUS_ERROR_MISALIGNED_ARGUMENT,
             YBUS_ERROR_INVALID_UTF8,
             YBUS_ERROR_BUFFER_TOO_SMALL,
+            YBUS_ERROR_INVALID_VALUE,
+            YBUS_ERROR_LENGTH_MISMATCH,
+            YBUS_ERROR_INVALID_FIELD,
+            YBUS_ERROR_MISSING_DATA,
             YBUS_ERROR_GPU,
         ];
         let distinct: HashSet<_> = codes.iter().collect();

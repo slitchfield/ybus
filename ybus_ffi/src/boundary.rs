@@ -10,9 +10,11 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use powerflow::PowerflowError;
 
+use crate::case::columns::ybus_field;
 use crate::status::{
-    self, ybus_status, YBUS_ERROR_BUFFER_TOO_SMALL, YBUS_ERROR_INVALID_UTF8,
-    YBUS_ERROR_MISALIGNED_ARGUMENT, YBUS_ERROR_NULL_ARGUMENT, YBUS_ERROR_PANIC, YBUS_OK,
+    self, ybus_status, YBUS_ERROR_BUFFER_TOO_SMALL, YBUS_ERROR_INVALID_FIELD,
+    YBUS_ERROR_INVALID_UTF8, YBUS_ERROR_INVALID_VALUE, YBUS_ERROR_MISALIGNED_ARGUMENT,
+    YBUS_ERROR_MISSING_DATA, YBUS_ERROR_NULL_ARGUMENT, YBUS_ERROR_PANIC, YBUS_OK,
 };
 
 /// Why an export failed.
@@ -32,6 +34,16 @@ pub(crate) enum Failure {
         needed: usize,
         given: usize,
     },
+    /// A value can't be held where it was given or asked for, for this reason.
+    InvalidValue(String),
+    /// A field code isn't one of the table's fields of this kind (`double` or `int64_t`).
+    InvalidField {
+        table: &'static str,
+        field: ybus_field,
+        kind: &'static str,
+    },
+    /// The case has none of the named data.
+    MissingData(&'static str),
     /// The call panicked, with this message.
     Panic(String),
 }
@@ -45,6 +57,9 @@ impl Failure {
             Failure::MisalignedArgument(_) => YBUS_ERROR_MISALIGNED_ARGUMENT,
             Failure::InvalidUtf8(_) => YBUS_ERROR_INVALID_UTF8,
             Failure::BufferTooSmall { .. } => YBUS_ERROR_BUFFER_TOO_SMALL,
+            Failure::InvalidValue(_) => YBUS_ERROR_INVALID_VALUE,
+            Failure::InvalidField { .. } => YBUS_ERROR_INVALID_FIELD,
+            Failure::MissingData(_) => YBUS_ERROR_MISSING_DATA,
             Failure::Panic(_) => YBUS_ERROR_PANIC,
         }
     }
@@ -67,6 +82,11 @@ impl fmt::Display for Failure {
                 f,
                 "`{argument}` has room for {given} elements, but the result needs {needed}"
             ),
+            Failure::InvalidValue(reason) => write!(f, "{reason}"),
+            Failure::InvalidField { table, field, kind } => {
+                write!(f, "{field} isn't a {kind} field of the {table} table")
+            }
+            Failure::MissingData(what) => write!(f, "the case has no {what}"),
             Failure::Panic(message) => write!(f, "a bug in ybus (a panic): {message}"),
         }
     }

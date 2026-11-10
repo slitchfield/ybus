@@ -8,9 +8,9 @@ mpc.baseMVA = 100;
 
 %% bus_i	type	Pd	Qd	Gs	Bs	area	Vm	Va	baseKV	zone	Vmax	Vmin
 mpc.bus = [
-	1	3	0	0	0	0	1	1.02	0	230	1	1.1	0.9;
-	2	2	50	10	0	5	1	1	-2	230	2	1.1	0.9;
-	3	1	80	20	1.5	0	2	0.98	-4	115	3	1.05	0.95;
+	1	3	0	0	0	0	1	1.02	0	230	4	1.1	0.9;
+	2	2	50	10	0	5	1	1	-2	230	5	1.1	0.9;
+	3	1	80	20	1.5	0	2	0.98	-4	115	6	1.05	0.95;
 ];
 
 %% bus	Pg	Qg	Qmax	Qmin	Vg	mBase	status	Pmax	Pmin	Pc1	Pc2	Qc1min	Qc1max	Qc2min	Qc2max	ramp_agc	ramp_10	ramp_30	ramp_q	apf

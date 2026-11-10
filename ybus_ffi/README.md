@@ -46,6 +46,33 @@ Every getter returns a status and writes its value through an out-parameter, suc
 - `ybus_case_base_mva`, and `ybus_case_set_base_mva`
 - `ybus_case_has_costs` and `ybus_case_has_bus_names`
 
+### Columns
+
+Each column of the bus, generator and branch tables is read whole, one entry per row in case
+order, by a field code. The code is the field's 1-based column number in MATPOWER's matrix for
+that table. For example, `YBUS_BUS_PD_MW` is 3, `YBUS_GEN_STATUS` is 8 and `YBUS_BRANCH_X` is
+4; the header lists them all.
+
+There's one getter per table and value type:
+
+```c
+double pd[3];
+ybus_case_get_bus_f64(case, YBUS_BUS_PD_MW, pd, 3);
+int64_t status[3];
+ybus_case_get_branch_i64(case, YBUS_BRANCH_STATUS, status, 3);
+```
+
+- **`int64_t` columns:** labels, areas, zones, bus types (MATPOWER's codes 1 to 4) and statuses
+  (1 in service, 0 not). Every other field is a `double` column.
+- **A code that's wrong for the function** gives `YBUS_ERROR_INVALID_FIELD`, whether the table
+  doesn't have it or it's of the other type.
+- **Too short a buffer** gives `YBUS_ERROR_BUFFER_TOO_SMALL` and is left untouched. A longer
+  one keeps its tail.
+
+`ybus_case_bus_name(case, row, buffer, len, &needed)` reads one bus name, as a NUL-terminated
+string. Call it with `NULL, 0` to learn the size. A case without names gives
+`YBUS_ERROR_MISSING_DATA`.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.

@@ -13,8 +13,6 @@
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-// Failure::BufferTooSmall is for the column getters, later in phase F3
-#[allow(dead_code)]
 mod boundary;
 pub mod case;
 pub mod status;

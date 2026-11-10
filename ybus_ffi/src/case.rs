@@ -9,6 +9,8 @@ use powerflow::Case;
 use crate::boundary::{arg_mut, arg_ref, arg_slice, arg_str, guard, new_handle};
 use crate::status::ybus_status;
 
+pub mod columns;
+
 /// A power system case: its buses, generators, branches and optional costs and bus names, as
 /// read from a MATPOWER case file. Made by `ybus_case_from_path`, `ybus_case_from_bytes` or
 /// `ybus_case_clone`, and freed by `ybus_case_free`.
