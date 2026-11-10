@@ -5,13 +5,16 @@
 //! - [`dc`]: the DC power flow ([`dc::dc_power_flow`]), as MATPOWER's `rundcpf` computes it.
 //! - [`ac`]: the AC power flow by Newton's method ([`ac::ac_power_flow`]), as MATPOWER's
 //!   `runpf` computes it with its default options.
-//! - [`opf`]: the optimal power flow, as MATPOWER's `runopf` computes it with MIPS; so far,
-//!   the generator costs ([`opf::cost`]).
+//! - [`opf`]: the DC and AC optimal power flows ([`opf::dc::dc_opf`], [`opf::ac::ac_opf`]), as
+//!   MATPOWER's `rundcopf` and `runopf` compute them with MIPS, or by the predictor-corrector
+//!   method; and the generator costs ([`opf::cost`]).
 //! - [`islands`]: a network's islands and bridges ([`islands::find_islands`],
 //!   [`islands::find_bridges`]), as MATPOWER's `find_islands` and `find_bridges` define them.
 //! - With the `cuda` feature, the DC power flow on the GPU: batched solves, single-branch
 //!   outages and PTDF columns (`dc::DcStudy::gpu` and `dc::DcSensitivity::gpu`), on a `Gpu`
 //!   from `ybus_cuda`. (Plain code, not links: the items exist only with the feature.)
+//!
+//! [`Case`] and [`PowerflowError`] are re-exported here.
 //!
 //! Both power flows are validated against MATPOWER's own results; see the roadmap in
 //! `docs/PowerFlowChecklist.md`.
@@ -27,6 +30,9 @@ pub mod islands;
 pub mod opf;
 pub mod powerflow_error;
 mod topology;
+
+pub use case::Case;
+pub use powerflow_error::PowerflowError;
 
 /// The CUDA device the GPU path runs on (feature `cuda`).
 #[cfg(feature = "cuda")]

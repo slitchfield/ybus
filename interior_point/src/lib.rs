@@ -15,6 +15,9 @@
 //! - [`kkt`]: how the solvers factor the KKT system, by LU (the default) or by LDLᵀ.
 //! - [`interior_point_error`]: why a solver couldn't start.
 //!
+//! The problem types and the error type are re-exported here: [`Problem`], [`QuadraticProblem`],
+//! [`Constraints`] and [`InteriorPointError`].
+//!
 //! The linear algebra is [`sparse_mat`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
 
 // No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
@@ -28,3 +31,6 @@ pub mod mips;
 pub mod problem;
 pub mod solution;
 mod vector;
+
+pub use interior_point_error::InteriorPointError;
+pub use problem::{Constraints, Problem, QuadraticProblem};

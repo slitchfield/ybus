@@ -26,11 +26,11 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use interior_point::solution::{KktResiduals, Status};
 use powerflow::case::Case;
 use powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
 use powerflow::opf::{KktFactorization, OpfSolver};
+use powerflow::opf::{KktResiduals, Status};
 use reference::{AcOpfReference, DcOpfReference};
 
 /// The columns.

@@ -2,6 +2,8 @@
 
 use std::{fmt, path::PathBuf};
 
+use interior_point::interior_point_error::InteriorPointError;
+
 /// Errors returned by `powerflow` operations.
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
@@ -173,6 +175,12 @@ pub enum PowerflowError {
         /// What is wrong with it.
         reason: &'static str,
     },
+    /// The optimal power flow's solver refused to start, as for an option out of its range
+    /// (MIPS's `xi` outside `[0.5, 1)`, for example).
+    Solver {
+        /// The solver's error.
+        error: InteriorPointError,
+    },
     /// The GPU path (feature `cuda`) failed: the CUDA driver or cuSPARSE reported an error,
     /// or the kernels didn't compile.
     #[cfg(feature = "cuda")]
@@ -288,10 +296,18 @@ impl fmt::Display for PowerflowError {
             PowerflowError::UnsupportedGenerator { row, reason } => {
                 write!(f, "generator row {row} can't be used: {reason}")
             }
+            PowerflowError::Solver { error } => write!(f, "the OPF solver refused: {error}"),
             #[cfg(feature = "cuda")]
             PowerflowError::Gpu { reason } => write!(f, "the GPU path failed: {reason}"),
         }
     }
 }
 
-impl std::error::Error for PowerflowError {}
+impl std::error::Error for PowerflowError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PowerflowError::Solver { error } => Some(error),
+            _ => None,
+        }
+    }
+}

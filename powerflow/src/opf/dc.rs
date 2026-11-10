@@ -145,6 +145,8 @@ pub fn dc_opf(case: &Case) -> Result<DcOpfSolution, PowerflowError> {
 ///   too (`dcopf_solver` starts every angle at the first reference bus's)
 /// - [`PowerflowError::MissingField`] if the case has no costs, and
 ///   [`PowerflowError::UnsupportedCost`] for costs [`OpfCosts`] refuses
+/// - [`PowerflowError::Solver`] if the solver refuses `options`, such as MIPS's `xi` outside
+///   `[0.5, 1)`
 pub fn dc_opf_with_options(
     case: &Case,
     options: &DcOpfOptions,
@@ -248,13 +250,13 @@ pub fn dc_opf_with_options(
         xmax: Some(xmax),
     };
     let qp = QuadraticProblem { h, c };
-    let consistent = "the DC OPF model's dimensions are consistent, and it has bounds";
+    let refused = |error| PowerflowError::Solver { error };
     let solution = match &options.solver {
         OpfSolver::Mips(mips) => {
-            SolverResult::Mips(qps_mips(&qp, &constraints, Some(&x0), mips).expect(consistent))
+            SolverResult::Mips(qps_mips(&qp, &constraints, Some(&x0), mips).map_err(refused)?)
         }
         OpfSolver::Mehrotra(mehrotra) => SolverResult::Mehrotra(
-            qps_mehrotra(&qp, &constraints, Some(&x0), mehrotra).expect(consistent),
+            qps_mehrotra(&qp, &constraints, Some(&x0), mehrotra).map_err(refused)?,
         ),
     };
     let residuals = kkt_residuals(&qp, &constraints, solution.x(), solution.multipliers())

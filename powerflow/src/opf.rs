@@ -6,22 +6,32 @@
 //!   prepared for the solver as `opf_setup` and `makeAy` prepare them.
 //! - [`dc`]: the DC optimal power flow ([`dc::dc_opf`]), as `rundcopf` computes it with MIPS.
 //! - [`ac`]: the AC optimal power flow ([`ac::ac_opf`]), as `runopf` computes it with MIPS.
-//! - [`derivatives`]: the first and second derivatives of AC power injections and branch flows
-//!   that the AC optimal power flow uses, as MATPOWER Technical Note 2 gives them.
+//!
+//! The solvers' types this module's API names are re-exported here, from their options
+//! ([`MipsOptions`], [`MehrotraOptions`], [`KktFactorization`]) to their results ([`Status`],
+//! [`Multipliers`], [`KktResiduals`]) and refusals ([`InteriorPointError`]), so that a caller
+//! needs no direct dependency on `interior_point`.
 //!
 //! See phase O1 of `docs/OptimizationChecklist.md` for the roadmap.
 
 pub mod ac;
 pub mod cost;
 pub mod dc;
+// The derivatives of AC power injections and branch flows that the AC OPF uses, as MATPOWER
+//   Technical Note 2 gives them. Public only for opf_derivatives_test, and hidden from the docs:
+//   it isn't part of the API.
+#[doc(hidden)]
 pub mod derivatives;
 
 use std::f64::consts::PI;
 
+// The solvers' types this module's API names, so that choosing and reading a solver needs no
+//   direct dependency on interior_point
+pub use interior_point::interior_point_error::InteriorPointError;
 pub use interior_point::kkt::KktFactorization;
-use interior_point::mehrotra::{MehrotraOptions, MehrotraSolution};
-use interior_point::mips::{MipsOptions, MipsSolution};
-use interior_point::solution::{Multipliers, Status};
+pub use interior_point::mehrotra::{MehrotraOptions, MehrotraSolution};
+pub use interior_point::mips::{MipsOptions, MipsSolution};
+pub use interior_point::solution::{KktResiduals, Multipliers, Status};
 use sparse_mat::compressed_matrix::CsrMatrix;
 
 use crate::case::{BusType, Case};
