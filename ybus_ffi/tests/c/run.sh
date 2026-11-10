@@ -17,6 +17,9 @@ library="$target/debug/libybus.a"
 #   lists them
 system_libraries=(-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc)
 
+# The test case files, such as three_bus.m, which cases.h loads
+export YBUS_TEST_DATA="$crate/tests/c"
+
 build="$(mktemp -d)"
 trap 'rm -rf "$build"' EXIT
 

@@ -13,10 +13,10 @@
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-// The guard and pointer checks are for the exports of phase F3 on; until then only the tests
-//   use most of them
+// Failure::BufferTooSmall is for the column getters, later in phase F3
 #[allow(dead_code)]
 mod boundary;
+pub mod case;
 pub mod status;
 
 /// The library's major version.

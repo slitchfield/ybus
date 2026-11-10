@@ -22,6 +22,11 @@
 // versions compare as numbers.
 #define YBUS_VERSION (((YBUS_VERSION_MAJOR * 1000000) + (YBUS_VERSION_MINOR * 1000)) + YBUS_VERSION_PATCH)
 
+// A power system case: its buses, generators, branches and optional costs and bus names, as
+// read from a MATPOWER case file. Made by `ybus_case_from_path`, `ybus_case_from_bytes` or
+// `ybus_case_clone`, and freed by `ybus_case_free`.
+typedef struct ybus_case ybus_case;
+
 // A status code: `YBUS_OK` (0) on success, or the code of what failed, with a message that
 // `ybus_last_error_message` returns.
 typedef int32_t ybus_status;
@@ -158,6 +163,45 @@ uint32_t ybus_version(void);
 //
 // Unless `buffer` is null, it must point to `len` bytes that can be written.
 size_t ybus_last_error_message(char *buffer, size_t len);
+
+// Reads and validates the MATPOWER case file at `path`, a NUL-terminated UTF-8 path, into a
+// new case in `*out`.
+//
+// Returns `YBUS_ERROR_NO_CASE_FILE` if the file can't be read, `YBUS_ERROR_INVALID_UTF8` for a
+// path that isn't UTF-8, and the parser's and validation's codes for its contents. `*out` is
+// set to `NULL` first, and stays `NULL` on any error.
+//
+// # Safety
+//
+// `path` must be null or a NUL-terminated string, and `out` null or a writable pointer.
+ybus_status ybus_case_from_path(const char *path, struct ybus_case **out);
+
+// Parses and validates the `len` bytes of a MATPOWER case file's text at `bytes` into a new
+// case in `*out`. The text is decoded as UTF-8, or as Latin-1 if it isn't valid UTF-8.
+//
+// Returns the parser's and validation's codes, such as `YBUS_ERROR_PARSE`. `*out` is set to
+// `NULL` first, and stays `NULL` on any error.
+//
+// # Safety
+//
+// `bytes` must be null or point to `len` readable bytes, and `out` null or a writable
+// pointer.
+ybus_status ybus_case_from_bytes(const uint8_t *bytes, size_t len, struct ybus_case **out);
+
+// Copies `case` into a new case in `*out`, which can then be changed without changing
+// `case`. `*out` is set to `NULL` first, and stays `NULL` on any error.
+//
+// # Safety
+//
+// `case` must be null or a live case, and `out` null or a writable pointer.
+ybus_status ybus_case_clone(const struct ybus_case *case_, struct ybus_case **out);
+
+// Frees `case`, which mustn't be used again. Does nothing if `case` is null.
+//
+// # Safety
+//
+// `case` must be null or a case made by this library and not yet freed.
+void ybus_case_free(struct ybus_case *case_);
 
 #ifdef __cplusplus
 }  // extern "C"

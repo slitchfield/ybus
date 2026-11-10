@@ -26,6 +26,20 @@ The Rust tests run with `cargo test -p ybus_ffi`. The C tests in [`tests/c/`](te
 small programs, compiled against the header and linked with the static library as a C program
 would be, then run, by `tests/c/run.sh`, which `check.sh` runs once.
 
+## Cases
+
+A `ybus_case` is an opaque handle to a case, made by one of three functions and freed by
+`ybus_case_free`:
+
+- **`ybus_case_from_path(path, &case)`** reads a MATPOWER file. The path is a NUL-terminated
+  UTF-8 string.
+- **`ybus_case_from_bytes(bytes, len, &case)`** parses the file's text from memory.
+- **`ybus_case_clone(case, &copy)`** copies a case, so the copy can change without changing the
+  original.
+
+Each sets `*out` to `NULL` first, and leaves it `NULL` on an error. `ybus_case_free(NULL)` does
+nothing. Rows are numbered from 0, as in C.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.

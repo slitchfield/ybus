@@ -4,7 +4,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::ffi::CString;
+use std::ffi::{c_char, CStr, CString};
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -136,6 +136,45 @@ fn check_pointer<T>(pointer: *const T, argument: &'static str) -> Result<(), Fai
     } else {
         Ok(())
     }
+}
+
+/// The UTF-8 string C passed as a NUL-terminated pointer.
+///
+/// # Safety
+///
+/// If `pointer` is non-null, it must point to a NUL-terminated string that lives, unchanged,
+/// for `'a`.
+pub(crate) unsafe fn arg_str<'a>(
+    pointer: *const c_char,
+    argument: &'static str,
+) -> Result<&'a str, Failure> {
+    if pointer.is_null() {
+        return Err(Failure::NullArgument(argument));
+    }
+    // SAFETY: non-null, and NUL-terminated and valid for 'a by the caller's promise
+    let string = unsafe { CStr::from_ptr(pointer) };
+    string.to_str().map_err(|_| Failure::InvalidUtf8(argument))
+}
+
+/// Makes a new handle for C: `out` is set to null first (when it can be written at all), then
+/// to the boxed result of `make` if it succeeds. The caller frees it with the handle's own
+/// `ybus_*_free`.
+///
+/// # Safety
+///
+/// If `out` is non-null and aligned, it must point to a writable pointer.
+pub(crate) unsafe fn new_handle<T>(
+    out: *mut *mut T,
+    make: impl FnOnce() -> Result<T, Failure>,
+) -> Result<(), Failure> {
+    if !out.is_null() && out.is_aligned() {
+        // SAFETY: non-null and aligned (just checked), and writable by the caller's promise
+        unsafe { out.write(std::ptr::null_mut()) };
+    }
+    // SAFETY: as above, by the caller's promise
+    let out = unsafe { arg_mut(out, "out") }?;
+    *out = Box::into_raw(Box::new(make()?));
+    Ok(())
 }
 
 /// The value C passed by pointer.
