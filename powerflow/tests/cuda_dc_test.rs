@@ -90,9 +90,13 @@ fn batched_solves_match_the_cpu() {
         // A case with a branch fewer doesn't match the model
         let mut mismatched = case.clone();
         mismatched.branch.pop();
+        // Nor does one with a branch switched
+        let mut switched = case.clone();
+        switched.branch[0].status = !switched.branch[0].status;
         // Blocks of 3, so the batch spans blocks and repeats a case within one
         let mut cases: Vec<&Case> = variants.iter().collect();
         cases.insert(2, &mismatched);
+        cases.insert(5, &switched);
         cases.push(&variants[0]);
         let mut on_gpu = study.gpu(&gpu).unwrap();
         on_gpu.set_block_width(3);
@@ -110,6 +114,10 @@ fn batched_solves_match_the_cpu() {
         assert!(matches!(
             results[2],
             Err(PowerflowError::CaseMismatch { .. })
+        ));
+        assert!(matches!(
+            results[5],
+            Err(PowerflowError::TopologyMismatch { .. })
         ));
         eprintln!("{name}: {} batched solves agree", cases.len());
     }

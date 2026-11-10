@@ -5,7 +5,7 @@
 
 mod common;
 use common::dc_fixture::{assert_physical, fixture, B, G, L};
-use powerflow::case::Case;
+use powerflow::case::{BusType, Case};
 use powerflow::dc::{dc_power_flow, DcModel, DcOptions, DcSolution, DcSolver};
 use powerflow::powerflow_error::PowerflowError;
 
@@ -326,4 +326,63 @@ fn a_model_rejects_a_different_case() {
             found: (3, 2, 3)
         }
     );
+}
+
+#[test]
+fn a_model_rejects_a_case_with_a_different_topology() {
+    let model = DcModel::new(&case(&triangle())).unwrap();
+    let solve = |case: &Case| model.solve(case, &DcOptions::default());
+    // A change, and the table, 1-based row and field it's reported as
+    type Change = (fn(&mut Case), &'static str, usize, &'static str);
+    let changes: [Change; 7] = [
+        (|case| case.bus[2].bus_label = 4, "bus", 3, "bus_label"),
+        (
+            |case| case.bus[1].bus_type = BusType::PV,
+            "bus",
+            2,
+            "bus_type",
+        ),
+        (
+            |case| case.generator[0].bus_label = 2,
+            "gen",
+            1,
+            "bus_label",
+        ),
+        (|case| case.generator[0].status = false, "gen", 1, "status"),
+        (
+            |case| case.branch[1].from_label = 1,
+            "branch",
+            2,
+            "from_label",
+        ),
+        (|case| case.branch[0].to_label = 3, "branch", 1, "to_label"),
+        (|case| case.branch[2].status = false, "branch", 3, "status"),
+    ];
+    for (change, table, row, field) in changes {
+        let mut other = case(&triangle());
+        change(&mut other);
+        assert_eq!(
+            solve(&other).unwrap_err(),
+            PowerflowError::TopologyMismatch { table, row, field },
+            "{table} row {row} {field}"
+        );
+    }
+    // The first difference is reported: buses, then generators, then branches
+    let mut other = case(&triangle());
+    other.branch[0].status = false;
+    other.bus[2].bus_type = BusType::Isolated;
+    assert_eq!(
+        solve(&other).unwrap_err(),
+        PowerflowError::TopologyMismatch {
+            table: "bus",
+            row: 3,
+            field: "bus_type"
+        }
+    );
+    // Injections and reference angles may differ
+    let mut other = case(&triangle());
+    other.bus[1].pd_mw = 70.0;
+    other.generator[0].pg_mw = 100.0;
+    other.bus[0].va_deg = 5.0;
+    assert!(solve(&other).is_ok());
 }

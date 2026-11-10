@@ -186,6 +186,17 @@ fn convergence_control() {
         model.solve(&shorter, &AcOptions::default()),
         Err(PowerflowError::CaseMismatch { .. })
     ));
+    // So is another topology
+    let mut switched = case.clone();
+    switched.branch[0].status = !switched.branch[0].status;
+    assert_eq!(
+        model.solve(&switched, &AcOptions::default()).unwrap_err(),
+        PowerflowError::TopologyMismatch {
+            table: "branch",
+            row: 1,
+            field: "status"
+        }
+    );
 }
 
 #[test]

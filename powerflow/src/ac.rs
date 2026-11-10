@@ -215,11 +215,11 @@ impl AcModel {
     /// Re-stamps Ybus, Yf and Yt from `case`'s branch impedances, charging, taps and phase
     /// shifts and its bus shunts, through the assembly maps, without rebuilding the matrices.
     ///
-    /// `case` must have the topology the model was built from: the same tables, and the same
-    /// statuses and bus types, since those decide which branches and buses the matrices cover.
-    /// Returns `PowerflowError::CaseMismatch` if its tables' lengths differ, or
-    /// `ZeroImpedance` for an in-service branch with `r = x = 0`; on an error the model is
-    /// unchanged.
+    /// `case` must have the topology the model was built from: the same tables, bus labels and
+    /// types, generator buses and statuses, and branch ends and statuses, since those decide
+    /// which branches and buses the matrices cover. Returns `PowerflowError::CaseMismatch` if
+    /// its tables' lengths differ, `TopologyMismatch` if its topology does, or `ZeroImpedance`
+    /// for an in-service branch with `r = x = 0`; on an error the model is unchanged.
     pub fn restamp(&mut self, case: &Case) -> Result<(), PowerflowError> {
         self.topology.check_case(case)?;
         for &row in &self.topology.branch_rows {
@@ -448,7 +448,9 @@ impl AcModel {
     /// `case` must be the case the model was built from, or a copy with different injections,
     /// setpoints or starting voltages: `pd_mw`, `qd_mvar`, `pg_mw`, `qg_mvar`, `vg_pu`,
     /// `qmax_mvar`, `qmin_mvar`, `vm_pu` and `va_deg` are read from `case`, and everything else
-    /// from the model (fast-decoupled also reads the branch data, to build B′ and B″).
+    /// from the model (fast-decoupled also reads the branch data, to build B′ and B″). A changed
+    /// topology (a bus's label or type, a generator's bus or status, or a branch's ends or
+    /// status) is refused, and needs a new model.
     ///
     /// - **Start:** each bus's case voltage, with each in-service generator's `vg_pu` setting
     ///   the magnitude at REF and PV buses (the last generator listed at a bus wins, as in
@@ -466,10 +468,10 @@ impl AcModel {
     ///
     /// Reactive power limits aren't enforced, as in `runpf`'s default. Returns
     /// `PowerflowError::CaseMismatch` if `case`'s tables differ in length from the model's,
-    /// `NoConvergence` if the tolerance isn't met within `options.max_iterations`, and
-    /// `SingularNetwork` if the Jacobian, B′ or B″ is singular. Fast-decoupled also returns
-    /// `ZeroReactance` for an in-service branch with `x = 0`, whose B′ or B″ stamps would be
-    /// infinite once resistance is ignored.
+    /// `TopologyMismatch` if its topology differs, `NoConvergence` if the tolerance isn't met
+    /// within `options.max_iterations`, and `SingularNetwork` if the Jacobian, B′ or B″ is
+    /// singular. Fast-decoupled also returns `ZeroReactance` for an in-service branch with
+    /// `x = 0`, whose B′ or B″ stamps would be infinite once resistance is ignored.
     pub fn solve(&self, case: &Case, options: &AcOptions) -> Result<AcSolution, PowerflowError> {
         self.topology.check_case(case)?;
         match options.reactive_limits {

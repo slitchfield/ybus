@@ -79,7 +79,7 @@ impl DcStudy<'_> {
         let model = self.model;
         let topology = &model.topology;
         let nb = topology.bus_rows.len();
-        let mut internal = vec![None; topology.case_shape.0];
+        let mut internal = vec![None; topology.case_shape().0];
         for (index, &row) in topology.bus_rows.iter().enumerate() {
             internal[row] = Some(index);
         }
@@ -203,7 +203,7 @@ impl DcSensitivity<'_> {
         Ok(internal
             .into_iter()
             .map(|branch| {
-                let mut row = vec![0.0; topology.case_shape.0];
+                let mut row = vec![0.0; topology.case_shape().0];
                 let Some(k) = branch else {
                     return row;
                 };
@@ -265,7 +265,7 @@ impl DcSensitivity<'_> {
     /// One PTDF column, for an internal bus (`None`: not connected, zeros).
     fn ptdf_column(&self, bus: Option<usize>, shift: Option<&[f64]>) -> Vec<f64> {
         let Some(bus) = bus else {
-            return vec![0.0; self.model.topology.case_shape.2];
+            return vec![0.0; self.model.topology.case_shape().2];
         };
         let mut column = self.flows(&self.solve(&[(bus, 1.0)]));
         if let Some(shift) = shift {
@@ -304,8 +304,8 @@ impl DcSensitivity<'_> {
     /// one entry per case bus row. It's dense, so it suits small cases: one solve per bus.
     pub fn ptdf(&self) -> Vec<Vec<f64>> {
         let (nbus, nl) = (
-            self.model.topology.case_shape.0,
-            self.model.topology.case_shape.2,
+            self.model.topology.case_shape().0,
+            self.model.topology.case_shape().2,
         );
         let all: Vec<usize> = (0..nbus).collect();
         let columns = self.ptdf_columns(&all).expect("every bus row is in range");
@@ -349,7 +349,7 @@ impl DcSensitivity<'_> {
     fn lodf_column(&self, row: usize, branch: Option<usize>) -> Result<Vec<f64>, PowerflowError> {
         let k = branch.ok_or(PowerflowError::BranchOutOfService { row })?;
         if self.bridge[k] {
-            return Ok(vec![f64::NAN; self.model.topology.case_shape.2]);
+            return Ok(vec![f64::NAN; self.model.topology.case_shape().2]);
         }
         let (from, to) = self.model.topology.ends[k];
         let mut column = self.flows(&self.solve(&[(from, 1.0), (to, -1.0)]));
@@ -368,7 +368,7 @@ impl DcSensitivity<'_> {
     /// solve per in-service branch.
     pub fn lodf(&self) -> Vec<Vec<f64>> {
         let topology = &self.model.topology;
-        let nl = topology.case_shape.2;
+        let nl = topology.case_shape().2;
         let columns = self
             .lodf_columns(&topology.branch_rows)
             .expect("in-service branch rows are in range and in service");
@@ -388,7 +388,7 @@ impl DcSensitivity<'_> {
         rows: &[usize],
     ) -> Result<Vec<Option<usize>>, PowerflowError> {
         let topology = &self.model.topology;
-        let len = topology.case_shape.2;
+        let len = topology.case_shape().2;
         rows.iter()
             .map(|&row| {
                 if row >= len {
@@ -411,7 +411,7 @@ impl DcSensitivity<'_> {
         rows: &[usize],
     ) -> Result<Vec<Option<usize>>, PowerflowError> {
         let topology = &self.model.topology;
-        let len = topology.case_shape.0;
+        let len = topology.case_shape().0;
         rows.iter()
             .map(|&row| {
                 if row >= len {
@@ -467,7 +467,7 @@ impl DcSensitivity<'_> {
     /// zero for a branch out of service. No phase-shifter term, since a PTDF is a sensitivity.
     pub(super) fn flows(&self, theta: &[f64]) -> Vec<f64> {
         let topology = &self.model.topology;
-        let mut flows = vec![0.0; topology.case_shape.2];
+        let mut flows = vec![0.0; topology.case_shape().2];
         for (k, (&row, &(from, to))) in topology.branch_rows.iter().zip(&topology.ends).enumerate()
         {
             flows[row] = self.susceptance(k) * (theta[from] - theta[to]);

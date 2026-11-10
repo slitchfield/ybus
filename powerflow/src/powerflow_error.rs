@@ -104,13 +104,25 @@ pub enum PowerflowError {
         /// radians.
         bus_label: usize,
     },
-    /// A model was asked to solve (or, for AC, re-stamp) a case whose tables don't match the
-    /// case it was built from.
+    /// A model was asked to solve (or, for AC, re-stamp) a case whose tables' lengths differ
+    /// from those of the case it was built from.
     CaseMismatch {
         /// The model's case's table lengths: buses, generators, branches.
         expected: (usize, usize, usize),
         /// The given case's table lengths.
         found: (usize, usize, usize),
+    },
+    /// A model was asked to solve (or, for AC, re-stamp) a case whose topology differs from the
+    /// case it was built from: a bus's label or type, a generator's bus or status, or a
+    /// branch's ends or status. A changed network needs a new model.
+    TopologyMismatch {
+        /// The table the first difference is in (`bus`, `gen` or `branch`).
+        table: &'static str,
+        /// The 1-based row in that table.
+        row: usize,
+        /// The field that differs (`bus_label`, `bus_type`, `status`, `from_label` or
+        /// `to_label`).
+        field: &'static str,
     },
     /// Enforcing reactive power limits found every remaining generator at a REF or PV bus past
     /// its limit, all the same way, so no bus is left to hold a voltage (MATPOWER's "INFEASIBLE
@@ -254,6 +266,11 @@ impl fmt::Display for PowerflowError {
                 f,
                 "the model was built for a case with (buses, generators, branches) = \
                  {expected:?}, not {found:?}"
+            ),
+            PowerflowError::TopologyMismatch { table, row, field } => write!(
+                f,
+                "the model was built for a case whose {table} row {row} has a different \
+                 {field}; a changed network needs a new model"
             ),
             PowerflowError::ReactiveLimitsInfeasible { generators } => write!(
                 f,

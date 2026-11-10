@@ -252,11 +252,11 @@ impl DcStudy<'_> {
         let topology = &model.topology;
         let mut outaged = Vec::with_capacity(rows.len());
         for &row in rows {
-            if row >= topology.case_shape.2 {
+            if row >= topology.case_shape().2 {
                 return Err(PowerflowError::RowOutOfRange {
                     table: "branch",
                     row,
-                    len: topology.case_shape.2,
+                    len: topology.case_shape().2,
                 });
             }
             let k = topology
