@@ -284,15 +284,34 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
 
 ## Phase F6: Hardening and a first release
 
-- [ ] CI runs the C tests under AddressSanitizer and UndefinedBehaviorSanitizer, so leaks,
+- [x] CI runs the C tests under AddressSanitizer and UndefinedBehaviorSanitizer, so leaks,
       double frees and out-of-bounds writes at the boundary fail the build.
-- [ ] A C example in the crate (load a case, run each solve, print a few results), and its use
-      in the crate's README.
-- [ ] A record of the exported symbols, compared with the built library in CI, so a symbol
+      - **How:** `check.sh` runs `tests/c/run.sh --sanitize` after the plain run.
+      - **Coverage:** the Rust library isn't instrumented on stable Rust, but its allocations go
+        through ASan's `malloc`. A leaked case, a double free and a C-side overrun, each
+        planted in a scratch program, fail the run.
+      - **No suppressions were needed:** Rust's runtime reported nothing.
+- [x] A C example in the crate (load a case, run each solve, print a few results), and its use
+      in the crate's README. `ybus_ffi/examples/c/solve_case.c` runs the four solves with
+      default options, reporting each failure and carrying on. `tests/c/run.sh` builds it and
+      runs it on case14 in both modes, so the sanitizers check it too.
+- [x] A record of the exported symbols, compared with the built library in CI, so a symbol
       removed or renamed is a visible decision. Whether this starts before 1.0 is decided with
-      the item.
-- [ ] The boundary's own cost, measured on mid-size cases: each solve through C against the same
+      the item. Decided with the maintainer (2026-11-10): it starts now.
+      - **Before 1.0,** a change to the exports updates `ybus_ffi/symbols.txt` in the same PR.
+      - **`ybus_ffi/check-symbols.sh`** compares the record with the built library. It also
+        checks that the header declares exactly the exported functions, and that nothing
+        without the `ybus_` prefix is exported. The header catches signatures; the record
+        catches names.
+- [x] The boundary's own cost, measured on mid-size cases: each solve through C against the same
       solve in Rust. Recorded in `docs/benchmarks/`; it feeds long-term goal 2.
+      - **Decided with the maintainer (2026-11-10):** a Rust example,
+        `ybus_ffi/examples/boundary_cost.rs`, calls the exports through the rlib, which is the
+        code C runs. It ran on the maintainer's laptop, on case1354pegase, case2383wp and
+        case3120sp, with the OPFs on case1354pegase.
+      - **Result** (`docs/benchmarks/ffi-boundary-2026-11-10.md`): reading a solution's
+        columns takes 0.8–8.7 µs, at most 0.03% of a solve. The whole solves' differences,
+        −3.8% to +4.5% with both signs, are noise.
 
 ## Phase F7: Later
 
