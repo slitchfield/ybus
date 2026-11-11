@@ -17,6 +17,7 @@ pub mod ac;
 mod boundary;
 pub mod case;
 pub mod dc;
+pub mod opf;
 mod solution;
 pub mod status;
 #[cfg(test)]

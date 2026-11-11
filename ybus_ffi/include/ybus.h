@@ -34,6 +34,11 @@
 // same network.
 typedef struct ybus_ac_model ybus_ac_model;
 
+// Options for the AC optimal power flow, made by `ybus_ac_opf_options_new` at the defaults for a
+// solver and freed by `ybus_ac_opf_options_free`. A null options handle means MATPOWER's defaults
+// wherever one is taken.
+typedef struct ybus_ac_opf_options ybus_ac_opf_options;
+
 // Options for the AC power flow, made by `ybus_ac_options_new` at MATPOWER's defaults for a
 // method and freed by `ybus_ac_options_free`. A null options handle means Newton's defaults
 // wherever one is taken.
@@ -51,6 +56,11 @@ typedef struct ybus_case ybus_case;
 // A DC model of a case's network (B′, Bf and the bus roles), made by `ybus_dc_model_new` and
 // freed by `ybus_dc_model_free`, for solving many scenarios of the same network.
 typedef struct ybus_dc_model ybus_dc_model;
+
+// Options for the DC optimal power flow, made by `ybus_dc_opf_options_new` at the defaults for a
+// solver and freed by `ybus_dc_opf_options_free`. A null options handle means MATPOWER's defaults
+// wherever one is taken.
+typedef struct ybus_dc_opf_options ybus_dc_opf_options;
 
 // Options for the DC power flow, made by `ybus_dc_options_new` at MATPOWER's defaults and
 // freed by `ybus_dc_options_free`. A null options handle means the defaults wherever one is
@@ -80,6 +90,12 @@ typedef int32_t ybus_ordering;
 
 // The factorization a DC power flow solved B′ with.
 typedef int32_t ybus_dc_solver;
+
+// Which interior-point solver an optimal power flow runs.
+typedef int32_t ybus_opf_solver;
+
+// How the solver's KKT system is factored.
+typedef int32_t ybus_kkt_factorization;
 
 // Newton's method in polar form, as MATPOWER's `newtonpf` (`pf.alg = 'NR'`, the default).
 #define YBUS_AC_NEWTON 1
@@ -276,6 +292,19 @@ typedef int32_t ybus_dc_solver;
 
 // No solve was needed: every connected bus is a reference bus.
 #define YBUS_DC_SOLVER_NO_SOLVE 3
+
+// MIPS, ported step for step from MATPOWER's `mips.m`: MATPOWER's default, whose results match
+// MATPOWER's.
+#define YBUS_OPF_MIPS 1
+
+// The primal-dual method with Mehrotra's predictor-corrector, on the same problem.
+#define YBUS_OPF_MEHROTRA 2
+
+// LU: MATPOWER's choice, and MIPS's default.
+#define YBUS_KKT_LU 1
+
+// The pivoted LDLᵀ: the predictor-corrector method's default.
+#define YBUS_KKT_LDLT 2
 
 // Success.
 #define YBUS_OK 0
@@ -1084,6 +1113,280 @@ ybus_status ybus_dc_model_solve(const struct ybus_dc_model *model,
 //
 // `model` must be null or a model made by this library and not yet freed.
 void ybus_dc_model_free(struct ybus_dc_model *model);
+
+// Makes AC OPF options for `solver` in `*out`: MATPOWER's defaults for `YBUS_OPF_MIPS` (MIPS, with
+// `feastol` 5e-6, and `cost_mult` 1e-4), or for `YBUS_OPF_MEHROTRA` the predictor-corrector
+// method's tuned settings, with the KKT system factored by the pivoted LDLᵀ. The solver can't
+// change afterwards. `*out` is set to `NULL` first and stays `NULL` on an error, such as
+// `YBUS_ERROR_INVALID_VALUE` for a code that isn't a solver.
+//
+// # Safety
+//
+// `out` must be null or a writable pointer.
+ybus_status ybus_ac_opf_options_new(ybus_opf_solver solver, struct ybus_ac_opf_options **out);
+
+// Frees `options`, which mustn't be used again. Does nothing if `options` is null.
+//
+// # Safety
+//
+// `options` must be null or options made by this library and not yet freed.
+void ybus_ac_opf_options_free(struct ybus_ac_opf_options *options);
+
+// Writes the solver the options are for through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `ybus_opf_solver`.
+ybus_status ybus_ac_opf_options_get_solver(const struct ybus_ac_opf_options *options,
+                                           ybus_opf_solver *out);
+
+// Sets the termination tolerance for feasibility, the solvers' `feastol`: 5e-6 by default,
+// MATPOWER's `opf.violation`. Returns `YBUS_ERROR_INVALID_VALUE`, changing nothing, unless it's
+// positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_opf_options_set_feastol(struct ybus_ac_opf_options *options, double value);
+
+// Writes the `feastol` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_ac_opf_options_get_feastol(const struct ybus_ac_opf_options *options, double *out);
+
+// Sets the termination tolerance for the gradient, `gradtol`. Returns `YBUS_ERROR_INVALID_VALUE`,
+// changing nothing, unless it's positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_opf_options_set_gradtol(struct ybus_ac_opf_options *options, double value);
+
+// Writes the `gradtol` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_ac_opf_options_get_gradtol(const struct ybus_ac_opf_options *options, double *out);
+
+// Sets the termination tolerance for complementarity, `comptol`. Returns
+// `YBUS_ERROR_INVALID_VALUE`, changing nothing, unless it's positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_opf_options_set_comptol(struct ybus_ac_opf_options *options, double value);
+
+// Writes the `comptol` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_ac_opf_options_get_comptol(const struct ybus_ac_opf_options *options, double *out);
+
+// Sets the termination tolerance for the cost, `costtol`. Returns `YBUS_ERROR_INVALID_VALUE`,
+// changing nothing, unless it's positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_opf_options_set_costtol(struct ybus_ac_opf_options *options, double value);
+
+// Writes the `costtol` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_ac_opf_options_get_costtol(const struct ybus_ac_opf_options *options, double *out);
+
+// Sets the objective's scale factor, `cost_mult`: 1e-4, MATPOWER's for the AC OPF by default.
+// Returns `YBUS_ERROR_INVALID_VALUE`, changing nothing, unless it's positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_opf_options_set_cost_mult(struct ybus_ac_opf_options *options, double value);
+
+// Writes the `cost_mult` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_ac_opf_options_get_cost_mult(const struct ybus_ac_opf_options *options,
+                                              double *out);
+
+// Sets the most iterations, the solvers' `max_it`.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_opf_options_set_max_iterations(struct ybus_ac_opf_options *options,
+                                                   size_t value);
+
+// Writes the iteration limit through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `size_t`.
+ybus_status ybus_ac_opf_options_get_max_iterations(const struct ybus_ac_opf_options *options,
+                                                   size_t *out);
+
+// Sets how the solver's KKT system is factored: `YBUS_KKT_LU` or `YBUS_KKT_LDLT`. Returns
+// `YBUS_ERROR_INVALID_VALUE` for a code that isn't one.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_ac_opf_options_set_kkt_factorization(struct ybus_ac_opf_options *options,
+                                                      ybus_kkt_factorization code);
+
+// Writes how the solver's KKT system is factored through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable
+// `ybus_kkt_factorization`.
+ybus_status ybus_ac_opf_options_get_kkt_factorization(const struct ybus_ac_opf_options *options,
+                                                      ybus_kkt_factorization *out);
+
+// Makes DC OPF options for `solver` in `*out`: MATPOWER's defaults for `YBUS_OPF_MIPS` (MIPS, with
+// `feastol` 5e-6), or for `YBUS_OPF_MEHROTRA` the predictor-corrector method's tuned settings,
+// with the KKT system factored by the pivoted LDLᵀ. The solver can't change afterwards. `*out` is
+// set to `NULL` first and stays `NULL` on an error, such as `YBUS_ERROR_INVALID_VALUE` for a code
+// that isn't a solver.
+//
+// # Safety
+//
+// `out` must be null or a writable pointer.
+ybus_status ybus_dc_opf_options_new(ybus_opf_solver solver, struct ybus_dc_opf_options **out);
+
+// Frees `options`, which mustn't be used again. Does nothing if `options` is null.
+//
+// # Safety
+//
+// `options` must be null or options made by this library and not yet freed.
+void ybus_dc_opf_options_free(struct ybus_dc_opf_options *options);
+
+// Writes the solver the options are for through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `ybus_opf_solver`.
+ybus_status ybus_dc_opf_options_get_solver(const struct ybus_dc_opf_options *options,
+                                           ybus_opf_solver *out);
+
+// Sets the termination tolerance for feasibility, the solvers' `feastol`: 5e-6 by default,
+// MATPOWER's `opf.violation`. Returns `YBUS_ERROR_INVALID_VALUE`, changing nothing, unless it's
+// positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_dc_opf_options_set_feastol(struct ybus_dc_opf_options *options, double value);
+
+// Writes the `feastol` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_dc_opf_options_get_feastol(const struct ybus_dc_opf_options *options, double *out);
+
+// Sets the termination tolerance for the gradient, `gradtol`. Returns `YBUS_ERROR_INVALID_VALUE`,
+// changing nothing, unless it's positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_dc_opf_options_set_gradtol(struct ybus_dc_opf_options *options, double value);
+
+// Writes the `gradtol` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_dc_opf_options_get_gradtol(const struct ybus_dc_opf_options *options, double *out);
+
+// Sets the termination tolerance for complementarity, `comptol`. Returns
+// `YBUS_ERROR_INVALID_VALUE`, changing nothing, unless it's positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_dc_opf_options_set_comptol(struct ybus_dc_opf_options *options, double value);
+
+// Writes the `comptol` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_dc_opf_options_get_comptol(const struct ybus_dc_opf_options *options, double *out);
+
+// Sets the termination tolerance for the cost, `costtol`. Returns `YBUS_ERROR_INVALID_VALUE`,
+// changing nothing, unless it's positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_dc_opf_options_set_costtol(struct ybus_dc_opf_options *options, double value);
+
+// Writes the `costtol` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_dc_opf_options_get_costtol(const struct ybus_dc_opf_options *options, double *out);
+
+// Sets the objective's scale factor, `cost_mult`: 1 by default. Returns
+// `YBUS_ERROR_INVALID_VALUE`, changing nothing, unless it's positive and finite.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_dc_opf_options_set_cost_mult(struct ybus_dc_opf_options *options, double value);
+
+// Writes the `cost_mult` setting through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `double`.
+ybus_status ybus_dc_opf_options_get_cost_mult(const struct ybus_dc_opf_options *options,
+                                              double *out);
+
+// Sets the most iterations, the solvers' `max_it`.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_dc_opf_options_set_max_iterations(struct ybus_dc_opf_options *options,
+                                                   size_t value);
+
+// Writes the iteration limit through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable `size_t`.
+ybus_status ybus_dc_opf_options_get_max_iterations(const struct ybus_dc_opf_options *options,
+                                                   size_t *out);
+
+// Sets how the solver's KKT system is factored: `YBUS_KKT_LU` or `YBUS_KKT_LDLT`. Returns
+// `YBUS_ERROR_INVALID_VALUE` for a code that isn't one.
+//
+// # Safety
+//
+// `options` must be null or live options that nothing else is using.
+ybus_status ybus_dc_opf_options_set_kkt_factorization(struct ybus_dc_opf_options *options,
+                                                      ybus_kkt_factorization code);
+
+// Writes how the solver's KKT system is factored through `out`.
+//
+// # Safety
+//
+// `options` must be null or live options, and `out` null or a writable
+// `ybus_kkt_factorization`.
+ybus_status ybus_dc_opf_options_get_kkt_factorization(const struct ybus_dc_opf_options *options,
+                                                      ybus_kkt_factorization *out);
 
 #ifdef __cplusplus
 }  // extern "C"

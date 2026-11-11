@@ -168,6 +168,31 @@ network. A case whose tables' lengths differ is `YBUS_ERROR_CASE_MISMATCH`, and 
 topology differs (a bus's label or type, a generator's bus or status, or a branch's ends or
 status) is `YBUS_ERROR_TOPOLOGY_MISMATCH`.
 
+## Optimal power flows
+
+### Options
+
+Each OPF has its own options handle, made for a solver and freed with its own `_free`:
+- `ybus_dc_opf_options_new(solver, &options)` and `ybus_ac_opf_options_new(solver, &options)`
+- the solver is `YBUS_OPF_MIPS`, MATPOWER's MIPS, or `YBUS_OPF_MEHROTRA`, the predictor-corrector
+  method
+
+**The defaults:**
+- MIPS starts at MATPOWER's settings: `feastol` 5e-6, with the AC OPF's cost scaled by
+  `cost_mult` 1e-4.
+- The predictor-corrector starts at its tuned settings, which factor the KKT system by the
+  pivoted LDLᵀ.
+- The solver can't change after the options are made.
+
+**The settings** apply to either solver, and each has a setter and a getter:
+- `feastol`, `gradtol`, `comptol` and `costtol`, the termination tolerances, positive and
+  finite
+- `cost_mult`, the objective's scale, positive and finite
+- `max_iterations`
+- `kkt_factorization`, `YBUS_KKT_LU` or `YBUS_KKT_LDLT`
+
+The solvers' other settings keep their defaults.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.
