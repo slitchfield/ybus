@@ -1,9 +1,9 @@
 # Publishing checklist
 
 The roadmap to a first release of the workspace's Rust crates on crates.io, at 0.1.0. Each
-unchecked item in phases P1 to P5 is sized to be one commit, except P5's, which are the release's
-own steps. Phase P0's decisions were made with the maintainer on 2026-11-10, apart from the
-release tool, which is still open.
+unchecked item in phases P1 to P5 is sized to be one commit, except P5's first four, which are the
+release's own steps, done by hand. Phase P0's decisions were made with the maintainer on
+2026-11-10, and the release tool on 2026-11-11.
 
 ## Goals
 
@@ -81,8 +81,13 @@ Path dependencies have no `version` yet, and no crate has docs.rs metadata.
       in the 0.x releases that follow, each a minor bump.
 - [x] **Decide** how releases are checked. Decided (2026-11-10): a CI job that dry-runs the
       publish of every crate, and semver checks before each release.
-- [ ] **Decide** the release tool, and whether the crates share one version. See
+- [x] **Decide** the release tool, and whether the crates share one version. Decided
+      (2026-11-11): `release-plz`, with one version for all four crates. The comparison is in
       [Release tooling](#release-tooling) below.
+      - **The first release is published by hand** with plain Cargo. The maintainer works through
+        that first-time workflow before `release-plz` is set up.
+      - **`release-plz` runs every release after it,** once the crates exist and trusted
+        publishing can be linked to them.
 
 ## Phase P1: Names
 
@@ -104,8 +109,9 @@ and the root README notes the renames once.
 
 - [ ] Shared dependencies through `[workspace.dependencies]`: each workspace crate once, with
       both `path` and `version`, so the published manifests get versions. Members use
-      `ybus_sparse.workspace = true`. Shared `homepage` and `documentation` fields come from
-      `[workspace.package]`, where they apply to every crate.
+      `ybus_sparse.workspace = true`. The one version all four share moves to
+      `[workspace.package]`, as `version.workspace = true` in each. Shared `homepage` and
+      `documentation` fields go there too, where they apply to every crate.
 - [ ] Metadata for each published crate: its description reviewed for crates.io's search
       results, up to five keywords, and categories from crates.io's list of slugs.
       - `ybus_cuda`'s description says it's experimental.
@@ -160,12 +166,22 @@ and the root README notes the renames once.
         mark it in the version and the changelog.
       - **When it starts:** it needs a published baseline, so it starts with the first
         release after 0.1.0.
-- [ ] A changelog, `CHANGELOG.md` in Keep a Changelog's form, per crate or for the workspace as
-      the tool decision says. A `docs/Releasing.md` records the release steps.
-- [ ] The release workflow, if P0's tool needs one, with its secrets or trusted publishing set
-      up in P5.
+- [ ] A changelog, `CHANGELOG.md` in Keep a Changelog's form, with 0.1.0's entry written by hand.
+      `release-plz` writes the entries after it; how they're laid out across the four crates is
+      settled with its configuration in P5.
+- [ ] `docs/Releasing.md`, the guide to P5's first release by hand, step by step:
+      - the account and token
+      - the dry run, the publish, the tag and the GitHub release
+      - the checks afterwards
+      - linking trusted publishing
+
+      The maintainer corrects it while working through those steps. It gains `release-plz`'s
+      routine once that's set up.
 
 ## Phase P5: The first release
+
+The maintainer does the first four items by hand, following `docs/Releasing.md`, as the
+first-time workflow to learn before anything automates it. `release-plz` is set up after them.
 
 - [ ] A crates.io account through GitHub, and an API token scoped to publishing new crates,
       with an expiry. The first publish of a new crate can't use trusted publishing.
@@ -181,6 +197,19 @@ and the root README notes the renames once.
         builds
 
       Then the root README's crate table gets crates.io and docs.rs links.
+- [ ] `release-plz`, for every release after 0.1.0:
+      - **Its configuration:** `release-plz.toml`, with the four crates in one version group and
+        the changelog's layout.
+      - **A workflow with its two jobs:**
+        - `release-pr` opens and updates the release PR.
+        - `release` publishes, tags and makes the GitHub release when that PR merges, through
+          trusted publishing.
+      - **Its `cargo-semver-checks` run** is P4's required check before each release.
+      - **The repository setting** that lets GitHub Actions open PRs.
+
+      `docs/Releasing.md` gains the routine: review the release PR, correct its version for
+      behaviour breaks the check can't see, edit its changelog, and merge. The first release
+      it runs is the test of the setup.
 
 ## Phase P6: Later
 
@@ -221,10 +250,10 @@ commit messages are plain sentences, not Conventional Commits.
 - **`cargo-smart-release` and `release-please`** fit worse. The first isn't meant for CI; the
   second needs Conventional Commits and doesn't publish to crates.io itself.
 
-**Recommendation:**
+**Decided (2026-11-11), as recommended:**
 - **The tool:** `release-plz` from the second release. The first publish uses plain Cargo, since
-  trusted publishing can't create a crate.
+  trusted publishing can't create a crate. The maintainer works through that first by hand.
 - **One shared version for the four crates**, `version.workspace = true`. `ybus_powerflow`
   re-exports `ybus_ipm`'s types, and both use `ybus_sparse`'s, so their breaks travel
-  together anyway, as with `bevy`'s and `polars`' crates. One version and one changelog are
-  simpler to read than four. `release-plz` and `cargo-release` both support that.
+  together anyway, as with `bevy`'s and `polars`' crates. One version is simpler
+  to read than four. `release-plz` and `cargo-release` both support that.
