@@ -256,12 +256,31 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
 
 ## Phase F5: Optimal power flows
 
-- [ ] OPF options handles: the solver (MIPS or the predictor-corrector method), and its main
+- [x] OPF options handles: the solver (MIPS or the predictor-corrector method), and its main
       tolerances, iteration limit and KKT factorization, each by a typed setter. Which of the
       solvers' other fields to expose is decided with the item; the rest keep their defaults.
-- [ ] `ybus_dc_opf`: a solution handle with dispatch, flows, prices, multipliers, objective,
+      Decided with the maintainer for phase F5 (2026-11-10):
+      - **Two handles,** `ybus_dc_opf_options` and `ybus_ac_opf_options`, each made for a
+        solver at its own problem's defaults, so options can't reach the wrong OPF.
+      - **Exposed:** the four termination tolerances, the iteration limit, the KKT
+        factorization, and `cost_mult`, which the AC OPF already sets apart. All seven are
+        common to both solvers, so every setter applies to either.
+
+      Each setting has a getter too, as for the power flows' options.
+- [x] `ybus_dc_opf`: a solution handle with dispatch, flows, prices, multipliers, objective,
       status code and iteration count. Tests against the committed references.
-- [ ] `ybus_ac_opf`, in the same form, with the voltage, reactive power and branch multipliers.
+      - **Columns:** read by the case's field codes, at MATPOWER's OPF result columns. These
+        add `LAM_P`, `LAM_Q`, `MU_VMAX` and `MU_VMIN` (bus, 14 to 17), `MU_PMAX`, `MU_PMIN`,
+        `MU_QMAX` and `MU_QMIN` (gen, 22 to 25), and `MU_SF`, `MU_ST`, `MU_ANGMIN` and
+        `MU_ANGMAX` (branch, 18 to 21).
+      - **The status** takes MIPS's `exitflag` codes. A solve that doesn't converge still
+        returns its solution.
+      - **Tests:** in Rust, `powerflow`'s results bit for bit under each solver and KKT
+        factorization; in C, case14 against MATPOWER's `rundcopf`.
+- [x] `ybus_ac_opf`, in the same form, with the voltage, reactive power and branch multipliers.
+      Tested as the DC OPF is. In C, case14 is compared with MATPOWER's `runopf`, every column
+      at `powerflow`'s 1e-8, and the generators' PQ capability curves in `three_bus.m` are
+      refused with `YBUS_ERROR_UNSUPPORTED_GENERATOR` until zeroed.
 
 ## Phase F6: Hardening and a first release
 
