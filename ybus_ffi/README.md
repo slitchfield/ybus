@@ -193,6 +193,23 @@ Each OPF has its own options handle, made for a solver and freed with its own `_
 
 The solvers' other settings keep their defaults.
 
+### Solutions
+
+`ybus_dc_opf(case, options, &solution)` solves the DC OPF, with `NULL` options for MATPOWER's
+defaults. Its solution's columns are read as the power flows' are, by the case's field codes,
+at the columns MATPOWER writes the OPF's results to:
+
+| Table | DC OPF columns |
+|---|---|
+| bus | `VA_DEG`, and `LAM_P` (14), the price |
+| gen | `PG_MW`, and `MU_PMAX` (22) and `MU_PMIN` (23) |
+| branch | `PF_MW`, `MU_SF` (18), `MU_ST` (19), `MU_ANGMIN` (20) and `MU_ANGMAX` (21) |
+
+The scalars are `_objective`, `_iterations` and `_status`. The status uses MIPS's `exitflag`
+codes: `YBUS_OPF_CONVERGED` (1), `YBUS_OPF_MAX_ITERATIONS` (0) and
+`YBUS_OPF_NUMERICAL_FAILURE` (-1). A solve that doesn't converge still returns `YBUS_OK` with
+its solution, as in MATPOWER, so check the status.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.

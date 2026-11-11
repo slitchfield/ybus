@@ -28,6 +28,26 @@ pub const YBUS_KKT_LU: ybus_kkt_factorization = 1;
 /// The pivoted LDLᵀ: the predictor-corrector method's default.
 pub const YBUS_KKT_LDLT: ybus_kkt_factorization = 2;
 
+/// How an optimal power flow's solver ended, with MIPS's `exitflag` codes.
+#[allow(non_camel_case_types)]
+pub type ybus_opf_status = i32;
+
+/// Every termination test passed (`exitflag` 1): MATPOWER's `success`.
+pub const YBUS_OPF_CONVERGED: ybus_opf_status = 1;
+/// The iteration limit passed without converging (`exitflag` 0).
+pub const YBUS_OPF_MAX_ITERATIONS: ybus_opf_status = 0;
+/// The solve failed numerically (`exitflag` -1).
+pub const YBUS_OPF_NUMERICAL_FAILURE: ybus_opf_status = -1;
+
+/// The code of an OPF's status
+pub(crate) fn status_code(status: powerflow::opf::Status) -> ybus_opf_status {
+    match status {
+        powerflow::opf::Status::Converged => YBUS_OPF_CONVERGED,
+        powerflow::opf::Status::MaxIterations => YBUS_OPF_MAX_ITERATIONS,
+        powerflow::opf::Status::NumericalFailure => YBUS_OPF_NUMERICAL_FAILURE,
+    }
+}
+
 /// An OPF options handle: either OPF's, each holding an [`OpfSolver`].
 pub(crate) trait OpfOptions {
     fn solver(&self) -> &OpfSolver;

@@ -267,8 +267,16 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
         common to both solvers, so every setter applies to either.
 
       Each setting has a getter too, as for the power flows' options.
-- [ ] `ybus_dc_opf`: a solution handle with dispatch, flows, prices, multipliers, objective,
+- [x] `ybus_dc_opf`: a solution handle with dispatch, flows, prices, multipliers, objective,
       status code and iteration count. Tests against the committed references.
+      - **Columns:** read by the case's field codes, at MATPOWER's OPF result columns. These
+        add `LAM_P`, `LAM_Q`, `MU_VMAX` and `MU_VMIN` (bus, 14 to 17), `MU_PMAX`, `MU_PMIN`,
+        `MU_QMAX` and `MU_QMIN` (gen, 22 to 25), and `MU_SF`, `MU_ST`, `MU_ANGMIN` and
+        `MU_ANGMAX` (branch, 18 to 21).
+      - **The status** takes MIPS's `exitflag` codes. A solve that doesn't converge still
+        returns its solution.
+      - **Tests:** in Rust, `powerflow`'s results bit for bit under each solver and KKT
+        factorization; in C, case14 against MATPOWER's `rundcopf`.
 - [ ] `ybus_ac_opf`, in the same form, with the voltage, reactive power and branch multipliers.
 
 ## Phase F6: Hardening and a first release

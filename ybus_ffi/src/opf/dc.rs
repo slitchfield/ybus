@@ -1,13 +1,21 @@
-//! The DC optimal power flow's options through C.
+//! The DC optimal power flow through C: its options, its solution, and the OPF itself.
 
-use powerflow::opf::dc::DcOpfOptions;
+use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
 use powerflow::opf::OpfSolver;
 
 use super::{
     get_float, get_kkt, get_max_iterations, get_solver, set_float, set_kkt, set_max_iterations,
-    ybus_kkt_factorization, ybus_opf_solver, Float, OpfOptions, YBUS_OPF_MEHROTRA, YBUS_OPF_MIPS,
+    status_code, ybus_kkt_factorization, ybus_opf_solver, ybus_opf_status, Float, OpfOptions,
+    YBUS_OPF_MEHROTRA, YBUS_OPF_MIPS,
 };
-use crate::boundary::{free_handle, guard, new_handle, Failure};
+use crate::boundary::{arg_ref, free_handle, get_value, guard, new_handle, Failure};
+use crate::case::columns::{
+    ybus_field, YBUS_BRANCH_MU_ANGMAX, YBUS_BRANCH_MU_ANGMIN, YBUS_BRANCH_MU_SF, YBUS_BRANCH_MU_ST,
+    YBUS_BRANCH_PF_MW, YBUS_BUS_LAM_P, YBUS_BUS_VA_DEG, YBUS_GEN_MU_PMAX, YBUS_GEN_MU_PMIN,
+    YBUS_GEN_PG_MW,
+};
+use crate::case::YbusCase;
+use crate::solution::get_column;
 use crate::status::ybus_status;
 
 /// Options for the DC optimal power flow, made by `ybus_dc_opf_options_new` at the defaults for a
@@ -289,6 +297,195 @@ pub unsafe extern "C" fn ybus_dc_opf_options_get_kkt_factorization(
     unsafe { get_kkt(options, out) }
 }
 
+/// A DC optimal power flow's results, indexed like the case's tables, as `rundcopf` reports
+/// them, made by `ybus_dc_opf` and freed by `ybus_dc_opf_solution_free`. They're reported
+/// whether or not the solver converged: see `ybus_dc_opf_solution_status`.
+pub struct YbusDcOpfSolution {
+    pub(crate) solution: DcOpfSolution,
+}
+
+/// Solves `case`'s DC optimal power flow, as MATPOWER's `rundcopf` does, with `options` (`NULL`
+/// for MATPOWER's defaults), into a new solution in `*out`.
+///
+/// A solve that doesn't converge still makes a solution, whose status says so. Returns
+/// `YBUS_ERROR_SOLVER` if the solver refuses to start, and the case's and costs' codes, such
+/// as `YBUS_ERROR_UNSUPPORTED_COST` for a cost above quadratic. `*out` is set to `NULL` first
+/// and stays `NULL` on an error.
+///
+/// # Safety
+///
+/// `case` must be null or a live case, `options` null or live options, and `out` null or a
+/// writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_opf(
+    case: *const YbusCase,
+    options: *const YbusDcOpfOptions,
+    out: *mut *mut YbusDcOpfSolution,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: out, case and options are as the caller promised
+        unsafe {
+            new_handle(out, || {
+                let case = arg_ref(case, "case")?;
+                let options = if options.is_null() {
+                    DcOpfOptions::default()
+                } else {
+                    arg_ref(options, "options")?.options
+                };
+                Ok(YbusDcOpfSolution {
+                    solution: dc_opf_with_options(&case.case, &options)?,
+                })
+            })
+        }
+    })
+}
+
+/// Frees `solution`, which mustn't be used again. Does nothing if `solution` is null.
+///
+/// # Safety
+///
+/// `solution` must be null or a solution made by this library and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_opf_solution_free(solution: *mut YbusDcOpfSolution) {
+    // SAFETY: as the caller promised
+    unsafe { free_handle(solution) }
+}
+
+/// Writes the solution's bus column `field` into `out`, which has room for `len` entries: one
+/// per bus. The columns are `YBUS_BUS_VA_DEG`, each bus's voltage angle (degrees), and
+/// `YBUS_BUS_LAM_P`, its real power price ($/MWh); an isolated bus keeps its angle from the
+/// case and has no price. Returns `YBUS_ERROR_INVALID_FIELD` for any other code, and
+/// `YBUS_ERROR_BUFFER_TOO_SMALL`, writing nothing, if `len` is less than the number of buses.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_opf_solution_get_bus(
+    solution: *const YbusDcOpfSolution,
+    field: ybus_field,
+    out: *mut f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_column(solution, "bus", field, out, len, |s, field| match field {
+            YBUS_BUS_VA_DEG => Some(&s.solution.va_deg),
+            YBUS_BUS_LAM_P => Some(&s.solution.lam_p),
+            _ => None,
+        })
+    }
+}
+
+/// [`ybus_dc_opf_solution_get_bus`] for the generators: `YBUS_GEN_PG_MW`, each generator's
+/// real power output (MW), and `YBUS_GEN_MU_PMIN` and `YBUS_GEN_MU_PMAX`, the multipliers of
+/// its lower and upper real power limits ($/MWh). 0 for a generator that's out of service or
+/// at an isolated bus.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_opf_solution_get_gen(
+    solution: *const YbusDcOpfSolution,
+    field: ybus_field,
+    out: *mut f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_column(solution, "gen", field, out, len, |s, field| match field {
+            YBUS_GEN_PG_MW => Some(&s.solution.pg_mw),
+            YBUS_GEN_MU_PMIN => Some(&s.solution.mu_pmin),
+            YBUS_GEN_MU_PMAX => Some(&s.solution.mu_pmax),
+            _ => None,
+        })
+    }
+}
+
+/// [`ybus_dc_opf_solution_get_bus`] for the branches: `YBUS_BRANCH_PF_MW`, each branch's real
+/// power flow at the from end (MW); `YBUS_BRANCH_MU_SF` and `YBUS_BRANCH_MU_ST`, the
+/// multipliers of its flow limit in each direction ($/MWh); and `YBUS_BRANCH_MU_ANGMIN` and
+/// `YBUS_BRANCH_MU_ANGMAX`, those of its angle difference limits ($/degree).
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_opf_solution_get_branch(
+    solution: *const YbusDcOpfSolution,
+    field: ybus_field,
+    out: *mut f64,
+    len: usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_column(
+            solution,
+            "branch",
+            field,
+            out,
+            len,
+            |s, field| match field {
+                YBUS_BRANCH_PF_MW => Some(&s.solution.pf_mw),
+                YBUS_BRANCH_MU_SF => Some(&s.solution.mu_sf),
+                YBUS_BRANCH_MU_ST => Some(&s.solution.mu_st),
+                YBUS_BRANCH_MU_ANGMIN => Some(&s.solution.mu_angmin),
+                YBUS_BRANCH_MU_ANGMAX => Some(&s.solution.mu_angmax),
+                _ => None,
+            },
+        )
+    }
+}
+
+/// Writes the total cost ($/hr), including the costs' constant terms, through `out`.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or a writable `double`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_opf_solution_objective(
+    solution: *const YbusDcOpfSolution,
+    out: *mut f64,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get_value(solution, "solution", out, |s| Ok(s.solution.objective)) }
+}
+
+/// Writes how many iterations the solver took through `out`.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or a writable `size_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_opf_solution_iterations(
+    solution: *const YbusDcOpfSolution,
+    out: *mut usize,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe { get_value(solution, "solution", out, |s| Ok(s.solution.iterations)) }
+}
+
+/// Writes how the solver ended through `out`: `YBUS_OPF_CONVERGED`, MATPOWER's `success`, or
+/// `YBUS_OPF_MAX_ITERATIONS` or `YBUS_OPF_NUMERICAL_FAILURE`.
+///
+/// # Safety
+///
+/// `solution` must be null or a live solution, and `out` null or a writable
+/// `ybus_opf_status`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ybus_dc_opf_solution_status(
+    solution: *const YbusDcOpfSolution,
+    out: *mut ybus_opf_status,
+) -> ybus_status {
+    // SAFETY: as the caller promised
+    unsafe {
+        get_value(solution, "solution", out, |s| {
+            Ok(status_code(s.solution.status))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ptr;
@@ -421,6 +618,129 @@ mod tests {
                 ybus_dc_opf_options_free(options);
                 ybus_dc_opf_options_free(ptr::null_mut());
             }
+        }
+    }
+
+    #[test]
+    fn the_dc_opf_is_powerflows_bit_for_bit() {
+        for (name, case) in crate::dc::tests::cases() {
+            for solver in [YBUS_OPF_MIPS, YBUS_OPF_MEHROTRA] {
+                for kkt in [YBUS_KKT_LU, YBUS_KKT_LDLT] {
+                    let options = new(solver);
+                    let mut solution = ptr::null_mut();
+                    let what = format!("{name} solver {solver} KKT {kkt}");
+                    // SAFETY: each handle is live until freed, and each out writable
+                    unsafe {
+                        assert_eq!(
+                            ybus_dc_opf_options_set_kkt_factorization(options, kkt),
+                            YBUS_OK
+                        );
+                        let status = ybus_dc_opf(case, options, &mut solution);
+                        match dc_opf_with_options(&(*case).case, &(*options).options) {
+                            Ok(expected) => {
+                                assert_eq!(status, YBUS_OK, "{what}");
+                                assert_eq!((*solution).solution, expected, "{what}");
+                            }
+                            Err(error) => {
+                                assert_eq!(status, crate::status::powerflow_code(&error), "{what}");
+                                assert!(solution.is_null());
+                            }
+                        }
+                        ybus_dc_opf_solution_free(solution);
+                        ybus_dc_opf_options_free(options);
+                    }
+                }
+            }
+            // SAFETY: case is live until this free
+            unsafe { crate::case::ybus_case_free(case) };
+        }
+    }
+
+    #[test]
+    fn a_dc_opf_solution_reads_its_columns_and_scalars() {
+        let case = crate::case::tests::three_bus();
+        let mut solution = ptr::null_mut();
+        // SAFETY: each handle is live until freed, and each buffer has room for its length
+        unsafe {
+            assert_eq!(ybus_dc_opf(case, ptr::null(), &mut solution), YBUS_OK);
+            let expected = dc_opf_with_options(&(*case).case, &DcOpfOptions::default()).unwrap();
+            type Get = unsafe extern "C" fn(
+                *const YbusDcOpfSolution,
+                ybus_field,
+                *mut f64,
+                usize,
+            ) -> ybus_status;
+            let read = |get: Get, field, rows: usize| {
+                let mut out = vec![0.0; rows];
+                assert_eq!(get(solution, field, out.as_mut_ptr(), rows), YBUS_OK);
+                out
+            };
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_bus, YBUS_BUS_VA_DEG, 3),
+                expected.va_deg
+            );
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_bus, YBUS_BUS_LAM_P, 3),
+                expected.lam_p
+            );
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_gen, YBUS_GEN_PG_MW, 2),
+                expected.pg_mw
+            );
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_gen, YBUS_GEN_MU_PMIN, 2),
+                expected.mu_pmin
+            );
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_gen, YBUS_GEN_MU_PMAX, 2),
+                expected.mu_pmax
+            );
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_branch, YBUS_BRANCH_PF_MW, 3),
+                expected.pf_mw
+            );
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_branch, YBUS_BRANCH_MU_SF, 3),
+                expected.mu_sf
+            );
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_branch, YBUS_BRANCH_MU_ST, 3),
+                expected.mu_st
+            );
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_branch, YBUS_BRANCH_MU_ANGMIN, 3),
+                expected.mu_angmin
+            );
+            assert_eq!(
+                read(ybus_dc_opf_solution_get_branch, YBUS_BRANCH_MU_ANGMAX, 3),
+                expected.mu_angmax
+            );
+            let (mut objective, mut iterations, mut status) = (0.0, 0, 9);
+            assert_eq!(
+                ybus_dc_opf_solution_objective(solution, &mut objective),
+                YBUS_OK
+            );
+            assert_eq!(
+                ybus_dc_opf_solution_iterations(solution, &mut iterations),
+                YBUS_OK
+            );
+            assert_eq!(ybus_dc_opf_solution_status(solution, &mut status), YBUS_OK);
+            assert_eq!(
+                (objective, iterations),
+                (expected.objective, expected.iterations)
+            );
+            assert_eq!(status, crate::opf::YBUS_OPF_CONVERGED);
+            assert_eq!(
+                ybus_dc_opf_solution_get_bus(
+                    solution,
+                    crate::case::columns::YBUS_BUS_VM_PU,
+                    ptr::null_mut(),
+                    0
+                ),
+                crate::status::YBUS_ERROR_INVALID_FIELD
+            );
+            ybus_dc_opf_solution_free(solution);
+            crate::case::ybus_case_free(case);
         }
     }
 }

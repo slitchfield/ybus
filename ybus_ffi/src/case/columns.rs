@@ -46,6 +46,16 @@ pub const YBUS_BUS_ZONE: ybus_field = 11;
 pub const YBUS_BUS_VMAX_PU: ybus_field = 12;
 /// Minimum voltage magnitude (p.u.).
 pub const YBUS_BUS_VMIN_PU: ybus_field = 13;
+/// An OPF solution's real power price at the bus, `LAM_P` ($/MWh): a result column.
+pub const YBUS_BUS_LAM_P: ybus_field = 14;
+/// An OPF solution's reactive power price at the bus, `LAM_Q` ($/MVAr-hr): a result column.
+pub const YBUS_BUS_LAM_Q: ybus_field = 15;
+/// An OPF solution's multiplier of the upper voltage magnitude limit, `MU_VMAX` ($/p.u.-hr): a
+/// result column.
+pub const YBUS_BUS_MU_VMAX: ybus_field = 16;
+/// An OPF solution's multiplier of the lower voltage magnitude limit, `MU_VMIN` ($/p.u.-hr): a
+/// result column.
+pub const YBUS_BUS_MU_VMIN: ybus_field = 17;
 
 /// The label of the bus the generator is connected to (`int64_t`).
 pub const YBUS_GEN_BUS_LABEL: ybus_field = 1;
@@ -89,6 +99,18 @@ pub const YBUS_GEN_RAMP_30_MW: ybus_field = 19;
 pub const YBUS_GEN_RAMP_Q_MVAR_PER_MIN: ybus_field = 20;
 /// Area participation factor.
 pub const YBUS_GEN_APF: ybus_field = 21;
+/// An OPF solution's multiplier of the upper real power limit, `MU_PMAX` ($/MWh): a result
+/// column.
+pub const YBUS_GEN_MU_PMAX: ybus_field = 22;
+/// An OPF solution's multiplier of the lower real power limit, `MU_PMIN` ($/MWh): a result
+/// column.
+pub const YBUS_GEN_MU_PMIN: ybus_field = 23;
+/// An OPF solution's multiplier of the upper reactive power limit, `MU_QMAX` ($/MVAr-hr): a
+/// result column.
+pub const YBUS_GEN_MU_QMAX: ybus_field = 24;
+/// An OPF solution's multiplier of the lower reactive power limit, `MU_QMIN` ($/MVAr-hr): a
+/// result column.
+pub const YBUS_GEN_MU_QMIN: ybus_field = 25;
 
 /// The label of the "from" bus, where a transformer's tap is (`int64_t`).
 pub const YBUS_BRANCH_FROM_LABEL: ybus_field = 1;
@@ -126,6 +148,18 @@ pub const YBUS_BRANCH_QF_MVAR: ybus_field = 15;
 pub const YBUS_BRANCH_PT_MW: ybus_field = 16;
 /// A solution's reactive power flowing into the branch at the to end (MVAr): a result column.
 pub const YBUS_BRANCH_QT_MVAR: ybus_field = 17;
+/// An OPF solution's multiplier of the branch's flow limit at the from end, `MU_SF` ($/MVA-hr,
+/// or $/MWh for the DC OPF): a result column.
+pub const YBUS_BRANCH_MU_SF: ybus_field = 18;
+/// An OPF solution's multiplier of the branch's flow limit at the to end, `MU_ST`: a result
+/// column.
+pub const YBUS_BRANCH_MU_ST: ybus_field = 19;
+/// An OPF solution's multiplier of the lower angle difference limit, `MU_ANGMIN` ($/degree): a
+/// result column.
+pub const YBUS_BRANCH_MU_ANGMIN: ybus_field = 20;
+/// An OPF solution's multiplier of the upper angle difference limit, `MU_ANGMAX` ($/degree): a
+/// result column.
+pub const YBUS_BRANCH_MU_ANGMAX: ybus_field = 21;
 
 /// How to read and write one `double` field of a row.
 pub(crate) struct Float<R> {

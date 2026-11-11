@@ -62,6 +62,11 @@ typedef struct ybus_dc_model ybus_dc_model;
 // wherever one is taken.
 typedef struct ybus_dc_opf_options ybus_dc_opf_options;
 
+// A DC optimal power flow's results, indexed like the case's tables, as `rundcopf` reports
+// them, made by `ybus_dc_opf` and freed by `ybus_dc_opf_solution_free`. They're reported
+// whether or not the solver converged: see `ybus_dc_opf_solution_status`.
+typedef struct ybus_dc_opf_solution ybus_dc_opf_solution;
+
 // Options for the DC power flow, made by `ybus_dc_options_new` at MATPOWER's defaults and
 // freed by `ybus_dc_options_free`. A null options handle means the defaults wherever one is
 // taken.
@@ -96,6 +101,9 @@ typedef int32_t ybus_opf_solver;
 
 // How the solver's KKT system is factored.
 typedef int32_t ybus_kkt_factorization;
+
+// How an optimal power flow's solver ended, with MIPS's `exitflag` codes.
+typedef int32_t ybus_opf_status;
 
 // Newton's method in polar form, as MATPOWER's `newtonpf` (`pf.alg = 'NR'`, the default).
 #define YBUS_AC_NEWTON 1
@@ -155,6 +163,20 @@ typedef int32_t ybus_kkt_factorization;
 
 // Minimum voltage magnitude (p.u.).
 #define YBUS_BUS_VMIN_PU 13
+
+// An OPF solution's real power price at the bus, `LAM_P` ($/MWh): a result column.
+#define YBUS_BUS_LAM_P 14
+
+// An OPF solution's reactive power price at the bus, `LAM_Q` ($/MVAr-hr): a result column.
+#define YBUS_BUS_LAM_Q 15
+
+// An OPF solution's multiplier of the upper voltage magnitude limit, `MU_VMAX` ($/p.u.-hr): a
+// result column.
+#define YBUS_BUS_MU_VMAX 16
+
+// An OPF solution's multiplier of the lower voltage magnitude limit, `MU_VMIN` ($/p.u.-hr): a
+// result column.
+#define YBUS_BUS_MU_VMIN 17
 
 // The label of the bus the generator is connected to (`int64_t`).
 #define YBUS_GEN_BUS_LABEL 1
@@ -219,6 +241,22 @@ typedef int32_t ybus_kkt_factorization;
 // Area participation factor.
 #define YBUS_GEN_APF 21
 
+// An OPF solution's multiplier of the upper real power limit, `MU_PMAX` ($/MWh): a result
+// column.
+#define YBUS_GEN_MU_PMAX 22
+
+// An OPF solution's multiplier of the lower real power limit, `MU_PMIN` ($/MWh): a result
+// column.
+#define YBUS_GEN_MU_PMIN 23
+
+// An OPF solution's multiplier of the upper reactive power limit, `MU_QMAX` ($/MVAr-hr): a
+// result column.
+#define YBUS_GEN_MU_QMAX 24
+
+// An OPF solution's multiplier of the lower reactive power limit, `MU_QMIN` ($/MVAr-hr): a
+// result column.
+#define YBUS_GEN_MU_QMIN 25
+
 // The label of the "from" bus, where a transformer's tap is (`int64_t`).
 #define YBUS_BRANCH_FROM_LABEL 1
 
@@ -272,6 +310,22 @@ typedef int32_t ybus_kkt_factorization;
 // A solution's reactive power flowing into the branch at the to end (MVAr): a result column.
 #define YBUS_BRANCH_QT_MVAR 17
 
+// An OPF solution's multiplier of the branch's flow limit at the from end, `MU_SF` ($/MVA-hr,
+// or $/MWh for the DC OPF): a result column.
+#define YBUS_BRANCH_MU_SF 18
+
+// An OPF solution's multiplier of the branch's flow limit at the to end, `MU_ST`: a result
+// column.
+#define YBUS_BRANCH_MU_ST 19
+
+// An OPF solution's multiplier of the lower angle difference limit, `MU_ANGMIN` ($/degree): a
+// result column.
+#define YBUS_BRANCH_MU_ANGMIN 20
+
+// An OPF solution's multiplier of the upper angle difference limit, `MU_ANGMAX` ($/degree): a
+// result column.
+#define YBUS_BRANCH_MU_ANGMAX 21
+
 // No reordering.
 #define YBUS_ORDERING_NATURAL 1
 
@@ -305,6 +359,15 @@ typedef int32_t ybus_kkt_factorization;
 
 // The pivoted LDLᵀ: the predictor-corrector method's default.
 #define YBUS_KKT_LDLT 2
+
+// Every termination test passed (`exitflag` 1): MATPOWER's `success`.
+#define YBUS_OPF_CONVERGED 1
+
+// The iteration limit passed without converging (`exitflag` 0).
+#define YBUS_OPF_MAX_ITERATIONS 0
+
+// The solve failed numerically (`exitflag` -1).
+#define YBUS_OPF_NUMERICAL_FAILURE -1
 
 // Success.
 #define YBUS_OK 0
@@ -1387,6 +1450,95 @@ ybus_status ybus_dc_opf_options_set_kkt_factorization(struct ybus_dc_opf_options
 // `ybus_kkt_factorization`.
 ybus_status ybus_dc_opf_options_get_kkt_factorization(const struct ybus_dc_opf_options *options,
                                                       ybus_kkt_factorization *out);
+
+// Solves `case`'s DC optimal power flow, as MATPOWER's `rundcopf` does, with `options` (`NULL`
+// for MATPOWER's defaults), into a new solution in `*out`.
+//
+// A solve that doesn't converge still makes a solution, whose status says so. Returns
+// `YBUS_ERROR_SOLVER` if the solver refuses to start, and the case's and costs' codes, such
+// as `YBUS_ERROR_UNSUPPORTED_COST` for a cost above quadratic. `*out` is set to `NULL` first
+// and stays `NULL` on an error.
+//
+// # Safety
+//
+// `case` must be null or a live case, `options` null or live options, and `out` null or a
+// writable pointer.
+ybus_status ybus_dc_opf(const struct ybus_case *case_,
+                        const struct ybus_dc_opf_options *options,
+                        struct ybus_dc_opf_solution **out);
+
+// Frees `solution`, which mustn't be used again. Does nothing if `solution` is null.
+//
+// # Safety
+//
+// `solution` must be null or a solution made by this library and not yet freed.
+void ybus_dc_opf_solution_free(struct ybus_dc_opf_solution *solution);
+
+// Writes the solution's bus column `field` into `out`, which has room for `len` entries: one
+// per bus. The columns are `YBUS_BUS_VA_DEG`, each bus's voltage angle (degrees), and
+// `YBUS_BUS_LAM_P`, its real power price ($/MWh); an isolated bus keeps its angle from the
+// case and has no price. Returns `YBUS_ERROR_INVALID_FIELD` for any other code, and
+// `YBUS_ERROR_BUFFER_TOO_SMALL`, writing nothing, if `len` is less than the number of buses.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+ybus_status ybus_dc_opf_solution_get_bus(const struct ybus_dc_opf_solution *solution,
+                                         ybus_field field,
+                                         double *out,
+                                         size_t len);
+
+// [`ybus_dc_opf_solution_get_bus`] for the generators: `YBUS_GEN_PG_MW`, each generator's
+// real power output (MW), and `YBUS_GEN_MU_PMIN` and `YBUS_GEN_MU_PMAX`, the multipliers of
+// its lower and upper real power limits ($/MWh). 0 for a generator that's out of service or
+// at an isolated bus.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+ybus_status ybus_dc_opf_solution_get_gen(const struct ybus_dc_opf_solution *solution,
+                                         ybus_field field,
+                                         double *out,
+                                         size_t len);
+
+// [`ybus_dc_opf_solution_get_bus`] for the branches: `YBUS_BRANCH_PF_MW`, each branch's real
+// power flow at the from end (MW); `YBUS_BRANCH_MU_SF` and `YBUS_BRANCH_MU_ST`, the
+// multipliers of its flow limit in each direction ($/MWh); and `YBUS_BRANCH_MU_ANGMIN` and
+// `YBUS_BRANCH_MU_ANGMAX`, those of its angle difference limits ($/degree).
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or `len` writable `double`s.
+ybus_status ybus_dc_opf_solution_get_branch(const struct ybus_dc_opf_solution *solution,
+                                            ybus_field field,
+                                            double *out,
+                                            size_t len);
+
+// Writes the total cost ($/hr), including the costs' constant terms, through `out`.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or a writable `double`.
+ybus_status ybus_dc_opf_solution_objective(const struct ybus_dc_opf_solution *solution,
+                                           double *out);
+
+// Writes how many iterations the solver took through `out`.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or a writable `size_t`.
+ybus_status ybus_dc_opf_solution_iterations(const struct ybus_dc_opf_solution *solution,
+                                            size_t *out);
+
+// Writes how the solver ended through `out`: `YBUS_OPF_CONVERGED`, MATPOWER's `success`, or
+// `YBUS_OPF_MAX_ITERATIONS` or `YBUS_OPF_NUMERICAL_FAILURE`.
+//
+// # Safety
+//
+// `solution` must be null or a live solution, and `out` null or a writable
+// `ybus_opf_status`.
+ybus_status ybus_dc_opf_solution_status(const struct ybus_dc_opf_solution *solution,
+                                        ybus_opf_status *out);
 
 #ifdef __cplusplus
 }  // extern "C"
