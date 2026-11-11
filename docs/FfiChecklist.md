@@ -303,8 +303,15 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
         checks that the header declares exactly the exported functions, and that nothing
         without the `ybus_` prefix is exported. The header catches signatures; the record
         catches names.
-- [ ] The boundary's own cost, measured on mid-size cases: each solve through C against the same
+- [x] The boundary's own cost, measured on mid-size cases: each solve through C against the same
       solve in Rust. Recorded in `docs/benchmarks/`; it feeds long-term goal 2.
+      - **Decided with the maintainer (2026-11-10):** a Rust example,
+        `ybus_ffi/examples/boundary_cost.rs`, calls the exports through the rlib, which is the
+        code C runs. It ran on the maintainer's laptop, on case1354pegase, case2383wp and
+        case3120sp, with the OPFs on case1354pegase.
+      - **Result** (`docs/benchmarks/ffi-boundary-2026-11-10.md`): reading a solution's
+        columns takes 0.8–8.7 µs, at most 0.03% of a solve. The whole solves' differences,
+        −3.8% to +4.5% with both signs, are noise.
 
 ## Phase F7: Later
 
