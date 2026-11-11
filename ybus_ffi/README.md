@@ -252,6 +252,12 @@ its solution, as in MATPOWER, so check the status.
   defines `YBUS_VERSION_MAJOR`, `YBUS_VERSION_MINOR` and `YBUS_VERSION_PATCH`.
 - Before 1.0, any minor version may break the ABI.
 - From 1.0, minor versions only add functions and status codes.
+- [`symbols.txt`](symbols.txt) records every exported function. `check-symbols.sh`, run by
+  `check.sh` and CI, compares it with the built library, and checks that the header declares
+  exactly the functions the library exports.
+  - **Before 1.0,** a PR that adds, removes or renames an export updates the record
+    (`check-symbols.sh --update`), so the change shows in review.
+  - **From 1.0,** the record may only grow.
 
 ## Errors
 

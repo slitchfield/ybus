@@ -295,9 +295,14 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       in the crate's README. `ybus_ffi/examples/c/solve_case.c` runs the four solves with
       default options, reporting each failure and carrying on. `tests/c/run.sh` builds it and
       runs it on case14 in both modes, so the sanitizers check it too.
-- [ ] A record of the exported symbols, compared with the built library in CI, so a symbol
+- [x] A record of the exported symbols, compared with the built library in CI, so a symbol
       removed or renamed is a visible decision. Whether this starts before 1.0 is decided with
-      the item.
+      the item. Decided with the maintainer (2026-11-10): it starts now.
+      - **Before 1.0,** a change to the exports updates `ybus_ffi/symbols.txt` in the same PR.
+      - **`ybus_ffi/check-symbols.sh`** compares the record with the built library. It also
+        checks that the header declares exactly the exported functions, and that nothing
+        without the `ybus_` prefix is exported. The header catches signatures; the record
+        catches names.
 - [ ] The boundary's own cost, measured on mid-size cases: each solve through C against the same
       solve in Rust. Recorded in `docs/benchmarks/`; it feeds long-term goal 2.
 

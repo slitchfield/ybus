@@ -16,6 +16,8 @@ elif [ "${YBUS_REQUIRE_CBINDGEN:-}" = 1 ]; then
 else
     echo "Skipping the ybus.h check: cbindgen isn't installed"
 fi
+# The C library's exports against the committed record, ybus_ffi/symbols.txt, and the header
+ybus_ffi/check-symbols.sh
 cargo clippy --workspace --all-targets --all-features --  -D warnings -W clippy::all
 cargo test --workspace --all-targets
 # The C tests, against the generated header and the static library; once, since the C build has
