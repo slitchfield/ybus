@@ -195,15 +195,16 @@ The solvers' other settings keep their defaults.
 
 ### Solutions
 
-`ybus_dc_opf(case, options, &solution)` solves the DC OPF, with `NULL` options for MATPOWER's
-defaults. Its solution's columns are read as the power flows' are, by the case's field codes,
-at the columns MATPOWER writes the OPF's results to:
+`ybus_dc_opf(case, options, &solution)` and `ybus_ac_opf(case, options, &solution)` solve the
+OPFs, with `NULL` options for MATPOWER's defaults. Their solutions' columns are read as the
+power flows' are, by the case's field codes, at the columns MATPOWER writes the OPF's results
+to:
 
-| Table | DC OPF columns |
-|---|---|
-| bus | `VA_DEG`, and `LAM_P` (14), the price |
-| gen | `PG_MW`, and `MU_PMAX` (22) and `MU_PMIN` (23) |
-| branch | `PF_MW`, `MU_SF` (18), `MU_ST` (19), `MU_ANGMIN` (20) and `MU_ANGMAX` (21) |
+| Table | DC OPF columns | AC OPF columns |
+|---|---|---|
+| bus | `VA_DEG`, and `LAM_P` (14), the price | `VM_PU`, `VA_DEG`, `LAM_P` (14), `LAM_Q` (15), `MU_VMAX` (16) and `MU_VMIN` (17) |
+| gen | `PG_MW`, and `MU_PMAX` (22) and `MU_PMIN` (23) | `PG_MW`, `QG_MVAR`, `VG_PU`, and `MU_PMAX` to `MU_QMIN` (22 to 25) |
+| branch | `PF_MW`, `MU_SF` (18), `MU_ST` (19), `MU_ANGMIN` (20) and `MU_ANGMAX` (21) | `PF_MW` to `QT_MVAR` (14 to 17), and `MU_SF` to `MU_ANGMAX` (18 to 21) |
 
 The scalars are `_objective`, `_iterations` and `_status`. The status uses MIPS's `exitflag`
 codes: `YBUS_OPF_CONVERGED` (1), `YBUS_OPF_MAX_ITERATIONS` (0) and

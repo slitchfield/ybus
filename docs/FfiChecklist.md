@@ -277,7 +277,10 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
         returns its solution.
       - **Tests:** in Rust, `powerflow`'s results bit for bit under each solver and KKT
         factorization; in C, case14 against MATPOWER's `rundcopf`.
-- [ ] `ybus_ac_opf`, in the same form, with the voltage, reactive power and branch multipliers.
+- [x] `ybus_ac_opf`, in the same form, with the voltage, reactive power and branch multipliers.
+      Tested as the DC OPF is. In C, case14 is compared with MATPOWER's `runopf`, every column
+      at `powerflow`'s 1e-8, and the generators' PQ capability curves in `three_bus.m` are
+      refused with `YBUS_ERROR_UNSUPPORTED_GENERATOR` until zeroed.
 
 ## Phase F6: Hardening and a first release
 
