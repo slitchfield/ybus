@@ -291,8 +291,10 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
         through ASan's `malloc`. A leaked case, a double free and a C-side overrun, each
         planted in a scratch program, fail the run.
       - **No suppressions were needed:** Rust's runtime reported nothing.
-- [ ] A C example in the crate (load a case, run each solve, print a few results), and its use
-      in the crate's README.
+- [x] A C example in the crate (load a case, run each solve, print a few results), and its use
+      in the crate's README. `ybus_ffi/examples/c/solve_case.c` runs the four solves with
+      default options, reporting each failure and carrying on. `tests/c/run.sh` builds it and
+      runs it on case14 in both modes, so the sanitizers check it too.
 - [ ] A record of the exported symbols, compared with the built library in CI, so a symbol
       removed or renamed is a visible decision. Whether this starts before 1.0 is decided with
       the item.

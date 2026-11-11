@@ -20,6 +20,30 @@ cc -I ybus_ffi/include program.c target/release/libybus.a \
     -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc
 ```
 
+## Example
+
+[`examples/c/solve_case.c`](examples/c/solve_case.c) loads a MATPOWER case and runs each solve
+on it: the DC and AC power flows, and the DC and AC OPFs. It prints a few results of each, and
+reports any failure with its status and message. From the repository root:
+
+```sh
+cargo build -p ybus_ffi --release
+cc -I ybus_ffi/include ybus_ffi/examples/c/solve_case.c target/release/libybus.a \
+    -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc -o solve_case
+./solve_case testdata/matpower/matpower8.1/data/case14.m
+```
+
+```text
+testdata/matpower/matpower8.1/data/case14.m: 14 buses, 5 generators, 20 branches
+DC power flow: bus angles from -17.188 to 0.000 degrees
+AC power flow: 2 Newton iterations, voltages from 1.0100 to 1.0900 p.u.
+DC OPF: converged in 10 iterations, cost 7642.59 $/hr, prices up to 39.02 $/MWh
+AC OPF: converged in 11 iterations, cost 8081.53 $/hr, prices up to 41.20 $/MWh
+```
+
+`tests/c/run.sh` builds the example with the tests' flags and runs it on case14, so it stays in
+step with the API.
+
 ## Tests
 
 The Rust tests run with `cargo test -p ybus_ffi`. The C tests in [`tests/c/`](tests/c/) are

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The C tests: builds the ybus library, then compiles each tests/c/test_*.c against
 #   include/ybus.h, links it with the static library as a C program would be linked, and runs
-#   it. check.sh runs this plainly and with --sanitize. It needs a C compiler: cc, or the one $CC
+#   it, then builds the C example (examples/c/solve_case.c) and runs it on case14. check.sh
+#   runs this plainly and with --sanitize. It needs a C compiler: cc, or the one $CC
 #   names.
 #
 # Usage: ybus_ffi/tests/c/run.sh [--sanitize]
@@ -70,3 +71,18 @@ for test in "$crate"/tests/c/test_*.c; do
     count=$((count + 1))
 done
 echo "$count C tests passed ($mode)"
+
+# The C example, built as the tests are and run on MATPOWER's case14, when it's fetched (or
+#   always, with YBUS_REQUIRE_CASES=1)
+"$cc" -std=c11 -Wall -Wextra -Wpedantic -Werror "${flags[@]}" -I "$crate/include" \
+    "$crate/examples/c/solve_case.c" "$library" "${system_libraries[@]}" -o "$build/solve_case"
+case14="$YBUS_MATPOWER_DATA/case14.m"
+if [ -f "$case14" ]; then
+    "$build/solve_case" "$case14" > "$build/solve_case.out"
+    echo "C example solve_case ran on case14 ($mode)"
+elif [ "${YBUS_REQUIRE_CASES:-}" = 1 ]; then
+    echo "MATPOWER's case14.m is missing: run scripts/fetch-matpower.sh" >&2
+    exit 1
+else
+    echo "C example solve_case built; skipped running it: MATPOWER's case14.m isn't fetched"
+fi
