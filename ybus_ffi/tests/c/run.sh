@@ -1,8 +1,33 @@
 #!/usr/bin/env bash
 # The C tests: builds the ybus library, then compiles each tests/c/test_*.c against
 #   include/ybus.h, links it with the static library as a C program would be linked, and runs
-#   it. check.sh runs this once. It needs a C compiler: cc, or the one $CC names.
+#   it. check.sh runs this plainly and with --sanitize. It needs a C compiler: cc, or the one $CC
+#   names.
+#
+# Usage: ybus_ffi/tests/c/run.sh [--sanitize]
+#   --sanitize  builds and runs every test under AddressSanitizer (with LeakSanitizer) and
+#               UndefinedBehaviorSanitizer, failing on the first report. The Rust library isn't
+#               instrumented, since stable Rust can't build with -Zsanitizer, but its
+#               allocations go through the malloc ASan replaces: a handle leaked or freed twice
+#               fails, as does a C buffer overrun or undefined behaviour in C. A write by Rust
+#               past a C buffer doesn't show; the exports' length checks guard against that.
 set -euo pipefail
+
+mode=plain
+flags=()
+case "${1:-}" in
+    "") ;;
+    --sanitize)
+        mode=sanitized
+        flags=(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
+        export ASAN_OPTIONS="detect_leaks=1:abort_on_error=1"
+        export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+        ;;
+    *)
+        echo "usage: $0 [--sanitize]" >&2
+        exit 2
+        ;;
+esac
 
 crate="$(cd "$(dirname "$0")/../.." && pwd)"
 workspace="$(dirname "$crate")"
@@ -38,10 +63,10 @@ trap 'rm -rf "$build"' EXIT
 count=0
 for test in "$crate"/tests/c/test_*.c; do
     name="$(basename "$test" .c)"
-    "$cc" -std=c11 -Wall -Wextra -Wpedantic -Werror -I "$crate/include" -I "$crate/tests/c" \
-        "$test" "$library" "${system_libraries[@]}" -o "$build/$name"
+    "$cc" -std=c11 -Wall -Wextra -Wpedantic -Werror "${flags[@]}" -I "$crate/include" \
+        -I "$crate/tests/c" "$test" "$library" "${system_libraries[@]}" -o "$build/$name"
     "$build/$name"
-    echo "C test $name passed"
+    echo "C test $name passed ($mode)"
     count=$((count + 1))
 done
-echo "$count C tests passed"
+echo "$count C tests passed ($mode)"

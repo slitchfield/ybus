@@ -24,7 +24,16 @@ cc -I ybus_ffi/include program.c target/release/libybus.a \
 
 The Rust tests run with `cargo test -p ybus_ffi`. The C tests in [`tests/c/`](tests/c/) are
 small programs, compiled against the header and linked with the static library as a C program
-would be, then run, by `tests/c/run.sh`, which `check.sh` runs once.
+would be, then run, by `tests/c/run.sh`.
+
+`check.sh` runs the C tests twice: plainly, then with `tests/c/run.sh --sanitize`, under
+AddressSanitizer (with LeakSanitizer) and UndefinedBehaviorSanitizer.
+- **What it catches:** the Rust library isn't instrumented, since stable Rust can't build with
+  `-Zsanitizer`, but its allocations go through the `malloc` that ASan replaces. So a handle
+  that's leaked or freed twice fails the run, as do a C buffer overrun and undefined behaviour
+  in the C code.
+- **What it doesn't:** Rust writing past a C buffer. The exports' length checks guard against
+  that, and the Rust tests cover them.
 
 ## Cases
 

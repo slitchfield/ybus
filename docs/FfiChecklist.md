@@ -284,8 +284,13 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
 
 ## Phase F6: Hardening and a first release
 
-- [ ] CI runs the C tests under AddressSanitizer and UndefinedBehaviorSanitizer, so leaks,
+- [x] CI runs the C tests under AddressSanitizer and UndefinedBehaviorSanitizer, so leaks,
       double frees and out-of-bounds writes at the boundary fail the build.
+      - **How:** `check.sh` runs `tests/c/run.sh --sanitize` after the plain run.
+      - **Coverage:** the Rust library isn't instrumented on stable Rust, but its allocations go
+        through ASan's `malloc`. A leaked case, a double free and a C-side overrun, each
+        planted in a scratch program, fail the run.
+      - **No suppressions were needed:** Rust's runtime reported nothing.
 - [ ] A C example in the crate (load a case, run each solve, print a few results), and its use
       in the crate's README.
 - [ ] A record of the exported symbols, compared with the built library in CI, so a symbol
