@@ -2,11 +2,12 @@
 //! file or its text, copied and freed.
 
 use std::ffi::c_char;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use powerflow::Case;
 
-use crate::boundary::{arg_mut, arg_ref, arg_slice, arg_str, guard, new_handle};
+use crate::boundary::{
+    arg_mut, arg_ref, arg_slice, arg_str, free_handle, get_value, guard, new_handle,
+};
 use crate::status::ybus_status;
 
 pub mod columns;
@@ -107,15 +108,8 @@ pub unsafe extern "C" fn ybus_case_clone(
 /// `case` must be null or a case made by this library and not yet freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ybus_case_free(case: *mut YbusCase) {
-    if case.is_null() || !case.is_aligned() {
-        return;
-    }
-    // Dropping a case can't panic in practice, but a panic mustn't reach C
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: by the caller's promise, case came from Box::into_raw in new_handle and is
-        //   freed once
-        drop(unsafe { Box::from_raw(case) });
-    }));
+    // SAFETY: as the caller promised
+    unsafe { free_handle(case) }
 }
 
 /// Writes `read(case)` through `out`: the shape of every scalar getter.
@@ -124,12 +118,8 @@ pub unsafe extern "C" fn ybus_case_free(case: *mut YbusCase) {
 ///
 /// `case` must be null or a live case, and `out` null or a writable `T`.
 unsafe fn get<T>(case: *const YbusCase, out: *mut T, read: impl FnOnce(&Case) -> T) -> ybus_status {
-    guard(|| {
-        // SAFETY: case and out are as the caller promised
-        let (case, out) = unsafe { (arg_ref(case, "case")?, arg_mut(out, "out")?) };
-        *out = read(&case.case);
-        Ok(())
-    })
+    // SAFETY: as the caller promised
+    unsafe { get_value(case, "case", out, |case| Ok(read(&case.case))) }
 }
 
 /// Writes the number of buses in `case` through `out`.

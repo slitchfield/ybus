@@ -24,3 +24,9 @@ include = ["ybus_status"]
 # Handles keep Rust's names in Rust and C's in the header
 [export.rename]
 "YbusCase" = "ybus_case"
+"YbusDcOptions" = "ybus_dc_options"
+"YbusAcOptions" = "ybus_ac_options"
+"YbusDcSolution" = "ybus_dc_solution"
+"YbusAcSolution" = "ybus_ac_solution"
+"YbusDcModel" = "ybus_dc_model"
+"YbusAcModel" = "ybus_ac_model"

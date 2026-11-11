@@ -8,6 +8,7 @@ use common::dc_fixture::{assert_physical, fixture, B, G, L};
 use powerflow::case::{BusType, Case};
 use powerflow::dc::{dc_power_flow, DcModel, DcOptions, DcSolution, DcSolver};
 use powerflow::powerflow_error::PowerflowError;
+use sparse_mat::compressed_matrix::Ordering;
 
 use std::f64::consts::PI;
 
@@ -385,4 +386,26 @@ fn a_model_rejects_a_case_with_a_different_topology() {
     other.generator[0].pg_mw = 100.0;
     other.bus[0].va_deg = 5.0;
     assert!(solve(&other).is_ok());
+}
+
+#[test]
+fn every_ordering_gives_the_same_solution() {
+    let case = case(&triangle());
+    let model = DcModel::new(&case).unwrap();
+    let amd = model.solve(&case, &DcOptions::default()).unwrap();
+    // COLAMD orders columns only, which Cholesky can't use, so it factors by LU; it used to
+    //   panic instead
+    for (ordering, solver) in [
+        (Ordering::Natural, DcSolver::Cholesky),
+        (Ordering::Rcm, DcSolver::Cholesky),
+        (Ordering::Colamd, DcSolver::Lu),
+    ] {
+        let mut options = DcOptions::default();
+        options.ordering = ordering;
+        let solution = model.solve(&case, &options).unwrap();
+        assert_eq!(solution.solver, solver, "{ordering:?}");
+        assert_close(&solution.va_deg, &amd.va_deg);
+        assert_close(&solution.pf_mw, &amd.pf_mw);
+        assert_close(&solution.pg_mw, &amd.pg_mw);
+    }
 }

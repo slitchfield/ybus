@@ -164,6 +164,75 @@ fn check_pointer<T>(pointer: *const T, argument: &'static str) -> Result<(), Fai
     }
 }
 
+/// `BufferTooSmall` unless a buffer of `given` entries holds `needed`
+pub(crate) fn check_room(
+    argument: &'static str,
+    needed: usize,
+    given: usize,
+) -> Result<(), Failure> {
+    if given < needed {
+        Err(Failure::BufferTooSmall {
+            argument,
+            needed,
+            given,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// `LengthMismatch` unless an array of `given` entries is one per row of `rows`
+pub(crate) fn check_length(
+    argument: &'static str,
+    rows: usize,
+    given: usize,
+) -> Result<(), Failure> {
+    if given == rows {
+        Ok(())
+    } else {
+        Err(Failure::LengthMismatch(format!(
+            "`{argument}` has {given} entries, but its table has {rows} rows"
+        )))
+    }
+}
+
+/// Writes `read(handle)` through `out`: the shape of every scalar getter, where `argument`
+/// names the handle.
+///
+/// # Safety
+///
+/// `handle` must be null or a live handle, and `out` null or a writable `T`.
+pub(crate) unsafe fn get_value<H, T>(
+    handle: *const H,
+    argument: &'static str,
+    out: *mut T,
+    read: impl FnOnce(&H) -> Result<T, Failure>,
+) -> ybus_status {
+    guard(|| {
+        // SAFETY: handle and out are as the caller promised
+        let (handle, out) = unsafe { (arg_ref(handle, argument)?, arg_mut(out, "out")?) };
+        *out = read(handle)?;
+        Ok(())
+    })
+}
+
+/// Frees a handle made by [`new_handle`], doing nothing for a null (or misaligned) pointer.
+/// Dropping one can't panic in practice, but a panic mustn't reach C.
+///
+/// # Safety
+///
+/// `handle` must be null or a handle made by `new_handle` and not yet freed.
+pub(crate) unsafe fn free_handle<T>(handle: *mut T) {
+    if handle.is_null() || !handle.is_aligned() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: by the caller's promise, handle came from Box::into_raw in new_handle and is
+        //   freed once
+        drop(unsafe { Box::from_raw(handle) });
+    }));
+}
+
 /// The UTF-8 string C passed as a NUL-terminated pointer.
 ///
 /// # Safety

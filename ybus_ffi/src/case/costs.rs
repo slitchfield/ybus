@@ -8,9 +8,10 @@
 
 use powerflow::case::GenCost;
 
-use super::columns::{check_length, check_room};
 use super::YbusCase;
-use crate::boundary::{arg_mut, arg_ref, arg_slice, arg_slice_mut, guard, Failure};
+use crate::boundary::{
+    arg_mut, arg_ref, arg_slice, arg_slice_mut, check_length, check_room, guard, Failure,
+};
 use crate::status::ybus_status;
 
 /// A piecewise linear cost, MATPOWER's model 1: its values are `(p, cost)` points.

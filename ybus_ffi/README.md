@@ -107,6 +107,67 @@ the models, an even number of values for each piecewise linear row, and offsets 
 0, never decrease, and end at the number of values. What a solve can't use is reported when the
 case is solved.
 
+## Power flows
+
+### Options
+
+Options are handles made at MATPOWER's defaults and freed with their own `_free`. Wherever a
+solve takes options, `NULL` means the defaults.
+
+- **DC:** `ybus_dc_options_new(&options)` makes the options. The one setting is
+  `ybus_dc_options_set_ordering`, B′'s fill-reducing ordering: `YBUS_ORDERING_AMD` by default,
+  or `NATURAL`, `RCM` or `COLAMD`.
+- **AC:** `ybus_ac_options_new(method, &options)` takes the method: `YBUS_AC_NEWTON`,
+  `YBUS_AC_FAST_DECOUPLED_XB` or `YBUS_AC_FAST_DECOUPLED_BX`. It starts at that method's
+  defaults: tolerance 1e-8, at most 10 Newton or 30 fast-decoupled iterations, and reactive
+  limits ignored.
+  - The setters are `set_method` (which changes only the method), `set_tolerance` (positive and
+    finite), `set_max_iterations` and `set_reactive_limits`.
+  - The reactive limits use MATPOWER's `enforce_q_lims` codes: `YBUS_REACTIVE_LIMITS_IGNORE` 0,
+    `ALL_AT_ONCE` 1 and `ONE_AT_A_TIME` 2.
+
+Every setter has a getter, and a code that isn't one of the setting's is
+`YBUS_ERROR_INVALID_VALUE`.
+
+### Solutions
+
+A solve makes a solution handle, freed with its own `_free`. Its columns are read whole, one
+getter per table, by the case's field codes. The codes are the columns MATPOWER writes each
+result to, so a result reads where MATPOWER would put it:
+
+```c
+ybus_dc_solution *solution;
+ybus_dc_power_flow(case, NULL, &solution);
+ybus_dc_solution_get_bus(solution, YBUS_BUS_VA_DEG, angles, buses);
+ybus_dc_solution_get_branch(solution, YBUS_BRANCH_PF_MW, flows, branches);
+ybus_dc_solution_free(solution);
+```
+
+- **DC:** bus `YBUS_BUS_VA_DEG`, gen `YBUS_GEN_PG_MW`, and branch `YBUS_BRANCH_PF_MW` (14).
+  `ybus_dc_solution_solver` says which factorization solved B′.
+- **AC:** bus `VM_PU` and `VA_DEG`; gen `PG_MW` and `QG_MVAR`; and branch `PF_MW`, `QF_MVAR`,
+  `PT_MW` and `QT_MVAR` (14 to 17).
+  - The scalars are `ybus_ac_solution_iterations`, `_mismatch_pu` and `_full_factorizations`.
+  - `ybus_ac_solution_limited_generators` gives the generator rows held at a reactive limit,
+    numbered from 0. Call it with `NULL, 0` to ask the count.
+- **A code the solution doesn't have** in that table gives `YBUS_ERROR_INVALID_FIELD`.
+
+### Models
+
+A model is built once from a case's network and solves many scenarios of it, giving the same
+result as the power flow of each:
+
+- **`ybus_dc_model_new(case, &model)` and `ybus_dc_model_solve(model, case, options,
+  &solution)`.** The DC model refactors B′ on each solve, as `DcModel::solve` does.
+- **`ybus_ac_model_new(case, &model)` and `ybus_ac_model_solve(model, case, options,
+  &solution)`.** `ybus_ac_model_restamp(model, case)` takes in changed impedances, charging,
+  taps, shifts and shunts.
+
+The case solved can change its injections, setpoints and starting voltages, but not its
+network. A case whose tables' lengths differ is `YBUS_ERROR_CASE_MISMATCH`, and one whose
+topology differs (a bus's label or type, a generator's bus or status, or a branch's ends or
+status) is `YBUS_ERROR_TOPOLOGY_MISMATCH`.
+
 ## ABI policy
 
 - Every symbol is prefixed `ybus_`, and every macro `YBUS_`.
