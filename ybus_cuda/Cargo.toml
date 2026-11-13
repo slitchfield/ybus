@@ -19,3 +19,10 @@ ybus_sparse.workspace = true
 #   crate without the CUDA toolkit and a machine without CUDA finds out when `Gpu::new` runs.
 #   The bindings are CUDA 13.0's, which any CUDA 13 driver serves.
 cudarc = { version = "0.19", default-features = false, features = ["std", "driver", "cusparse", "nvrtc", "dynamic-loading", "cuda-13000"] }
+
+# docs.rs builds the docs for one target: the API is the same on every platform. The crate has
+#   no features; all-features and `--cfg docsrs` are set as in the other published crates.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]

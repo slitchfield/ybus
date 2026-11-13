@@ -204,10 +204,21 @@ and the root README notes the renames once.
       - **The patterns start with `/`,** anchored at the package root. Without the slash,
         `README.md` also matched `tests/data/matpower-reference/README.md`, as a `.gitignore`
         pattern would.
-- [ ] docs.rs: `[package.metadata.docs.rs]` with `all-features = true`, and labels on the
+- [x] docs.rs: `[package.metadata.docs.rs]` with `all-features = true`, and labels on the
       feature-gated items (`rayon`, `serde`, `cuda`), so a reader sees what each one needs.
       These need nightly's `doc_cfg`, behind `--cfg docsrs` so stable builds don't see it. The
       item builds the docs as docs.rs would, `ybus_cuda` included, and fixes what breaks.
+      - **The labels:** nightly's `doc_cfg` labels an item gated directly by `#[cfg(feature)]`
+        on its own, such as `par_solve_outages`, the `Gpu` re-export and `PowerflowError::Gpu`.
+        Items inside a gated private module carry `#[cfg_attr(docsrs, doc(cfg(...)))]`: the
+        `rayon` products and `serde` impls in `ybus_sparse`, and `DcStudy::gpu` and
+        `DcSensitivity::gpu`.
+      - **One target,** `x86_64-unknown-linux-gnu`, since no API differs by platform.
+        `ybus_ipm` and `ybus_cuda` have no features, but carry the same metadata.
+      - **Checked:** `cargo +nightly rustdoc -p <crate> --lib --all-features -- --cfg docsrs
+        -D warnings`, with `DOCS_RS=1`, builds all four with nothing to fix, `ybus_cuda`
+        included, since CUDA is loaded at run time. The generated pages label every gated
+        item. The nightly was rustc 1.102.0-nightly (2026-11-12).
 - [ ] A front page for each crate: crate-level docs with a short example that runs as a doc
       test, and for `ybus_powerflow` and `ybus_ipm` a guide to their modules.
 

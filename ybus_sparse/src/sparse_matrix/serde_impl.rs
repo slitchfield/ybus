@@ -25,6 +25,7 @@ struct DeserializeRepr<T> {
     entries: Vec<(usize, usize, T)>,
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 impl<T: Scalar + Serialize> Serialize for SparseMatrix<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         SerializeRepr {
@@ -35,6 +36,7 @@ impl<T: Scalar + Serialize> Serialize for SparseMatrix<T> {
     }
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 impl<'de, T: Scalar + Deserialize<'de>> Deserialize<'de> for SparseMatrix<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let repr = DeserializeRepr::<T>::deserialize(deserializer)?;

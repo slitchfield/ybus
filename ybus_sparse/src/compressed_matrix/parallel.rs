@@ -27,6 +27,7 @@ fn par_dot<T: Scalar + Send + Sync>(ptr: &[usize], idx: &[usize], data: &[T], x:
         .collect()
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
 impl<T: Scalar + Send + Sync> CsrMatrix<T> {
     /// Parallel version of `mul_vec`: entries of the result, one per row, are computed on
     /// separate threads.
@@ -41,6 +42,7 @@ impl<T: Scalar + Send + Sync> CsrMatrix<T> {
     }
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
 impl<T: Scalar + Send + Sync> CscMatrix<T> {
     /// Parallel version of `vec_mul`: entries of the result, one per column, are computed on
     /// separate threads.
@@ -55,6 +57,7 @@ impl<T: Scalar + Send + Sync> CscMatrix<T> {
     }
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "rayon")))]
 impl<T: Scalar + Send + Sync, O: Orientation> CompressedMatrix<T, O> {
     /// Parallel version of `matmul`: each major index of the product (a row for CSR, a column
     /// for CSC) is built on one thread, with the same stored zeros.

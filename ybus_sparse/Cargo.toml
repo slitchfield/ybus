@@ -30,3 +30,11 @@ rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = "1"
+
+# docs.rs builds the docs with every feature, and with `--cfg docsrs`, under which lib.rs labels
+#   each optional item with the feature it needs. One target is enough: the API is the same on
+#   every platform.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]

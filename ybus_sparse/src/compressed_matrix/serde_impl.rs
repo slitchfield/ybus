@@ -30,6 +30,7 @@ struct DeserializeRepr<T> {
     values: Vec<T>,
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 impl<T: Scalar + Serialize, O: Orientation> Serialize for CompressedMatrix<T, O> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         SerializeRepr {
@@ -43,6 +44,7 @@ impl<T: Scalar + Serialize, O: Orientation> Serialize for CompressedMatrix<T, O>
     }
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
 impl<'de, T: Scalar + Deserialize<'de>, O: Orientation> Deserialize<'de>
     for CompressedMatrix<T, O>
 {

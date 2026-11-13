@@ -17,3 +17,10 @@ include = ["/src/**/*", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/LICEN
 
 [dependencies]
 ybus_sparse.workspace = true
+
+# docs.rs builds the docs for one target: the API is the same on every platform. The crate has
+#   no features; all-features and `--cfg docsrs` are set as in the other published crates.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]

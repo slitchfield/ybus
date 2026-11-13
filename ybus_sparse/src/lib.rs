@@ -10,6 +10,10 @@
 // No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
 //   API
 #![forbid(unsafe_code)]
+// Labels each feature-gated item with the feature it needs, on docs.rs, which builds with
+//   nightly and `--cfg docsrs` ([package.metadata.docs.rs] in Cargo.toml). Items gated directly
+//   are labelled automatically; those inside a gated module carry their own `doc(cfg)`.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod compressed_matrix;
 
