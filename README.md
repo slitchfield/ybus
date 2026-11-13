@@ -93,6 +93,10 @@ Licensed under either of
 at your option. See [`AI-DISCLAIMER.md`](AI-DISCLAIMER.md) for how this licensing relates to the
 use of AI in developing the crate.
 
+`ybus_ipm`'s port of MIPS is also under MIPS's 3-clause BSD license
+([`LICENSE-MIPS`](LICENSE-MIPS) lists the files), so that crate's license is
+`(MIT OR Apache-2.0) AND BSD-3-Clause`.
+
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
 this work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
 any additional terms or conditions.

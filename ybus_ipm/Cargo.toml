@@ -5,7 +5,9 @@ description = "Interior-point solvers for nonlinear programs: a port of MATPOWER
 keywords = ["optimization", "interior-point", "nonlinear", "solver", "matpower"]
 categories = ["mathematics", "science", "algorithms"]
 edition.workspace = true
-license.workspace = true
+# The workspace's license, and MIPS's for the port in src/mips.rs and its tests (LICENSE-MIPS
+#   lists the files)
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
 repository.workspace = true
 rust-version.workspace = true
 

@@ -159,12 +159,18 @@ and the root README notes the renames once.
         `"0.1"`), MSRV 1.87 (now 1.88) and the power flow "being built". Its license links were
         relative too, so six links in all are now absolute.
       - **The READMEs aren't the crate docs yet:** P3 writes those front pages.
-- [ ] License files in each package, the way `ybus_sparse` links `LICENSE-MIT` and
+- [x] License files in each package, the way `ybus_sparse` links `LICENSE-MIT` and
       `LICENSE-APACHE` to the root's.
       - **`ybus_ipm`'s license** becomes `(MIT OR Apache-2.0) AND BSD-3-Clause`, since its MIPS
         port is under MIPS's license. It ships `LICENSE-MIPS`.
       - **`AI-DISCLAIMER.md`** goes in each package too, linked the same way, since the root
         README cites it.
+      - **The links are symlinks,** which `cargo package` stores as the files they point to:
+        each package holds the license texts, not links.
+      - **`deny.toml`** allows BSD-3-Clause for `ybus_ipm` alone, as an exception, since
+        cargo-deny checks the workspace's own crates once they're publishable. A dependency
+        under that license still needs its own decision.
+      - **The root README's license section** gives `ybus_ipm`'s license too.
 
 ## Phase P3: Package contents and docs.rs
 

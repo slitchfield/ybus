@@ -17,6 +17,9 @@ ignore = []
 #   ISC, a permissive license equivalent to MIT, is libloading's only license: cudarc loads the
 #   CUDA libraries through it, for ybus_cuda and ybus_powerflow's optional `cuda` feature.
 allow = ["MIT", "Apache-2.0", "Unicode-3.0", "ISC"]
+# ybus_ipm's own license adds MIPS's 3-clause BSD, for its port of MIPS (LICENSE-MIPS). Allowed
+#   for that crate only, so a dependency under BSD-3-Clause still needs a decision here.
+exceptions = [{ crate = "ybus_ipm", allow = ["BSD-3-Clause"] }]
 confidence-threshold = 0.9
 
 [bans]
