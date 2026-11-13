@@ -67,6 +67,8 @@ one: optimal power flow, interior-point solvers and acceleration.
   power flow libraries, security-constrained OPF, and reading ARPA-E's SC-ACOPF data.
 - [`docs/FfiChecklist.md`](docs/FfiChecklist.md) is the roadmap for the first of those goals: a
   C interface to `powerflow`, then Python and Julia bindings.
+- [`docs/PublishingChecklist.md`](docs/PublishingChecklist.md) is the roadmap to a first release
+  of the Rust crates on crates.io, as the `ybus_` family, with a comparison of release tools.
 - [`docs/BaseFunctionalityChecklist.md`](docs/BaseFunctionalityChecklist.md) is the completed
   checklist of `sparse_mat`'s core functionality.
 - [`docs/benchmarks/`](docs/benchmarks/) records performance baselines, such as the DC power
