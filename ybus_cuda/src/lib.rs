@@ -1,5 +1,35 @@
-//! The GPU path for the power flows, on CUDA through [`cudarc`]: sparse triangular solves with
-//! many right-hand sides against a factorization made on the CPU by [`ybus_sparse`].
+//! **Experimental.** The GPU path for the power flows, on CUDA through [`cudarc`]: sparse
+//! triangular solves with many right-hand sides against a factorization made on the CPU by
+//! [`ybus_sparse`]. The API will change in the 0.x releases. Most users want
+//! `ybus_powerflow`'s `cuda` feature, which drives this crate, rather than the crate itself.
+//!
+//! # Example
+//!
+//! Compiled but not run here, since it needs a GPU:
+//!
+//! ```no_run
+//! use ybus_cuda::{Gpu, GpuFactor};
+//! use ybus_sparse::{CsrMatrix, Factorization, SparseMatrix};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let Some(gpu) = Gpu::new()? else {
+//!     return Ok(()); // no CUDA on this machine
+//! };
+//! let a: CsrMatrix =
+//!     SparseMatrix::from_triplets(2, 2, vec![(0, 0, 4.0), (0, 1, 1.0), (1, 0, 1.0), (1, 1, 3.0)])?
+//!         .to_csr();
+//! let cholesky = a.cholesky()?;
+//! // Upload the factor once, then solve right-hand sides in blocks
+//! let mut factor = GpuFactor::from_cholesky(&gpu, &cholesky)?;
+//! let rhs = vec![vec![1.0, 2.0]; 1000];
+//! let on_gpu = factor.solve_many(&rhs)?;
+//! let on_cpu = cholesky.solve_many(&rhs)?;
+//! assert!((on_gpu[999][1] - on_cpu[999][1]).abs() < 1e-12);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Guide
 //!
 //! - [`Gpu`]: a CUDA device, its stream and a cuSPARSE handle, or `None` on a machine without
 //!   CUDA.
@@ -10,11 +40,20 @@
 //!   solution per column, kept on the device as a [`GpuBlock`] for [`GpuOperator`] products and
 //!   per-column maxima, so only what's asked for is downloaded.
 //!
+//! Results are not bit for bit the CPU's, since the GPU orders its arithmetic differently; they
+//! agree to within rounding.
+//!
+//! # Requirements
+//!
+//! Nothing to build: CUDA is loaded at run time, so the crate builds without the CUDA toolkit.
+//! To run, it needs a CUDA 13 driver, cuSPARSE and NVRTC; without them, [`Gpu::new`] returns
+//! `Ok(None)`.
+//!
+//! # Safety
+//!
 //! With `ybus_ffi`, this is one of the two crates in the workspace with `unsafe` code: cudarc
 //! exposes cuSPARSE only as raw FFI. Each `unsafe` block says why it's sound, and nothing
 //! unsafe crosses the public API.
-//! Results are not bit for bit the CPU's, since the GPU orders its arithmetic differently; they
-//! agree to within rounding.
 
 use std::fmt;
 

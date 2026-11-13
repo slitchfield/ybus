@@ -1,11 +1,57 @@
-//! A sparse matrix library.
+//! Sparse matrices: assembly, products, factorizations and solvers, and Matrix Market I/O,
+//! generic over the element type (`f64`, `f32`, integers, [`Complex`]).
 //!
-//! [`sparse_matrix::SparseMatrix`] builds and edits a matrix, and
-//! [`compressed_matrix::CompressedMatrix`] (as `CsrMatrix` or `CscMatrix`) does the numerical
-//! work; [`sparse_error::SparseError`] is the error type. Every factorization's solves come
-//! from one trait, [`Factorization`]. All four, and the `CsrMatrix` and `CscMatrix` aliases,
-//! are re-exported here, so `use ybus_sparse::{CsrMatrix, Factorization, SparseError}` reaches
-//! them.
+//! # Example
+//!
+//! ```
+//! use ybus_sparse::{CsrMatrix, Factorization, SparseError, SparseMatrix};
+//!
+//! # fn main() -> Result<(), SparseError> {
+//! // Assemble from (row, col, value) triplets; entries at the same position are summed
+//! let a: CsrMatrix = SparseMatrix::from_triplets(
+//!     3,
+//!     3,
+//!     vec![
+//!         (0, 0, 2.0), (0, 1, -1.0),
+//!         (1, 0, -1.0), (1, 1, 2.0), (1, 2, -1.0),
+//!         (2, 1, -1.0), (2, 2, 2.0),
+//!     ],
+//! )?
+//! .to_csr();
+//! // Factor once, then solve
+//! let cholesky = a.cholesky()?;
+//! let x = cholesky.solve(&[1.0, 0.0, 1.0])?;
+//! assert!(x.iter().all(|x| (x - 1.0).abs() < 1e-12));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Guide
+//!
+//! - **Building:** [`SparseMatrix`] builds and edits a matrix. Its entries live in a hash map,
+//!   so inserting, removing and looking up single entries is cheap. It reads and writes Matrix
+//!   Market files ([`SparseMatrix::read_matrix_market`]).
+//! - **Numerical work:** a [`CompressedMatrix`], as a [`CsrMatrix`] or a [`CscMatrix`], with
+//!   the orientation in the type ([`compressed_matrix`]). Its pattern is fixed when it's
+//!   built, so values can be refilled without changing its structure. It has the products,
+//!   norms, selections and arithmetic, and the solvers:
+//!   - LU with threshold partial pivoting ([`CscMatrix::lu`], or [`CscMatrix::solve`] for one
+//!     solve)
+//!   - Cholesky for symmetric positive definite matrices ([`CsrMatrix::cholesky`])
+//!   - LDLᵀ with Bunch–Kaufman pivoting for symmetric indefinite ones ([`CsrMatrix::ldlt`])
+//!   - conjugate gradient ([`CompressedMatrix::conjugate_gradient`])
+//! - **Solves:** every factorization's come from one trait, [`Factorization`]: one or many
+//!   right-hand sides, sparse right-hand sides, and refinement.
+//! - **Errors:** every fallible operation returns a [`SparseError`].
+//!
+//! # Features
+//!
+//! - `serde`: `Serialize` and `Deserialize` for both matrix types.
+//! - `rayon`: parallel products, prefixed `par_`, whose results are bit for bit the
+//!   sequential versions'.
+//!
+//! See the [README](https://crates.io/crates/ybus_sparse) for a longer tour, and the
+//! [repository](https://github.com/slitchfield/ybus) for the rest of the `ybus` workspace.
 
 // No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
 //   API

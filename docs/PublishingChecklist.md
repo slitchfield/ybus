@@ -219,8 +219,17 @@ and the root README notes the renames once.
         -D warnings`, with `DOCS_RS=1`, builds all four with nothing to fix, `ybus_cuda`
         included, since CUDA is loaded at run time. The generated pages label every gated
         item. The nightly was rustc 1.102.0-nightly (2026-11-12).
-- [ ] A front page for each crate: crate-level docs with a short example that runs as a doc
+- [x] A front page for each crate: crate-level docs with a short example that runs as a doc
       test, and for `ybus_powerflow` and `ybus_ipm` a guide to their modules.
+      - **Each front page** has an example, then a guide. `ybus_sparse` also lists its
+        features, `ybus_ipm` says which solver to choose, and `ybus_powerflow` says where to
+        start: one solve, or a model kept for many.
+      - **The examples are shorter than the READMEs':** a two-bus case for `ybus_powerflow`,
+        and a bounded QP whose multiplier is checked for `ybus_ipm`.
+      - **`ybus_cuda`'s example is `no_run`,** like its README's.
+      - **The roadmap mentions are now links,** so they resolve on docs.rs.
+      - **Checked:** each crate's docs build on stable with `-D warnings` and on nightly as
+        docs.rs builds them, and every example passes as a doc test.
 
 ## Phase P4: Release checks in CI
 
