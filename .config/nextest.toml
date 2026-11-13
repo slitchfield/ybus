@@ -1,0 +1,14 @@
+# cargo-nextest's configuration, for check.sh's test passes. nextest runs every test in its own
+#   process and runs tests from different binaries at the same time, which is where check.sh
+#   saves its time: the slow case sweeps in ybus_powerflow's test binaries no longer wait for
+#   each other.
+
+# The GPU tests, one at a time. Under nextest, tests from all four binaries would otherwise
+#   share the GPU at once, and concurrent GPU work has crashed WSL on the maintainer's machine.
+#   They skip on a machine without CUDA, so the group costs nothing there.
+[test-groups]
+gpu = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "binary(gpu_factor_test) | binary(gpu_pairs_test) | binary(cuda_dc_test) | binary(cuda_factor_test)"
+test-group = "gpu"

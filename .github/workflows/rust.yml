@@ -39,12 +39,17 @@ jobs:
       #   version in sync with ybus_ffi/generate-header.sh; rust-cache keeps the binary between
       #   runs, and cargo install exits early when it's already installed.
       - run: cargo install cbindgen --version 0.29.4 --locked
+      # The test runner check.sh uses, which runs tests from different binaries at the same time.
+      #   Keep the version in sync with check.sh's message; it's kept between runs the same way.
+      - run: cargo install cargo-nextest --version 0.9.151 --locked
       - run: ./check.sh
         env:
           # Fail, rather than skip, any test whose MATPOWER case is missing
           YBUS_REQUIRE_CASES: "1"
           # Fail, rather than skip, the header check if cbindgen is missing
           YBUS_REQUIRE_CBINDGEN: "1"
+          # Fail, rather than fall back to cargo test, if cargo-nextest is missing
+          YBUS_REQUIRE_NEXTEST: "1"
 
   msrv:
     name: MSRV

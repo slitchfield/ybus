@@ -19,7 +19,25 @@ fi
 # The C library's exports against the committed record, ybus_ffi/symbols.txt, and the header
 ybus_ffi/check-symbols.sh
 cargo clippy --workspace --all-targets --all-features --  -D warnings -W clippy::all
-cargo test --workspace --all-targets
+# The test passes run through cargo-nextest when it's installed. It runs tests from different
+#   binaries at the same time, so the slow case sweeps in ybus_powerflow's test binaries don't wait
+#   for each other; .config/nextest.toml keeps the GPU tests to one at a time. Without it, cargo
+#   test runs the same tests a binary at a time, and YBUS_REQUIRE_NEXTEST=1 (set in CI) makes
+#   that a failure instead. nextest doesn't run doc tests, which have their own pass at the end.
+if command -v cargo-nextest >/dev/null; then
+    run_tests() {
+        cargo nextest run "$@"
+    }
+elif [ "${YBUS_REQUIRE_NEXTEST:-}" = 1 ]; then
+    echo "cargo-nextest isn't installed: cargo install cargo-nextest --version 0.9.151 --locked" >&2
+    exit 1
+else
+    echo "cargo-nextest isn't installed: cargo test runs the tests, a binary at a time"
+    run_tests() {
+        cargo test "$@"
+    }
+fi
+run_tests --workspace --all-targets
 # The C tests, against the generated header and the static library; once, since the C build has
 #   only ybus_powerflow's default features, then again under AddressSanitizer and
 #   UndefinedBehaviorSanitizer, so a leaked or doubly freed handle fails the build
@@ -29,7 +47,7 @@ ybus_ffi/tests/c/run.sh --sanitize
 #   test runs, one iteration each, take seconds in debug builds and don't depend on the
 #   features, and the clippy runs still build them with every feature set.
 targets=(--lib --bins --tests --examples)
-cargo test --workspace "${targets[@]}" --all-features
+run_tests --workspace "${targets[@]}" --all-features
 # The API docs, with broken intra-doc links as errors: by default, with every feature, and (in
 #   the loop below) with each feature on its own, since a link to an item behind a feature
 #   breaks only in the builds without it
@@ -62,7 +80,7 @@ for feature in ybus_sparse/serde ybus_sparse/rayon ybus_powerflow/rayon ybus_pow
         packages+=(-p "$package")
     done
     cargo clippy --workspace --all-targets --features "$feature" -- -D warnings -W clippy::all
-    cargo test "${packages[@]}" "${targets[@]}" --features "$feature"
+    run_tests "${packages[@]}" "${targets[@]}" --features "$feature"
     doc --features "$feature"
 done
 cargo test --workspace --doc
