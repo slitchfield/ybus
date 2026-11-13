@@ -43,9 +43,26 @@ doc --all-features
 #   ybus_sparse/Cargo.toml and ybus_powerflow/Cargo.toml. The workspace root has no features of its
 #   own, so each one is named with its crate. The GPU tests skip on a machine without CUDA;
 #   YBUS_REQUIRE_CUDA=1 makes that a failure instead.
+#
+# Clippy and the docs cover the whole workspace under each feature, but the tests run only in the
+#   crates whose behaviour the feature can change: each feature adds items (par_ functions, serde
+#   impls, the GPU path) without changing a default code path, so the other crates' tests would
+#   repeat the default pass exactly. ybus_powerflow's cuda adds a PowerflowError variant, which
+#   ybus_ffi maps to a status code, so ybus_ffi is tested under it too. A feature that changes
+#   other crates' behaviour needs its crates added here.
+declare -A tested=(
+    [ybus_sparse/serde]="ybus_sparse"
+    [ybus_sparse/rayon]="ybus_sparse"
+    [ybus_powerflow/rayon]="ybus_powerflow"
+    [ybus_powerflow/cuda]="ybus_powerflow ybus_cuda ybus_ffi"
+)
 for feature in ybus_sparse/serde ybus_sparse/rayon ybus_powerflow/rayon ybus_powerflow/cuda; do
+    packages=()
+    for package in ${tested[$feature]}; do
+        packages+=(-p "$package")
+    done
     cargo clippy --workspace --all-targets --features "$feature" -- -D warnings -W clippy::all
-    cargo test --workspace "${targets[@]}" --features "$feature"
+    cargo test "${packages[@]}" "${targets[@]}" --features "$feature"
     doc --features "$feature"
 done
 cargo test --workspace --doc
