@@ -31,8 +31,8 @@
 //! The functions panic if the matrices, voltages and weights don't agree in size: `C` and `Y`
 //! must both be `rows × nb`, with one voltage per bus and one weight per row.
 
-use sparse_mat::compressed_matrix::CsrMatrix;
-use sparse_mat::Complex;
+use ybus_sparse::compressed_matrix::CsrMatrix;
+use ybus_sparse::Complex;
 
 type C64 = Complex<f64>;
 

@@ -7,7 +7,7 @@ use common::ac_fixture::{ac_fixture, AcBranch as L, AcBus as B, AcGen as G};
 use powerflow::ac::AcModel;
 use powerflow::case::{BusType, Case};
 use powerflow::powerflow_error::PowerflowError;
-use sparse_mat::Complex;
+use ybus_sparse::Complex;
 
 use std::f64::consts::PI;
 

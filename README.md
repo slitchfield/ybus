@@ -5,16 +5,20 @@ with four crates:
 
 | Crate | Status | Contents |
 |---|---|---|
-| [`sparse_mat`](sparse_mat/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM, COLAMD), sparse Cholesky and LU (complex too, with refactoring, sparse right-hand sides and transposed solves), iterative refinement and condition estimates, conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
-| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `sparse_mat`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. It also lists a network's islands and bridges, computes PTDF and LODF from a kept factorization of B′, as MATPOWER does, and solves branch outages by rank-k updates of that factorization, matching a refactored solve, optionally in parallel (`rayon`). Also the optimal power flow, DC and AC, solved by `interior_point`'s MIPS, which matches MATPOWER's `rundcopf` and `runopf` on their reference cases, in the same number of iterations; over every case with costs, recorded in [`docs/benchmarks/`](docs/benchmarks/), it ends as MATPOWER does on every AC case and all but one DC case. |
-| [`interior_point`](interior_point/) | In progress | Interior-point solvers on top of `sparse_mat`. Done: MIPS, MATPOWER's primal-dual interior-point solver, reimplemented step for step from `mips.m`, with its quadratic-program wrapper. On the problems of MATPOWER's MIPS tests, it ends as MATPOWER does in the same number of iterations, and its results agree within 1.0e-13. |
-| [`ybus_cuda`](ybus_cuda/) | Experimental | The GPU path, on CUDA through `cudarc`, for phase O2's CUDA spike: a `sparse_mat` Cholesky or LU factorization uploaded once and solved for blocks of many right-hand sides by cuSPARSE, agreeing with the CPU to within rounding. Needs a CUDA 13 driver and cuSPARSE at run time, not to build. With `ybus_ffi`, one of the two crates with `unsafe` code; the others forbid it. |
+| [`ybus_sparse`](ybus_sparse/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM, COLAMD), sparse Cholesky and LU (complex too, with refactoring, sparse right-hand sides and transposed solves), iterative refinement and condition estimates, conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
+| [`powerflow`](powerflow/) | In progress | DC and AC power flow on top of `ybus_sparse`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. It also lists a network's islands and bridges, computes PTDF and LODF from a kept factorization of B′, as MATPOWER does, and solves branch outages by rank-k updates of that factorization, matching a refactored solve, optionally in parallel (`rayon`). Also the optimal power flow, DC and AC, solved by `interior_point`'s MIPS, which matches MATPOWER's `rundcopf` and `runopf` on their reference cases, in the same number of iterations; over every case with costs, recorded in [`docs/benchmarks/`](docs/benchmarks/), it ends as MATPOWER does on every AC case and all but one DC case. |
+| [`interior_point`](interior_point/) | In progress | Interior-point solvers on top of `ybus_sparse`. Done: MIPS, MATPOWER's primal-dual interior-point solver, reimplemented step for step from `mips.m`, with its quadratic-program wrapper. On the problems of MATPOWER's MIPS tests, it ends as MATPOWER does in the same number of iterations, and its results agree within 1.0e-13. |
+| [`ybus_cuda`](ybus_cuda/) | Experimental | The GPU path, on CUDA through `cudarc`, for phase O2's CUDA spike: a `ybus_sparse` Cholesky or LU factorization uploaded once and solved for blocks of many right-hand sides by cuSPARSE, agreeing with the CPU to within rounding. Needs a CUDA 13 driver and cuSPARSE at run time, not to build. With `ybus_ffi`, one of the two crates with `unsafe` code; the others forbid it. |
 | [`ybus_ffi`](ybus_ffi/) | In progress | The C interface to `powerflow`, built as the `ybus` library with a header generated by cbindgen, following [`docs/FfiChecklist.md`](docs/FfiChecklist.md). Done: the crate and its version, the generated header (checked in CI), a C test harness, the guard that turns failures and panics into status codes, a code for each `PowerflowError`, each thread's last error message, and cases: loaded from a file or bytes, their sizes and scalars, every column read and set by field code, bus names, and costs; and the DC and AC power flows, with their options, solutions read by the case's field codes, and models solved for many scenarios; and the DC and AC optimal power flows, with options for either solver, and their prices and multipliers at MATPOWER's columns; with the C tests also run under ASan and UBSan, a C example, a checked record of the exports, and the boundary's cost measured, at most 0.03% of a solve. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
 formulation is built around.
 
-See [`sparse_mat/README.md`](sparse_mat/README.md) for the matrix library's quick start and
+**Renamed for publishing** ([`docs/PublishingChecklist.md`](docs/PublishingChecklist.md), phase
+P1): `sparse_mat` is now `ybus_sparse`. The finished roadmaps and the dated benchmark records
+keep the names they were written with.
+
+See [`ybus_sparse/README.md`](ybus_sparse/README.md) for the matrix library's quick start and
 API overview, [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for the completed power
 flow roadmap, and [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md) for the next
 one: optimal power flow, interior-point solvers and acceleration.
@@ -25,7 +29,7 @@ one: optimal power flow, interior-point solvers and acceleration.
   job.
 - **`./check.sh`:** runs everything the Check CI job runs, over the whole workspace: fmt,
   clippy with `-D warnings`, and the tests with no features, all features and each optional
-  feature alone, plus doc tests (including the `sparse_mat` README's example).
+  feature alone, plus doc tests (including the `ybus_sparse` README's example).
   The benchmarks run once, as tests, in the first of those passes only.
 - **Dependencies:** `cargo deny --all-features check` checks advisories, licenses, banned
   crates and sources against `deny.toml`. The Dependencies CI job runs it.
@@ -70,7 +74,7 @@ one: optimal power flow, interior-point solvers and acceleration.
 - [`docs/PublishingChecklist.md`](docs/PublishingChecklist.md) is the roadmap to a first release
   of the Rust crates on crates.io, as the `ybus_` family, with a comparison of release tools.
 - [`docs/BaseFunctionalityChecklist.md`](docs/BaseFunctionalityChecklist.md) is the completed
-  checklist of `sparse_mat`'s core functionality.
+  checklist of `ybus_sparse`'s core functionality.
 - [`docs/benchmarks/`](docs/benchmarks/) records performance baselines, such as the DC power
   flow on every MATPOWER case.
 - [`AI-DISCLAIMER.md`](AI-DISCLAIMER.md) describes how AI was used to build this repository and
@@ -94,7 +98,7 @@ any additional terms or conditions.
 
 ## References
 
-The sparse matrix algorithms in `sparse_mat` were written from the standard published
+The sparse matrix algorithms in `ybus_sparse` were written from the standard published
 descriptions below; no source code from other libraries was copied or ported.
 
 `powerflow` reproduces MATPOWER's behaviour, so that its results can be checked against
@@ -142,7 +146,7 @@ differently from the legacy `pfsoln` in 10 cases
 
 ### Implemented
 
-| Where (in `sparse_mat` unless a crate is named) | Algorithm | Reference |
+| Where (in `ybus_sparse` unless a crate is named) | Algorithm | Reference |
 |---|---|---|
 | `solve_lower_triangular`, `solve_upper_triangular`, `Lu::solve`, `Lu::determinant` | Forward and back substitution; LU factorization with partial pivoting | G. H. Golub and C. F. Van Loan, *Matrix Computations*, 4th ed., Johns Hopkins University Press, 2013, ch. 3. |
 | `lu`, `analyze_lu`, `SymbolicLu::factor` | Left-looking sparse LU: a depth-first search for each column's reach, then a sparse triangular solve, with threshold partial pivoting | J. R. Gilbert and T. Peierls, "Sparse partial pivoting in time proportional to arithmetic operations," *SIAM J. Sci. Stat. Comput.* 9(5):862–874, 1988. [doi:10.1137/0909058](https://doi.org/10.1137/0909058) |

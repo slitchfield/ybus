@@ -6,9 +6,9 @@
 mod common;
 
 use common::{gpu, random_spd, random_square, Lcg};
-use sparse_mat::compressed_matrix::{Cholesky, CsrMatrix, Lu};
-use sparse_mat::Factorization;
 use ybus_cuda::{ColumnMax, GpuFactor, Pair, PairUpdate};
+use ybus_sparse::compressed_matrix::{Cholesky, CsrMatrix, Lu};
+use ybus_sparse::Factorization;
 
 const BAR: f64 = 1e-12;
 
@@ -262,7 +262,7 @@ fn a_single_row_factor_keeps_its_blocks_narrow() {
         return;
     };
     // cuSPARSE 12.8's SpSM is wrong for a 1×1 matrix with more than 64 columns
-    let lu = sparse_mat::compressed_matrix::CscMatrix::from_triplets(1, 1, vec![(0, 0, 4.0)])
+    let lu = ybus_sparse::compressed_matrix::CscMatrix::from_triplets(1, 1, vec![(0, 0, 4.0)])
         .unwrap()
         .lu()
         .unwrap();

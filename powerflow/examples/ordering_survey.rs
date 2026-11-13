@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use powerflow::ac::AcModel;
 use powerflow::case::Case;
 use powerflow::dc::DcModel;
-use sparse_mat::compressed_matrix::{CscMatrix, LuOptions, Ordering};
-use sparse_mat::Complex;
+use ybus_sparse::compressed_matrix::{CscMatrix, LuOptions, Ordering};
+use ybus_sparse::Complex;
 
 /// For the Jacobian (`jacobian_*`) and B′ (`bprime_*`): the dimension and stored entries, then
 /// for each ordering the LU's stored entries (L and U, the diagonal counted once) and the

@@ -26,8 +26,8 @@
 //! - **Pass multiples of the block width.** A block always solves its full width, so a call
 //!   with fewer items than `block_width()` (or a remainder) pays for the padding.
 
-use sparse_mat::compressed_matrix::CsrMatrix;
 use ybus_cuda::{CudaError, Gpu, GpuFactor, GpuOperator, Pair, PairUpdate};
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use super::reach::ReachScratch;
 use super::{DcModel, DcSensitivity, DcSolution, DcStudy, Factor};

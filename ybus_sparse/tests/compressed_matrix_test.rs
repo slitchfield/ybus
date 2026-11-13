@@ -1,9 +1,9 @@
 // Tests for CompressedMatrix (CsrMatrix and CscMatrix): construction, validation, the fixed
 //   pattern and its stored zeros, transposing and reorienting, equality and formatting.
 
-use sparse_mat::compressed_matrix::{CompressedMatrix, CscMatrix, CsrMatrix};
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::sparse_matrix::SparseMatrix;
+use ybus_sparse::compressed_matrix::{CompressedMatrix, CscMatrix, CsrMatrix};
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::sparse_matrix::SparseMatrix;
 
 /// [[1, 0, 2], [0, 0, 3]]
 fn sample() -> SparseMatrix<f64> {
@@ -1176,7 +1176,7 @@ fn permute_errors() {
 
 // Arithmetic, block construction and complex parts
 
-use sparse_mat::Complex;
+use ybus_sparse::Complex;
 
 fn sample_2x2() -> CsrMatrix<f64> {
     CsrMatrix::from_dense(&[[1.0, 2.0], [0.0, 3.0]]).unwrap()
@@ -1703,7 +1703,7 @@ fn bits(values: &[f64]) -> Vec<u64> {
 }
 
 /// Checks that `matrix` holds exactly the arrays `from_triplets` builds from `triplets`.
-fn assert_same_arrays<O: sparse_mat::compressed_matrix::Orientation>(
+fn assert_same_arrays<O: ybus_sparse::compressed_matrix::Orientation>(
     matrix: &CompressedMatrix<f64, O>,
     triplets: &[(usize, usize, f64)],
 ) {
@@ -1714,7 +1714,7 @@ fn assert_same_arrays<O: sparse_mat::compressed_matrix::Orientation>(
     assert_eq!(bits(matrix.values()), bits(fresh.values()));
 }
 
-fn refills_match_from_triplets<O: sparse_mat::compressed_matrix::Orientation>() {
+fn refills_match_from_triplets<O: ybus_sparse::compressed_matrix::Orientation>() {
     let (rows, cols) = (13, 9);
     let triplets = random_triplets(rows, cols, 200, 1, 2);
     let (mut matrix, map) =
@@ -1738,8 +1738,8 @@ fn refills_match_from_triplets<O: sparse_mat::compressed_matrix::Orientation>() 
 
 #[test]
 fn refills_match_from_triplets_bit_for_bit() {
-    refills_match_from_triplets::<sparse_mat::compressed_matrix::Csr>();
-    refills_match_from_triplets::<sparse_mat::compressed_matrix::Csc>();
+    refills_match_from_triplets::<ybus_sparse::compressed_matrix::Csr>();
+    refills_match_from_triplets::<ybus_sparse::compressed_matrix::Csc>();
 }
 
 #[test]

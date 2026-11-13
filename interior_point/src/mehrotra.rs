@@ -82,10 +82,10 @@
 //! - It converges by MIPS's four measures, defined alike, with the bounds' slacks and
 //!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
 
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use crate::interior_point_error::InteriorPointError;
-use sparse_mat::compressed_matrix::Inertia;
+use ybus_sparse::compressed_matrix::Inertia;
 
 use crate::kkt::{KktFactorization, KktSolver};
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};

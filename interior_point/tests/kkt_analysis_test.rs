@@ -5,7 +5,7 @@
 use interior_point::mehrotra::{mehrotra, MehrotraOptions};
 use interior_point::mips::{mips, MipsOptions};
 use interior_point::problem::{Constraints, Problem};
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 /// min (x₁ − 3)² + (x₂ − 3)² subject to x ≤ 2, whose optimum is (2, 2) with upper multipliers 2.
 /// Its Hessian is 2I, but once x₁ passes 1.5 it also stores its off-diagonal zeros, so the KKT

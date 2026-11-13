@@ -1,6 +1,6 @@
 #![cfg(feature = "serde")]
 
-use sparse_mat::sparse_matrix::SparseMatrix;
+use ybus_sparse::sparse_matrix::SparseMatrix;
 
 #[test]
 fn serde_json_format_and_round_trip() {
@@ -44,7 +44,7 @@ fn serde_deserialize_validates_entries() {
 
 #[test]
 fn compressed_round_trips_with_its_arrays_and_stored_zeros() {
-    use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
+    use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix};
 
     let csr = CsrMatrix::from_triplets(2, 3, vec![(1, 0, 2.0), (0, 2, 1.5), (0, 1, 0.0)]).unwrap();
     let json = serde_json::to_string(&csr).unwrap();
@@ -63,7 +63,7 @@ fn compressed_round_trips_with_its_arrays_and_stored_zeros() {
 
 #[test]
 fn compressed_deserialize_validates_arrays_and_orientation() {
-    use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
+    use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix};
 
     let csr =
         r#"{"shape":[1,1],"orientation":"CSR","pointers":[0,1],"indices":[0],"values":[1.0]}"#;

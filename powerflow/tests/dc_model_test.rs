@@ -1,7 +1,7 @@
 // Tests for the DC model (Bbus assembly): matrices, phase-shifter injections, which elements
 //   are dropped, bus roles and the errors. Expected values are worked out by hand.
 
-use sparse_mat::Factorization;
+use ybus_sparse::Factorization;
 mod common;
 use common::dc_fixture::{fixture, B, G, L};
 use powerflow::dc::DcModel;
@@ -279,8 +279,8 @@ fn an_edited_case_is_validated() {
 #[test]
 fn sparse_solves_on_case118s_b_prime_match_dense_ones() {
     use powerflow::case::Case;
-    use sparse_mat::compressed_matrix::Ordering;
-    use sparse_mat::sparse_matrix::SparseVector;
+    use ybus_sparse::compressed_matrix::Ordering;
+    use ybus_sparse::sparse_matrix::SparseVector;
 
     let Some(path) = common::matpower_case("case118") else {
         return; // not fetched; the skip was reported on stderr

@@ -4,13 +4,13 @@
 //   delayed pivots, against the Cholesky on positive definite matrices, complex Hermitian, its
 //   refinement, and its errors.
 
-use sparse_mat::compressed_matrix::experimental::DenseLdlt;
-use sparse_mat::compressed_matrix::{
+use ybus_sparse::compressed_matrix::experimental::DenseLdlt;
+use ybus_sparse::compressed_matrix::{
     Amalgamation, CsrMatrix, Inertia, LdltOptions, Ordering, SymbolicLdlt,
 };
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 type C = Complex<f64>;
 
@@ -472,7 +472,7 @@ fn a_threshold_above_one_half_is_refused() {
 /// Everything a factorization reports, to compare two bit for bit: the solve of a fixed
 /// right-hand side, the inertia and the counts
 fn fingerprint(
-    f: &sparse_mat::compressed_matrix::Ldlt<f64>,
+    f: &ybus_sparse::compressed_matrix::Ldlt<f64>,
     n: usize,
 ) -> (Vec<u64>, Inertia, usize, usize, usize) {
     let b = right_hand_side(n, 99);

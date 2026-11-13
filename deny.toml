@@ -24,7 +24,7 @@ confidence-threshold = 0.9
 multiple-versions = "warn"
 wildcards = "deny"
 # Except path dependencies between workspace crates in unpublished (publish = false) crates,
-#   such as powerflow's on sparse_mat. A published crate still needs a version on them.
+#   such as powerflow's on ybus_sparse. A published crate still needs a version on them.
 allow-wildcard-paths = true
 
 [sources]

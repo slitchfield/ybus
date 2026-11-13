@@ -5,8 +5,8 @@ mod common;
 use common::ac_fixture::{ac_fixture, AcBranch as L, AcBus as B, AcGen as G};
 use powerflow::ac::{AcModel, AcOptions};
 use powerflow::case::Case;
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
-use sparse_mat::Complex;
+use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix};
+use ybus_sparse::Complex;
 
 use std::f64::consts::PI;
 

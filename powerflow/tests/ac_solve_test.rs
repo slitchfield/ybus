@@ -8,7 +8,7 @@ use common::reference::{ac_deviation, committed_dir, read_ac};
 use powerflow::ac::{ac_power_flow, AcModel, AcOptions, AcSolution};
 use powerflow::case::{BusType, Case};
 use powerflow::powerflow_error::PowerflowError;
-use sparse_mat::Complex;
+use ybus_sparse::Complex;
 
 use std::collections::HashMap;
 use std::f64::consts::PI;

@@ -10,10 +10,10 @@ mod common;
 use powerflow::ac::AcModel;
 use powerflow::case::Case;
 use powerflow::dc::DcModel;
-use sparse_mat::compressed_matrix::{CsrMatrix, LuOptions, Ordering};
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
 use ybus_cuda::{Gpu, GpuFactor};
+use ybus_sparse::compressed_matrix::{CsrMatrix, LuOptions, Ordering};
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 const CASES: &[&str] = &["case14", "case118", "case2383wp"];
 

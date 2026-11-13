@@ -2,8 +2,8 @@
 //! right-hand sides, and the comparison with the CPU.
 #![allow(dead_code)]
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
 use ybus_cuda::Gpu;
+use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix};
 
 /// The GPU, or `None` (after printing why) where the test should skip
 pub fn gpu(test: &str) -> Option<Gpu> {

@@ -1,10 +1,10 @@
 // Tests for Phase 5's accuracy tools: Lu::solve_transpose, iterative refinement (solve_refined)
 //   and the 1-norm condition estimate, against dense computations.
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering};
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
+use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering};
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 /// Deterministic pseudo-random numbers (a linear congruential generator).
 struct Lcg(u64);

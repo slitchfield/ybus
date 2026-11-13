@@ -2,7 +2,7 @@
 //! model, built once from a case and solved for many scenarios.
 
 use powerflow::dc::{dc_power_flow_with_options, DcModel, DcOptions, DcSolution, DcSolver};
-use sparse_mat::compressed_matrix::Ordering;
+use ybus_sparse::compressed_matrix::Ordering;
 
 use crate::boundary::{arg_mut, arg_ref, free_handle, get_value, guard, new_handle, Failure};
 use crate::case::columns::{ybus_field, YBUS_BRANCH_PF_MW, YBUS_BUS_VA_DEG, YBUS_GEN_PG_MW};

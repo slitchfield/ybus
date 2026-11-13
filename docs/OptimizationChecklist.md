@@ -29,7 +29,7 @@ Set with the maintainer on 2026-11-03:
 - one commit per checklist item, on `dev/` branches, with an uncommitted report as each PR's
   description and figures taken from git and the test runner
 - MATPOWER's BSD-licensed source may be consulted for the OPF formulation and MIPS, and the
-  README names the files consulted; `sparse_mat` and the phase O3 solver are written from
+  README names the files consulted; `ybus_sparse` and the phase O3 solver are written from
   published descriptions only
 - MATPOWER's results committed only for case14, case30 and case118 (public-source cases), and
   generated locally for the rest, one case per process under an address-space limit
@@ -63,7 +63,7 @@ Facts checked when this roadmap was written (2026-11-03):
 - **Hardware:** an NVIDIA RTX 4070 Ti SUPER (16 GB, compute capability 8.9), visible through WSL's
   `libcuda`. The CUDA toolkit isn't installed, so cuSPARSE and cuSOLVER aren't available until it
   is.
-- **In `sparse_mat`:** LU with refactoring and a given ordering, sparse right-hand sides,
+- **In `ybus_sparse`:** LU with refactoring and a given ordering, sparse right-hand sides,
   transposed solves, iterative refinement, condition estimates and parallel batch solves, all of
   which the KKT systems of an interior-point method can use.
 
@@ -73,7 +73,7 @@ Facts checked when this roadmap was written (2026-11-03):
       come first, and the acceptance bar.
       Decided (2026-11-03):
       - **The solver** goes in a new workspace crate, `interior_point`: MIPS now, the phase O3
-        solver later, behind one problem interface. It depends on `sparse_mat`; `powerflow`,
+        solver later, behind one problem interface. It depends on `ybus_sparse`; `powerflow`,
         which holds the OPF formulation, depends on it.
       - **The reference is MATPOWER's default code.** Measured on case9, case14, case30, case118,
         case300 and case2383wp, AC and DC: MP-Core and the legacy code take the same iteration
@@ -110,7 +110,7 @@ Facts checked when this roadmap was written (2026-11-03):
       problems of `t_mips.m` and `t_qps_mips.m` with MATPOWER's tolerances and iteration counts.
       - **`interior_point::mips::mips` and `qps_mips`,** following `mips.m` step by step: the
         bounds and linear constraints split into equalities and one- or two-sided inequalities,
-        the starting slacks and multipliers, the reduced KKT system solved with `sparse_mat`'s
+        the starting slacks and multipliers, the reduced KKT system solved with `ybus_sparse`'s
         LU, ordered by AMD and by COLAMD since PR 2 (where MATLAB uses its backslash; a singular
         system counts as MIPS's numerical failure, as MATLAB's NaN does), step control, the step
         lengths, the barrier
@@ -311,7 +311,7 @@ with legacy results generated locally to explain differences.
       - [x] **N-1 outages without per-outage allocation** (target 1;
         [`dc-contingency-allocation-2026-11-04.md`](benchmarks/dc-contingency-allocation-2026-11-04.md)):
         - **Changes:** reachability from a bridge forest built once per model, instead of an
-          adjacency rebuilt and searched per outage; `sparse_mat`'s `solve_sparse_into` with a
+          adjacency rebuilt and searched per outage; `ybus_sparse`'s `solve_sparse_into` with a
           reusable `SparseSolveWorkspace`; per-thread outage workspaces; and `finish` computing
           flows into the result and `Bbus θ` only at the reference buses.
         - **Results:** bit for bit the same. All outages of all cases take 4.5× less time
@@ -529,7 +529,7 @@ with legacy results generated locally to explain differences.
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
-      fixed; a symmetric indefinite LDLᵀ factorization in `sparse_mat`, with Bunch–Kaufman-style
+      fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
       augmented KKT systems.
       - [x] **The analysis kept while the pattern holds** (target 1;
@@ -555,7 +555,7 @@ with legacy results generated locally to explain differences.
           - **The inertia** comes from D's signs.
           - **Bunch–Kaufman** stays a possible follow-up if the numbers call for it.
         - **Three PRs:**
-          - [x] **The factorization in `sparse_mat`:** `SymbolicCholesky::factor_ldlt` and
+          - [x] **The factorization in `ybus_sparse`:** `SymbolicCholesky::factor_ldlt` and
             `CsrMatrix::ldlt` give `Ldlt`, with its solves and `inertia()`. It's Davis's
             up-looking LDLᵀ on the Cholesky's exact pattern.
             - **Tested:** against the Cholesky on SPD matrices, against a known D (L₀ D₀ L₀ᵀ),
@@ -563,7 +563,7 @@ with legacy results generated locally to explain differences.
               that needs pivoting.
             - **Accuracy:** it degrades as 1/δ with the regularization (about 3e-10 at
               δ = 1e-8).
-          - [x] **The tools from the static-pivot attempt in the solvers,** kept in `sparse_mat`:
+          - [x] **The tools from the static-pivot attempt in the solvers,** kept in `ybus_sparse`:
             `CsrMatrix::symmetric_scaling` (Ruiz), `SymbolicCholesky::factor_ldlt_replacing`
             (tiny pivots replaced with their block's sign), and `Ldlt::solve_refined` and
             `Ldlt::solve_refined_normwise`.

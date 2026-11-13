@@ -19,8 +19,8 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
-use sparse_mat::compressed_matrix::Ordering;
-use sparse_mat::sparse_matrix::SparseVector;
+use ybus_sparse::compressed_matrix::Ordering;
+use ybus_sparse::sparse_matrix::SparseVector;
 
 use super::{DcModel, DcStudy, Factor};
 use crate::islands::bridges;

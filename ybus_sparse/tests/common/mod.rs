@@ -1,12 +1,12 @@
-//! Reference implementations for the factorization tests: the algorithms `sparse_mat` used
+//! Reference implementations for the factorization tests: the algorithms `ybus_sparse` used
 //! before Phase 3, rewritten against the public API, so the new ones can be compared with them.
 
 use std::collections::BTreeMap;
 
-use sparse_mat::compressed_matrix::CsrMatrix;
-use sparse_mat::sparse_error::SparseError;
+use ybus_sparse::compressed_matrix::CsrMatrix;
+use ybus_sparse::sparse_error::SparseError;
 
-/// The unordered up-looking Cholesky factorization `sparse_mat` had before Phase 3: `A = L Lᵀ`,
+/// The unordered up-looking Cholesky factorization `ybus_sparse` had before Phase 3: `A = L Lᵀ`,
 /// row by row, with each row's work held in a `BTreeMap` and entries that come out exactly zero
 /// dropped. Errors as the library's `cholesky` reports them, in the matrix's own numbering.
 pub fn reference_cholesky(a: &CsrMatrix<f64>) -> Result<CsrMatrix<f64>, SparseError> {
@@ -80,7 +80,7 @@ pub struct ReferenceLu {
     pub swaps: usize,
 }
 
-/// The LU factorization `sparse_mat` had before Phase 3: right-looking Gaussian elimination with
+/// The LU factorization `ybus_sparse` had before Phase 3: right-looking Gaussian elimination with
 /// true partial pivoting (the first row of largest magnitude below the diagonal), on rows held
 /// as `BTreeMap`s, with entries that come out exactly zero dropped. Unordered, and at least
 /// quadratic in the dimension. Errors as the library's LU reported them: `NotSquare`, or

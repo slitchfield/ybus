@@ -5,8 +5,8 @@
 use std::fmt::Debug;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use sparse_mat::sparse_matrix::SparseMatrix;
-use sparse_mat::Scalar;
+use ybus_sparse::sparse_matrix::SparseMatrix;
+use ybus_sparse::Scalar;
 
 /// Valid files covering every supported header, comments, blank lines and duplicates. The
 /// mutations start from these, so most mutated inputs get past the header.

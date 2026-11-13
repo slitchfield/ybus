@@ -3,11 +3,11 @@
 
 mod common;
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, RefactorOutcome};
-use sparse_mat::num_complex::ComplexFloat;
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
+use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering, RefactorOutcome};
+use ybus_sparse::num_complex::ComplexFloat;
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 use common::{reference_cholesky, reference_lu, reference_solve_spd};
 
@@ -695,7 +695,7 @@ fn random_square(n: usize, fill_percent: u64, diagonal_scale: f64, seed: u64) ->
 }
 
 /// The dense product `L U` of an LU factorization, against the dense `P A Q`.
-fn assert_lu_reconstructs(a: &CscMatrix<f64>, lu: &sparse_mat::compressed_matrix::Lu<f64>) {
+fn assert_lu_reconstructs(a: &CscMatrix<f64>, lu: &ybus_sparse::compressed_matrix::Lu<f64>) {
     let l = lu.l();
     let u = lu.u();
     assert!(l.iter().all(|(row, col, _)| row >= col));
@@ -1111,7 +1111,7 @@ fn refactor_of_two_by_two_blocks_factors_and_repeats_bit_for_bit() {
         let rhs = b.mul_vec(&x).unwrap();
         assert_close(&lu.solve(&rhs).unwrap(), &x, 1e-9);
         // The same values again, after other values in between: the same bits
-        let bits = |lu: &sparse_mat::compressed_matrix::Lu<f64>| -> Vec<u64> {
+        let bits = |lu: &ybus_sparse::compressed_matrix::Lu<f64>| -> Vec<u64> {
             lu.l()
                 .values()
                 .iter()
@@ -1363,7 +1363,7 @@ fn conjugate_gradient_solves_hermitian_systems() {
 // Every solver, for real and complex element types
 
 /// An element type the solver suite runs for, built from the real fixtures.
-trait Element: sparse_mat::Scalar + ComplexFloat<Real = f64> + std::fmt::Debug {
+trait Element: ybus_sparse::Scalar + ComplexFloat<Real = f64> + std::fmt::Debug {
     /// An off-diagonal value: `v` itself for a real type, `v (1 + 0.5i)` for a complex one.
     fn off(v: f64) -> Self;
     /// A real value, used on diagonals.

@@ -3,10 +3,10 @@
 //   AMD orders it explicitly; less fill than AMD when the rows are out of order; and its
 //   refusal for Cholesky.
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering};
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
+use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix, LuOptions, Ordering};
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 /// Deterministic pseudo-random numbers (a linear congruential generator).
 struct Lcg(u64);

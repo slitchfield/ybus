@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use interior_point::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
 };
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 pub fn dense(rows: &[&[f64]]) -> CsrMatrix<f64> {
     CsrMatrix::from_dense(rows).unwrap()

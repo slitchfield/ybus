@@ -8,7 +8,7 @@
 //! (MIPS 1.5.2, in MATPOWER 8.1) so that its iterations, results and multipliers match
 //! MATPOWER's (Wang, Murillo-Sánchez, Zimmerman and Thomas, 2007).
 
-use sparse_mat::compressed_matrix::{CsrMatrix, Ordering};
+use ybus_sparse::compressed_matrix::{CsrMatrix, Ordering};
 
 use crate::interior_point_error::InteriorPointError;
 use crate::kkt::{KktFactorization, KktSolver};
@@ -240,7 +240,7 @@ fn lagrangian_gradient(e: &Evaluation, lam: &[f64], mu: &[f64]) -> Vec<f64> {
 ///   row becomes one or two inequalities.
 /// - **Each iteration** solves the reduced KKT system `[M dg; dgᵀ 0] [dx; dλ] = [−N; −g]`,
 ///   with `M = Lxx + dh Z⁻¹ diag(μ) dhᵀ` and `N = Lx + dh Z⁻¹ (diag(μ) h + γ e)`, by
-///   `sparse_mat`'s LU ordered by COLAMD (see [`KKT_ORDERING`]; MATLAB uses its backslash),
+///   `ybus_sparse`'s LU ordered by COLAMD (see [`KKT_ORDERING`]; MATLAB uses its backslash),
 ///   then takes primal and
 ///   dual steps no longer than `xi` of the way to the boundary, and sets `γ = σ zᵀμ / niq`.
 /// - **It converges** when the feasibility, gradient, complementarity and cost measures all

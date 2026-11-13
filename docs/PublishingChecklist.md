@@ -100,7 +100,12 @@ Each rename covers:
 The completed roadmaps and the dated benchmark records keep the names they were written with,
 and the root README notes the renames once.
 
-- [ ] Rename `sparse_mat` to `ybus_sparse`.
+- [x] Rename `sparse_mat` to `ybus_sparse`.
+      - **`scripts/profile_summary.py`** matches each crate's frames under its old name too, so a
+        profile recorded before the renames gives the same stage table.
+      - **`rustfmt` re-sorted the imports** that the new name moved.
+      - **`ybus_sparse/README.md`'s relative links** still resolve, since the directory depth
+        is unchanged. P2 makes them absolute.
 - [ ] Rename `interior_point` to `ybus_ipm`, with `LICENSE-MIPS`'s list of files.
 - [ ] Rename `powerflow` to `ybus_powerflow`. This includes `ybus_ffi`'s docs, header comment
       and `-p` flags. The C API's names don't change.

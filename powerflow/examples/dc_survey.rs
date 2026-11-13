@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use powerflow::case::Case;
 use powerflow::dc::{DcModel, DcOptions, DcSolver};
-use sparse_mat::compressed_matrix::{LuOptions, Ordering};
+use ybus_sparse::compressed_matrix::{LuOptions, Ordering};
 
 /// `ordering` is the factorization's, Cholesky or LU. `negative_branches` counts the in-service
 /// branches with a negative series susceptance, which can make B′ indefinite. `bprime_dimension` and `bprime_entries` give B′'s size and

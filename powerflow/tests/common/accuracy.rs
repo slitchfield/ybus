@@ -6,7 +6,7 @@ use std::f64::consts::PI;
 
 use powerflow::case::Case;
 use powerflow::dc::DcModel;
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 /// The normwise backward error of `va_deg` (angles in degrees, one per case bus row) as a
 /// solution of the DC system `model` builds for `case`:

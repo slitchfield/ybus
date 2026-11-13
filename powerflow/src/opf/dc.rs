@@ -29,7 +29,7 @@ use interior_point::mehrotra::{qps_mehrotra, MehrotraOptions};
 use interior_point::mips::{qps_mips, MipsOptions};
 use interior_point::problem::{Constraints, QuadraticProblem};
 use interior_point::solution::{kkt_residuals, KktResiduals, Solution, Status};
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use crate::case::Case;
 use crate::dc::Bdc;

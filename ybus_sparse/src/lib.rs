@@ -4,7 +4,7 @@
 //! [`compressed_matrix::CompressedMatrix`] (as `CsrMatrix` or `CscMatrix`) does the numerical
 //! work; [`sparse_error::SparseError`] is the error type. Every factorization's solves come
 //! from one trait, [`Factorization`]. All four, and the `CsrMatrix` and `CscMatrix` aliases,
-//! are re-exported here, so `use sparse_mat::{CsrMatrix, Factorization, SparseError}` reaches
+//! are re-exported here, so `use ybus_sparse::{CsrMatrix, Factorization, SparseError}` reaches
 //! them.
 
 // No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe

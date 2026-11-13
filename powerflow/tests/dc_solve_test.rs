@@ -8,7 +8,7 @@ use common::dc_fixture::{assert_physical, fixture, B, G, L};
 use powerflow::case::{BusType, Case};
 use powerflow::dc::{dc_power_flow, DcModel, DcOptions, DcSolution, DcSolver};
 use powerflow::powerflow_error::PowerflowError;
-use sparse_mat::compressed_matrix::Ordering;
+use ybus_sparse::compressed_matrix::Ordering;
 
 use std::f64::consts::PI;
 

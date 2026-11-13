@@ -12,7 +12,7 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
 - **AI-assisted development:** from October 2026 on, most new code, tests and documentation were
   written with **Claude Code**, Anthropic's agentic coding tool, using the Claude Sonnet 5.5 and
   Claude Opus 5.5 models. That covers the large majority of the current source and tests,
-  including, in `sparse_mat`:
+  including, in `ybus_sparse`:
   - the generic element type, the products, Matrix Market I/O, and the optional `serde` and
     `rayon` features
   - the fixed-pattern compressed matrix type and its assembly maps (Phase 2)

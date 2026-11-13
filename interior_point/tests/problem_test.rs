@@ -1,7 +1,7 @@
 // Tests for the problem interface: QuadraticProblem's objective, gradient and Hessian.
 
 use interior_point::problem::{Problem, QuadraticProblem};
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 #[test]
 fn a_quadratic_problem_evaluates_its_objective() {

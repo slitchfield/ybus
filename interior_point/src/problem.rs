@@ -6,7 +6,7 @@
 //! [`Constraints`]. A [`QuadraticProblem`] supplies `f(x) = ½ xᵀ H x + cᵀ x` for quadratic and
 //! linear programs.
 
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 /// The nonlinear constraints' values at a point and their Jacobians, one row per constraint:
 /// `h` (`h(x) ≤ 0`) with `dh` (`nh × nx`), and `g` (`g(x) = 0`) with `dg` (`ng × nx`).

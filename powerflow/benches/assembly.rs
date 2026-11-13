@@ -24,7 +24,7 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Criterion};
 use powerflow::case::Case;
 use powerflow::dc::DcModel;
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 const CASE: &str = "case2383wp";
 

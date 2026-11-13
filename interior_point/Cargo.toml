@@ -9,4 +9,4 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-sparse_mat = { path = "../sparse_mat" }
+ybus_sparse = { path = "../ybus_sparse" }

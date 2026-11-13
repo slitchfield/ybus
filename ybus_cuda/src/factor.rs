@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use cudarc::driver::PinnedHostSlice;
-use sparse_mat::compressed_matrix::{Cholesky, Lu};
+use ybus_sparse::compressed_matrix::{Cholesky, Lu};
 
 use crate::sparse::{Block, Csr, Fill};
 use crate::{CudaError, Gpu};
@@ -30,7 +30,7 @@ pub struct Timings {
     pub blocks: usize,
 }
 
-/// A [`sparse_mat`] factorization uploaded to the GPU, for solving many right-hand sides
+/// A [`ybus_sparse`] factorization uploaded to the GPU, for solving many right-hand sides
 /// against it: they go in blocks of [`GpuFactor::block_width`] columns, each solved by
 /// cuSPARSE's SpSM (forward with the lower triangle, back with the upper). Blocks go to and
 /// from the device through page-locked host memory.
@@ -228,7 +228,7 @@ impl<'g> GpuFactor<'g> {
     }
 
     /// Solves `A x = b` for each right-hand side `b` in `rhs`, returning the solutions in the
-    /// same order, as `sparse_mat`'s `solve_many` does, to within rounding. The last block is
+    /// same order, as `ybus_sparse`'s `solve_many` does, to within rounding. The last block is
     /// padded with zero columns. Returns `CudaError::ShapeMismatch` for the first right-hand
     /// side whose length isn't [`GpuFactor::dim`].
     pub fn solve_many(&mut self, rhs: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, CudaError> {

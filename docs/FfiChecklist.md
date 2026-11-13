@@ -12,7 +12,7 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
    the caller owns. It's the common ground the other languages can build on.
 2. **Python and Julia after it.** Python through PyO3 and maturin, binding `powerflow` directly;
    Julia through the C library with `ccall`, so it shares the C layer's stability.
-3. **Out of scope at first:** `sparse_mat`'s matrices, the interior-point solvers on their own,
+3. **Out of scope at first:** `ybus_sparse`'s matrices, the interior-point solvers on their own,
    the DC outage studies and sensitivities, and the `rayon` and `cuda` features. Phase F7 lists
    them.
 

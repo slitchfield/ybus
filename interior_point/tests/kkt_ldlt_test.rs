@@ -12,7 +12,7 @@ use interior_point::mehrotra::{mehrotra, qps_mehrotra, MehrotraIteration, Mehrot
 use interior_point::mips::{mips, MipsOptions};
 use interior_point::problem::{Constraints, Problem, QuadraticProblem};
 use interior_point::solution::{kkt_residuals, History, Multipliers, Solution, Status};
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 /// The bar for the objective, relative to the larger magnitude (at least 1)
 const OBJECTIVE: f64 = 1e-6;

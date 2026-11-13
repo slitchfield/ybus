@@ -1,6 +1,6 @@
 //! Dense vector operations the solvers share.
 //!
-//! They stay in this crate rather than in `sparse_mat`, whose subject is sparse matrices:
+//! They stay in this crate rather than in `ybus_sparse`, whose subject is sparse matrices:
 //! [`norm_inf`] follows MATLAB's `norm(v, Inf)`, including its handling of NaN and of empty
 //! vectors, which MIPS's termination and failure tests depend on.
 

@@ -1,4 +1,4 @@
-//! DC and AC power flow, built on [`sparse_mat`].
+//! DC and AC power flow, built on [`ybus_sparse`].
 //!
 //! - [`case`]: the model of a power system (buses, generators, branches and costs), and a reader
 //!   for MATPOWER case files ([`case::Case::from_path`]).

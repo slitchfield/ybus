@@ -18,7 +18,7 @@ use interior_point::problem::{
 };
 use interior_point::solution::kkt_residuals;
 use interior_point::solution::{Solution, Status};
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 /// The bar for the objective, relative to the larger magnitude (at least 1)
 const OBJECTIVE: f64 = 1e-6;

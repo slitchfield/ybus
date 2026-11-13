@@ -22,9 +22,9 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Criterion};
 use powerflow::ac::{AcMethod, AcModel, AcOptions};
 use powerflow::case::Case;
-use sparse_mat::compressed_matrix::{LuOptions, Ordering};
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
+use ybus_sparse::compressed_matrix::{LuOptions, Ordering};
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 const CASE: &str = "case2383wp";
 

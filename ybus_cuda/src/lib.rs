@@ -1,9 +1,9 @@
 //! The GPU path for the power flows, on CUDA through [`cudarc`]: sparse triangular solves with
-//! many right-hand sides against a factorization made on the CPU by [`sparse_mat`].
+//! many right-hand sides against a factorization made on the CPU by [`ybus_sparse`].
 //!
 //! - [`Gpu`]: a CUDA device, its stream and a cuSPARSE handle, or `None` on a machine without
 //!   CUDA.
-//! - [`GpuFactor`]: a [`sparse_mat`] Cholesky or LU factorization uploaded once, which solves
+//! - [`GpuFactor`]: a [`ybus_sparse`] Cholesky or LU factorization uploaded once, which solves
 //!   blocks of right-hand sides with cuSPARSE's SpSM and reports the time spent on transfers.
 //! - [`GpuFactor::pair_solves`] and [`GpuFactor::pair_updates`]: blocks whose right-hand sides
 //!   are built on the device (`e_plus − e_minus`), optionally with a rank-one update of a base

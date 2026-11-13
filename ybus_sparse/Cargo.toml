@@ -1,5 +1,5 @@
 [package]
-name = "sparse_mat"
+name = "ybus_sparse"
 version = "0.1.0"
 description = "Sparse matrices for Rust: assembly, products, LU/Cholesky/CG solvers and Matrix Market I/O"
 readme = "README.md"

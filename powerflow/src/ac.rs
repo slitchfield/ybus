@@ -14,12 +14,12 @@
 
 use std::f64::consts::PI;
 
-use sparse_mat::compressed_matrix::{
+use ybus_sparse::compressed_matrix::{
     AssemblyMap, Csc, CscMatrix, CsrMatrix, Lu, LuOptions, Ordering, RefactorOutcome, SymbolicLu,
 };
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 use crate::case::{Branch, BusType, Case};
 use crate::powerflow_error::PowerflowError;

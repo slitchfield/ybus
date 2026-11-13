@@ -32,7 +32,7 @@ pub use interior_point::kkt::KktFactorization;
 pub use interior_point::mehrotra::{MehrotraIteration, MehrotraOptions};
 pub use interior_point::mips::{MipsIteration, MipsOptions};
 pub use interior_point::solution::{History, KktResiduals, Multipliers, Solution, Status};
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use crate::case::{BusType, Case};
 use crate::opf::cost::{CostVariable, OpfCosts};

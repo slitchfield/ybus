@@ -35,6 +35,10 @@ import re
 import sys
 from pathlib import Path
 
+# Each crate's frame prefix: its name since phase P1 of docs/PublishingChecklist.md, then its name
+#   before, so a profile recorded before the renames still folds into the same stages
+SPARSE = ("ybus_sparse::", "sparse_mat::")
+
 # (stage, patterns): a frame matches a stage if its demangled name contains any of the patterns
 STAGES = [
     ("allocation and copying", ["malloc", "_libc_free", "cfree", "realloc", "brk",
@@ -47,7 +51,7 @@ STAGES = [
                                         "symbolic", "elimination_tree", "column_counts"]),
     # Every factorization's solves run through the Factorization trait, whose frames name the
     #   factorization module: matched here, before the factorizations' own "factor"
-    ("triangular solves", ["as sparse_mat::compressed_matrix::factorization::"]),
+    ("triangular solves", [f"as {crate}compressed_matrix::factorization::" for crate in SPARSE]),
     ("refactorization", ["refactor"]),
     ("numeric factorization", ["gilbert_peierls", "Lu>::factor", "Cholesky>::factor",
                                "cholesky::", "factor"]),
@@ -203,8 +207,9 @@ def summarize(path):
     for frame, count in own.most_common(12):
         lines.append(f"| `{shorten(frame)}` | {count / samples:.1%} |")
     ours = [(f, c) for f, c in total.most_common()
-            if ("powerflow::" in f or "sparse_mat::" in f) and c < samples]
-    lines += ["", "| Most samples in total (powerflow and sparse_mat) | Share |", "|---|--:|"]
+            if any(crate in f for crate in ("powerflow::",) + SPARSE) and c < samples]
+    lines += ["", "| Most samples in total (powerflow and the sparse matrices) | Share |",
+              "|---|--:|"]
     for frame, count in ours[:12]:
         lines.append(f"| `{shorten(frame)}` | {count / samples:.1%} |")
     return "\n".join(lines) + "\n"
@@ -236,7 +241,7 @@ def shorten(frame):
         frame = inner.split("::")[-1] + strip_generics(rest)
     else:
         frame = strip_generics(frame)
-    for prefix in ("sparse_mat::compressed_matrix::", "powerflow::"):
+    for prefix in [f"{crate}compressed_matrix::" for crate in SPARSE] + ["powerflow::"]:
         frame = frame.replace(prefix, "")
     return frame.rstrip(":").replace("|", "\\|")[:100]
 

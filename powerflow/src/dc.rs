@@ -20,12 +20,12 @@
 use std::f64::consts::PI;
 use std::sync::OnceLock;
 
-use sparse_mat::compressed_matrix::{
+use ybus_sparse::compressed_matrix::{
     Cholesky, CsrMatrix, Lu, LuOptions, Ordering, SparseSolveWorkspace,
 };
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::sparse_matrix::SparseVector;
-use sparse_mat::Factorization;
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::sparse_matrix::SparseVector;
+use ybus_sparse::Factorization;
 
 use crate::case::{BusType, Case};
 use crate::powerflow_error::PowerflowError;

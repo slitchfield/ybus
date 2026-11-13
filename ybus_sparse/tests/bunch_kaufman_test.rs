@@ -5,11 +5,11 @@
 // Dense matrices' entries are reached by (i, j) here, which reads more plainly than iterators
 #![allow(clippy::needless_range_loop)]
 
-use sparse_mat::compressed_matrix::experimental::{DBlock, DenseLdlt};
-use sparse_mat::compressed_matrix::{CsrMatrix, Inertia, Ordering};
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
+use ybus_sparse::compressed_matrix::experimental::{DBlock, DenseLdlt};
+use ybus_sparse::compressed_matrix::{CsrMatrix, Inertia, Ordering};
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 type C = Complex<f64>;
 

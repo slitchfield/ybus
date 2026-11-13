@@ -1,4 +1,4 @@
-use sparse_mat::{sparse_error::SparseError, sparse_matrix::SparseMatrix};
+use ybus_sparse::{sparse_error::SparseError, sparse_matrix::SparseMatrix};
 
 #[test]
 fn sparsemat_creation() {

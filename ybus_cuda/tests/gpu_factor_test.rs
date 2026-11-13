@@ -8,9 +8,9 @@ mod common;
 use common::{
     gpu, random_spd, random_square, right_hand_sides, two_by_two_blocks, worst_relative_difference,
 };
-use sparse_mat::compressed_matrix::CscMatrix;
-use sparse_mat::Factorization;
 use ybus_cuda::{CudaError, GpuFactor};
+use ybus_sparse::compressed_matrix::CscMatrix;
+use ybus_sparse::Factorization;
 
 /// The GPU's solutions agree with the CPU's to within rounding, for each block width
 const BAR: f64 = 1e-12;

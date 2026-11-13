@@ -7,8 +7,8 @@ use powerflow::case::Case;
 use powerflow::opf::derivatives::{
     flows, squared_magnitude_hessian, squared_magnitudes, weighted_hessian,
 };
-use sparse_mat::compressed_matrix::CsrMatrix;
-use sparse_mat::Complex;
+use ybus_sparse::compressed_matrix::CsrMatrix;
+use ybus_sparse::Complex;
 
 type C64 = Complex<f64>;
 

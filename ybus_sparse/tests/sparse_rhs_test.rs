@@ -1,11 +1,11 @@
 // Tests for Phase 5's sparse right-hand sides: `SparseVector::new`, and the sparse forward and
 //   full solves of `Cholesky` and `Lu`, against their dense solves and a brute-force reach.
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix, Ordering};
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::sparse_matrix::SparseVector;
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
+use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix, Ordering};
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::sparse_matrix::SparseVector;
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 /// Deterministic pseudo-random numbers (a linear congruential generator).
 struct Lcg(u64);
@@ -294,7 +294,7 @@ fn more_rhs(n: usize) -> Vec<SparseVector<f64>> {
 
 #[test]
 fn solves_into_a_reused_workspace_match_solve_sparse_bit_for_bit() {
-    use sparse_mat::compressed_matrix::SparseSolveWorkspace;
+    use ybus_sparse::compressed_matrix::SparseSolveWorkspace;
     // One workspace for every solve, through factors of different sizes and kinds, so stale
     //   marks or values from an earlier solve would show
     let mut workspace = SparseSolveWorkspace::new();
@@ -332,7 +332,7 @@ fn solves_into_a_reused_workspace_match_solve_sparse_bit_for_bit() {
 
 #[test]
 fn solves_into_check_both_lengths() {
-    use sparse_mat::compressed_matrix::SparseSolveWorkspace;
+    use ybus_sparse::compressed_matrix::SparseSolveWorkspace;
     let a = random_spd(10, 20, 4);
     let cholesky = a
         .analyze_cholesky(Ordering::Amd)

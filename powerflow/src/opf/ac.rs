@@ -35,8 +35,8 @@ use interior_point::mehrotra::{mehrotra, MehrotraOptions};
 use interior_point::mips::{mips, MipsOptions};
 use interior_point::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Problem};
 use interior_point::solution::{kkt_residuals, KktResiduals, Solution, Status};
-use sparse_mat::compressed_matrix::CsrMatrix;
-use sparse_mat::Complex;
+use ybus_sparse::compressed_matrix::CsrMatrix;
+use ybus_sparse::Complex;
 
 use crate::ac::{check_impedance, Admittances};
 use crate::case::Case;

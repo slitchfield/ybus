@@ -21,7 +21,7 @@
 //! Every solver takes its arguments in the same order: the problem, its `constraints`, the
 //! starting point `x0` and the options.
 //!
-//! The linear algebra is [`sparse_mat`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
+//! The linear algebra is [`ybus_sparse`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
 
 // No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
 //   API

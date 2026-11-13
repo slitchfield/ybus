@@ -21,7 +21,7 @@ use crate::Scalar;
 /// works for the matrix it was built with and for any clone of it.
 ///
 /// ```
-/// use sparse_mat::compressed_matrix::CsrMatrix;
+/// use ybus_sparse::compressed_matrix::CsrMatrix;
 ///
 /// // Two stamps at (0, 0), summed into one entry
 /// let positions = [(0, 0), (0, 1), (1, 1), (0, 0)];
@@ -32,13 +32,13 @@ use crate::Scalar;
 /// // New values for the same stamps, without rebuilding
 /// a.refill(&map, &[1.0, -1.0, 2.0, 1.0])?;
 /// assert_eq!(a, CsrMatrix::from_triplets(2, 2, stamp([1.0, -1.0, 2.0, 1.0]))?);
-/// # Ok::<(), sparse_mat::sparse_error::SparseError>(())
+/// # Ok::<(), ybus_sparse::sparse_error::SparseError>(())
 /// ```
 ///
 /// A map only refills a matrix of its orientation:
 ///
 /// ```compile_fail
-/// use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
+/// use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix};
 ///
 /// let (csr, map) = CsrMatrix::from_triplets_mapped(1, 1, vec![(0, 0, 1.0)]).unwrap();
 /// let mut csc: CscMatrix<f64> = csr.to_csc();

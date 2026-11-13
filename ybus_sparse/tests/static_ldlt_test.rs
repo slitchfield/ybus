@@ -5,11 +5,11 @@
 //   regularized matrices: refinement against the unregularized matrix (componentwise and normwise),
 //   pivot replacement (factor_static_ldlt_replacing) and symmetric scaling.
 
-use sparse_mat::compressed_matrix::experimental::PivotReplacement;
-use sparse_mat::compressed_matrix::{CsrMatrix, Inertia, Ordering};
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::Complex;
-use sparse_mat::Factorization;
+use ybus_sparse::compressed_matrix::experimental::PivotReplacement;
+use ybus_sparse::compressed_matrix::{CsrMatrix, Inertia, Ordering};
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::Complex;
+use ybus_sparse::Factorization;
 
 /// Deterministic pseudo-random numbers (a linear congruential generator).
 struct Lcg(u64);

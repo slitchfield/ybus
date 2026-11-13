@@ -1,4 +1,4 @@
-# sparse_mat
+# ybus_sparse
 
 A sparse matrix library for Rust: construction, arithmetic, products, factorizations and
 iterative solvers, Matrix Market I/O, and optional `serde` and `rayon` support. It is generic
@@ -24,11 +24,11 @@ which is building DC and AC power flow on top of it; see
 
 ```toml
 [dependencies]
-sparse_mat = { git = "https://github.com/slitchfield/ybus" }
+ybus_sparse = { git = "https://github.com/slitchfield/ybus" }
 ```
 
 ```rust
-use sparse_mat::{CsrMatrix, Factorization, SparseError, SparseMatrix};
+use ybus_sparse::{CsrMatrix, Factorization, SparseError, SparseMatrix};
 
 fn main() -> Result<(), SparseError> {
     // Assemble from (row, col, value) triplets. from_triplets has COO semantics: entries
@@ -148,7 +148,7 @@ fn main() -> Result<(), SparseError> {
 
 Both types accept any `Scalar`, meaning any `Copy + PartialEq + num_traits::Num` type. That
 covers `f32`, `f64`, every integer type and `num_complex::Complex` (re-exported as
-`sparse_mat::Complex`). Arithmetic, products and conversions work for all of them.
+`ybus_sparse::Complex`). Arithmetic, products and conversions work for all of them.
 
 The solvers, the norms and `is_hermitian` work for any `num_complex::ComplexFloat` type: real
 or complex, one code path. For a complex matrix, Cholesky factors A = L Lᴴ and conjugate
@@ -201,7 +201,7 @@ checked method alongside it (`try_add`, `matmul`, `mul_vec`, `peek_at`, …).
 - **Tests:** in `tests/`. The products, factorizations and Kronecker products are checked
   against dense reference implementations and algebraic identities. The Matrix Market reader
   is fuzzed with truncated, malformed and oversized input.
-- **API documentation:** `cargo doc -p sparse_mat --open --all-features`.
+- **API documentation:** `cargo doc -p ybus_sparse --open --all-features`.
 
 See the [workspace README](../README.md) for `./check.sh`, CI and the rest of the docs.
 

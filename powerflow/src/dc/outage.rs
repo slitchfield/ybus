@@ -13,9 +13,9 @@
 //! are combinations of the `c_k`, so `x` is the base solution plus a combination of `Y`'s
 //! columns, with no further solve.
 
-use sparse_mat::compressed_matrix::{CscMatrix, SparseSolveWorkspace};
-use sparse_mat::sparse_matrix::SparseVector;
-use sparse_mat::Factorization;
+use ybus_sparse::compressed_matrix::{CscMatrix, SparseSolveWorkspace};
+use ybus_sparse::sparse_matrix::SparseVector;
+use ybus_sparse::Factorization;
 
 use super::reach::ReachScratch;
 use super::{DcSolution, DcStudy};

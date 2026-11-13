@@ -1,8 +1,8 @@
 #![cfg(feature = "rayon")]
 
-use sparse_mat::compressed_matrix::{CscMatrix, CsrMatrix};
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::Factorization;
+use ybus_sparse::compressed_matrix::{CscMatrix, CsrMatrix};
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::Factorization;
 
 /// Deterministic pseudo-random sparse matrix with small entries.
 fn pseudo_random(rows: usize, cols: usize, seed: u64, fill_percent: u64) -> CsrMatrix<f64> {
@@ -111,12 +111,12 @@ fn par_products_on_empty_matrices() {
 #[test]
 fn factorizations_are_send_and_sync() {
     fn send_sync<T: Send + Sync>() {}
-    send_sync::<sparse_mat::compressed_matrix::Lu<f64>>();
-    send_sync::<sparse_mat::compressed_matrix::Lu<sparse_mat::Complex<f64>>>();
-    send_sync::<sparse_mat::compressed_matrix::Cholesky<f64>>();
-    send_sync::<sparse_mat::compressed_matrix::Cholesky<sparse_mat::Complex<f64>>>();
-    send_sync::<sparse_mat::compressed_matrix::SymbolicLu>();
-    send_sync::<sparse_mat::compressed_matrix::SymbolicCholesky>();
+    send_sync::<ybus_sparse::compressed_matrix::Lu<f64>>();
+    send_sync::<ybus_sparse::compressed_matrix::Lu<ybus_sparse::Complex<f64>>>();
+    send_sync::<ybus_sparse::compressed_matrix::Cholesky<f64>>();
+    send_sync::<ybus_sparse::compressed_matrix::Cholesky<ybus_sparse::Complex<f64>>>();
+    send_sync::<ybus_sparse::compressed_matrix::SymbolicLu>();
+    send_sync::<ybus_sparse::compressed_matrix::SymbolicCholesky>();
 }
 
 /// Bit for bit, including the sign of zero
@@ -170,12 +170,16 @@ fn par_solve_many_matches_solve_many_bit_for_bit() {
     ));
 
     // Complex
-    let complex: CscMatrix<sparse_mat::Complex<f64>> =
-        unsymmetric.map(|v| sparse_mat::Complex::new(v, 0.25 * v));
+    let complex: CscMatrix<ybus_sparse::Complex<f64>> =
+        unsymmetric.map(|v| ybus_sparse::Complex::new(v, 0.25 * v));
     let lu = complex.lu().unwrap();
-    let complex_rhs: Vec<Vec<sparse_mat::Complex<f64>>> = rhs
+    let complex_rhs: Vec<Vec<ybus_sparse::Complex<f64>>> = rhs
         .iter()
-        .map(|b| b.iter().map(|&v| sparse_mat::Complex::new(v, -v)).collect())
+        .map(|b| {
+            b.iter()
+                .map(|&v| ybus_sparse::Complex::new(v, -v))
+                .collect()
+        })
         .collect();
     let (parallel, sequential) = (
         lu.par_solve_many(&complex_rhs).unwrap(),

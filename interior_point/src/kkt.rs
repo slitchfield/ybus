@@ -7,7 +7,7 @@
 //! **LU** ([`KKT_ORDERING`]) factors the matrix as assembled, as
 //! MATPOWER's MIPS does with its backslash. MIPS's results match MATPOWER's with it.
 //!
-//! **LDLᵀ** is `sparse_mat`'s multifrontal factorization with threshold Bunch–Kaufman pivoting
+//! **LDLᵀ** is `ybus_sparse`'s multifrontal factorization with threshold Bunch–Kaufman pivoting
 //! ([`Ldlt`]), ordered by AMD:
 //!
 //! - **Exactly symmetric:** the lower triangle of `W` is mirrored, so the factorization's symmetry
@@ -27,12 +27,12 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use sparse_mat::compressed_matrix::{
+use ybus_sparse::compressed_matrix::{
     CscMatrix, CsrMatrix, Inertia, Ldlt, LdltOptions, Lu, LuOptions, Ordering, SymbolicLdlt,
     SymbolicLu,
 };
-use sparse_mat::sparse_error::SparseError;
-use sparse_mat::Factorization;
+use ybus_sparse::sparse_error::SparseError;
+use ybus_sparse::Factorization;
 
 use crate::mips::KKT_ORDERING;
 
