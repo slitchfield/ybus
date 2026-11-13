@@ -147,10 +147,18 @@ and the root README notes the renames once.
       - **The packages:** `cargo package --workspace --exclude ybus_ffi` packages all four and
         builds each against the others' packages, as crates.io would. `ybus_powerflow`'s is
         still 182 files until P3's `include` list.
-- [ ] A README for each crate. `ybus_ipm`, `ybus_powerflow` and `ybus_cuda` don't have one.
+- [x] A README for each crate. `ybus_ipm`, `ybus_powerflow` and `ybus_cuda` don't have one.
       Each says what the crate does, its status, a short example, and links back to the
       repository. Every link is absolute, `ybus_sparse`'s three relative ones included, since a
       README is shown on crates.io and, for `ybus_sparse`, as its docs.rs front page.
+      - **The examples are doc tests,** as `ybus_sparse`'s already were: each crate's `lib.rs`
+        includes its README under `#[cfg(doctest)]`. `ybus_cuda`'s is `no_run`, compiled but not
+        run, so `cargo test --doc` never touches a GPU; its GPU tests cover the same calls.
+      - **`ybus_powerflow`'s example** parses a three-bus case from text, so it needs no files.
+      - **`ybus_sparse`'s README** also loses its stale lines: the `git` dependency (now
+        `"0.1"`), MSRV 1.87 (now 1.88) and the power flow "being built". Its license links were
+        relative too, so six links in all are now absolute.
+      - **The READMEs aren't the crate docs yet:** P3 writes those front pages.
 - [ ] License files in each package, the way `ybus_sparse` links `LICENSE-MIT` and
       `LICENSE-APACHE` to the root's.
       - **`ybus_ipm`'s license** becomes `(MIT OR Apache-2.0) AND BSD-3-Clause`, since its MIPS
