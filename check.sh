@@ -21,7 +21,7 @@ ybus_ffi/check-symbols.sh
 cargo clippy --workspace --all-targets --all-features --  -D warnings -W clippy::all
 cargo test --workspace --all-targets
 # The C tests, against the generated header and the static library; once, since the C build has
-#   only powerflow's default features, then again under AddressSanitizer and
+#   only ybus_powerflow's default features, then again under AddressSanitizer and
 #   UndefinedBehaviorSanitizer, so a leaked or doubly freed handle fails the build
 ybus_ffi/tests/c/run.sh
 ybus_ffi/tests/c/run.sh --sanitize
@@ -40,10 +40,10 @@ doc
 doc --all-features
 # Each optional feature on its own, to catch code that only builds, lints or documents cleanly
 #   when another feature is also enabled. Keep this list in sync with [features] in
-#   ybus_sparse/Cargo.toml and powerflow/Cargo.toml. The workspace root has no features of its
+#   ybus_sparse/Cargo.toml and ybus_powerflow/Cargo.toml. The workspace root has no features of its
 #   own, so each one is named with its crate. The GPU tests skip on a machine without CUDA;
 #   YBUS_REQUIRE_CUDA=1 makes that a failure instead.
-for feature in ybus_sparse/serde ybus_sparse/rayon powerflow/rayon powerflow/cuda; do
+for feature in ybus_sparse/serde ybus_sparse/rayon ybus_powerflow/rayon ybus_powerflow/cuda; do
     cargo clippy --workspace --all-targets --features "$feature" -- -D warnings -W clippy::all
     cargo test --workspace "${targets[@]}" --features "$feature"
     doc --features "$feature"

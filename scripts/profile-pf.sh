@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Profiles the power flows with samply, for phase O2's profiles: each workload on each case runs
-#   in powerflow's profile_pf example (the whole pipeline repeated, so each stage weighs as in one
-#   run), built with the profiling profile (release with debug line tables), and
+#   in ybus_powerflow's profile_pf example (the whole pipeline repeated, so each stage weighs as in
+#   one run), built with the profiling profile (release with debug line tables), and
 #   scripts/profile_summary.py folds the samples into stages and top functions.
 #
 # Usage: scripts/profile-pf.sh [<output.md>]
@@ -34,7 +34,7 @@ if [[ "$(cat /proc/sys/kernel/perf_event_paranoid)" -gt 1 ]]; then
     exit 1
 fi
 
-cargo build --profile profiling --quiet --manifest-path "${ROOT}/Cargo.toml" -p powerflow \
+cargo build --profile profiling --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_powerflow \
     --features rayon --example profile_pf
 DRIVER="${ROOT}/target/profiling/examples/profile_pf"
 

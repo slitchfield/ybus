@@ -1,7 +1,7 @@
 //! The DC power flow through C: its options, its solution, the power flow itself, and the
 //! model, built once from a case and solved for many scenarios.
 
-use powerflow::dc::{dc_power_flow_with_options, DcModel, DcOptions, DcSolution, DcSolver};
+use ybus_powerflow::dc::{dc_power_flow_with_options, DcModel, DcOptions, DcSolution, DcSolver};
 use ybus_sparse::compressed_matrix::Ordering;
 
 use crate::boundary::{arg_mut, arg_ref, free_handle, get_value, guard, new_handle, Failure};

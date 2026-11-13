@@ -1,4 +1,4 @@
-//! The C interface to [`powerflow`], built as the `ybus` library (`libybus.so`, `libybus.a`)
+//! The C interface to [`ybus_powerflow`], built as the `ybus` library (`libybus.so`, `libybus.a`)
 //! with the header `include/ybus.h`, which cbindgen generates from this crate.
 //!
 //! Every export is an `extern "C"` function prefixed `ybus_`. The ABI policy and the

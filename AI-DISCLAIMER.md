@@ -20,11 +20,12 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
     the Gilbert–Peierls LU with refactoring (Phase 3)
   - the complex-capable solvers (Phase 4)
 
-  and the whole of `powerflow`: the case model and MATPOWER reader, the DC power flow, and the AC
-  power flow by Newton's method and fast-decoupled (Phases 1.5 and 4.5), with their tests,
+  and the whole of `ybus_powerflow`: the case model and MATPOWER reader, the DC power flow, and the
+  AC power flow by Newton's method and fast-decoupled (Phases 1.5 and 4.5), with their tests,
   survey tools and benchmark records. [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md)
   records each phase. Likewise the whole of `ybus_ipm` (MIPS) and the optimal power flow
-  in `powerflow` (phase O1 of [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md)).
+  in `ybus_powerflow` (phase O1 of
+  [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md)).
 - **Commits:** commits produced with AI assistance carry a `Co-Authored-By: Claude …` trailer.
   Some of them also contain code the maintainer wrote and the AI committed. The trailer marks
   AI involvement, not exclusive AI authorship.
@@ -125,10 +126,10 @@ licensing follows current best practices for AI-assisted software development:
   tests, MIPS's results on the test problems of MATPOWER's own MIPS tests
   (`ybus_ipm/tests/data/mips_reference.txt`, which contains no case data), and benchmark records that hold only case names and measurements. The results' sources
   are credited in
-  [`powerflow/tests/data/matpower-reference/README.md`](powerflow/tests/data/matpower-reference/README.md).
+  [`ybus_powerflow/tests/data/matpower-reference/README.md`](ybus_powerflow/tests/data/matpower-reference/README.md).
 - **Compatible dependencies:** every dependency, including transitive and development ones, is
   available under the MIT or Apache-2.0 license (one also under Unicode-3.0, which it requires
-  alongside them), except libloading, which the GPU path (`ybus_cuda`, and powerflow's optional
+  alongside them), except libloading, which the GPU path (`ybus_cuda`, and ybus_powerflow's optional
   `cuda` feature) uses through cudarc and which is under ISC, a permissive license equivalent
   to MIT; some offer the Unlicense or BSD-2-Clause as further alternatives. `cargo deny`
   enforces this in CI, allowing only MIT, Apache-2.0, Unicode-3.0 and ISC.

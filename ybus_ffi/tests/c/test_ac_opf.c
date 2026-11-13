@@ -7,7 +7,7 @@
 #include "cases.h"
 #include "check.h"
 
-/* MATPOWER's results agree to within rounding: powerflow's own reference tests allow 1e-8 for
+/* MATPOWER's results agree to within rounding: ybus_powerflow's own reference tests allow 1e-8 for
  * the AC OPF's columns, its multipliers included, and 1e-12 relative for the objective */
 #define TOLERANCE 1e-8
 #define OBJECTIVE 1e-12

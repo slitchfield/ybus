@@ -1,7 +1,7 @@
 [package]
 name = "ybus_ffi"
 version = "0.1.0"
-description = "The C interface to powerflow: opaque handles, status codes and caller-owned buffers"
+description = "The C interface to ybus_powerflow: opaque handles, status codes and caller-owned buffers"
 # The C library is versioned and released on its own terms; see the README's ABI policy
 publish = false
 edition.workspace = true
@@ -17,7 +17,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 # Default features only: the C build has neither rayon nor cuda (docs/FfiChecklist.md, F0)
-powerflow = { path = "../powerflow" }
-# For the DC power flow's ordering, ybus_sparse::compressed_matrix::Ordering, which powerflow
+ybus_powerflow = { path = "../ybus_powerflow" }
+# For the DC power flow's ordering, ybus_sparse::compressed_matrix::Ordering, which ybus_powerflow
 #   uses but doesn't re-export
 ybus_sparse = { path = "../ybus_sparse" }

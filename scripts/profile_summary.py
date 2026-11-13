@@ -40,6 +40,8 @@ from pathlib import Path
 #   before, so a profile recorded before the renames still folds into the same stages
 SPARSE = ("ybus_sparse::", "sparse_mat::")
 IPM = ("ybus_ipm::", "interior_point::")
+# The new name first: the old one is a suffix of it, so stripping it first would leave `ybus_`
+POWERFLOW = ("ybus_powerflow::", "powerflow::")
 
 # (stage, patterns): a frame matches a stage if its demangled name contains any of the patterns
 STAGES = [
@@ -209,8 +211,8 @@ def summarize(path):
     for frame, count in own.most_common(12):
         lines.append(f"| `{shorten(frame)}` | {count / samples:.1%} |")
     ours = [(f, c) for f, c in total.most_common()
-            if any(crate in f for crate in ("powerflow::",) + SPARSE) and c < samples]
-    lines += ["", "| Most samples in total (powerflow and the sparse matrices) | Share |",
+            if any(crate in f for crate in POWERFLOW + SPARSE) and c < samples]
+    lines += ["", "| Most samples in total (the power flow and the sparse matrices) | Share |",
               "|---|--:|"]
     for frame, count in ours[:12]:
         lines.append(f"| `{shorten(frame)}` | {count / samples:.1%} |")
@@ -243,7 +245,7 @@ def shorten(frame):
         frame = inner.split("::")[-1] + strip_generics(rest)
     else:
         frame = strip_generics(frame)
-    for prefix in [f"{crate}compressed_matrix::" for crate in SPARSE] + ["powerflow::"]:
+    for prefix in [f"{crate}compressed_matrix::" for crate in SPARSE] + list(POWERFLOW):
         frame = frame.replace(prefix, "")
     return frame.rstrip(":").replace("|", "\\|")[:100]
 

@@ -1,9 +1,9 @@
-//! Cases: a [`powerflow::Case`] behind an opaque `ybus_case` handle, loaded from a MATPOWER
+//! Cases: a [`ybus_powerflow::Case`] behind an opaque `ybus_case` handle, loaded from a MATPOWER
 //! file or its text, copied and freed.
 
 use std::ffi::c_char;
 
-use powerflow::Case;
+use ybus_powerflow::Case;
 
 use crate::boundary::{
     arg_mut, arg_ref, arg_slice, arg_str, free_handle, get_value, guard, new_handle,

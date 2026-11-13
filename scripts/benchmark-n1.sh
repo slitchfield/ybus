@@ -2,14 +2,14 @@
 # Surveys DC outages over every MATPOWER case: takes out each in-service branch alone by rank-k
 #   updates of B′'s kept factorization (DcStudy::solve_outages), times the pass, and compares a
 #   sample with refactoring. The N-1 results in docs/benchmarks/ come from this. Each case runs
-#   in its own process (powerflow's n1_survey example) under a time limit and an address-space
+#   in its own process (ybus_powerflow's n1_survey example) under a time limit and an address-space
 #   limit, so a case that fails is recorded as such instead of stopping the survey.
 #
 # Usage: scripts/benchmark-n1.sh [<output.csv>]
 #   Writes one CSV line per case, smallest case file first, to <output.csv> (default
 #   target/n1-survey.csv) and to stdout as it goes. Needs GNU time (/usr/bin/time) and the
 #   normalized cases (scripts/normalize-cases.sh, which needs Octave unless they're already
-#   made). The comparison is with powerflow's own refactored solve, so it needs no MATPOWER
+#   made). The comparison is with ybus_powerflow's own refactored solve, so it needs no MATPOWER
 #   results.
 #
 #   YBUS_BENCH_TIMEOUT  the time limit per case, in seconds (default 3600)
@@ -42,7 +42,7 @@ else
     mapfile -t CASES < <(ls -Sr "${NORMALIZED}"/*.m | xargs -n 1 basename -s .m)
 fi
 
-cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p powerflow \
+cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_powerflow \
     --example n1_survey "${FEATURES[@]}"
 SURVEY="${ROOT}/target/release/examples/n1_survey"
 

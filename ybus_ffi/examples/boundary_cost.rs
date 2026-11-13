@@ -3,9 +3,9 @@
 //!
 //! The exports are called through the rlib, which runs exactly the code a C program runs: the
 //! guard, the solution's handle, a copy of every column into buffers the caller allocated, and
-//! the free. A real C caller adds only a plain function call. The Rust side calls `powerflow`'s
-//! own function on a case it loaded itself, and keeps the result. Before anything is timed, the
-//! two results are checked to agree bit for bit.
+//! the free. A real C caller adds only a plain function call. The Rust side calls
+//! `ybus_powerflow`'s own function on a case it loaded itself, and keeps the result. Before
+//! anything is timed, the two results are checked to agree bit for bit.
 //!
 //! Usage: `cargo run --release -p ybus_ffi --example boundary_cost -- [--opf] <case.m>...`.
 //! With `--opf`, the DC and AC OPFs are timed too. It prints one Markdown table row per case
@@ -19,11 +19,6 @@ use std::hint::black_box;
 use std::ptr;
 use std::time::{Duration, Instant};
 
-use powerflow::ac::{ac_power_flow_with_options, AcOptions};
-use powerflow::dc::{dc_power_flow_with_options, DcOptions};
-use powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions};
-use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions};
-use powerflow::Case;
 use ybus::ac::*;
 use ybus::case::columns::*;
 use ybus::case::{ybus_case_free, ybus_case_from_path, YbusCase};
@@ -31,6 +26,11 @@ use ybus::dc::*;
 use ybus::opf::ac::*;
 use ybus::opf::dc::*;
 use ybus::status::{ybus_status, YBUS_OK};
+use ybus_powerflow::ac::{ac_power_flow_with_options, AcOptions};
+use ybus_powerflow::dc::{dc_power_flow_with_options, DcOptions};
+use ybus_powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions};
+use ybus_powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions};
+use ybus_powerflow::Case;
 
 /// How many timed runs of each side, after one warm-up: the power flows take milliseconds, so
 /// more runs steady their medians; the OPFs take far longer

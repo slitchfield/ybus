@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Writes every MATPOWER case as a literal-only case file the powerflow reader accepts, into
+# Writes every MATPOWER case as a literal-only case file the ybus_powerflow reader accepts, into
 #   testdata/matpower/<matpower-dir-name>-normalized/. Some MATPOWER cases compute their data
 #   with code, which the reader rejects; this evaluates them with MATPOWER's own loadcase under
 #   Octave. See scripts/normalize_cases.m.

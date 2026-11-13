@@ -1,6 +1,6 @@
 # Benchmarks
 
-Recorded performance of the `powerflow` crate, so that later phases can measure what they
+Recorded performance of the `ybus_powerflow` crate, so that later phases can measure what they
 change. Each record names the code, the machine and the method it used.
 
 | Record | What |
@@ -31,20 +31,20 @@ change. Each record names the code, the machine and the method it used.
 
 - **Profiling:** `--profile profiling` builds the release profile with debug line tables
   (`Cargo.toml`), so a sampling profiler names functions and lines in the same optimized code
-  the surveys time, for example `cargo build --profile profiling -p powerflow --example
+  the surveys time, for example `cargo build --profile profiling -p ybus_powerflow --example
   ac_survey`, then a profiler on `target/profiling/examples/ac_survey`.
   `scripts/profile-pf.sh [<output.md>]` profiles the power flows with samply through the
   `profile_pf` example, which repeats each workload's whole pipeline so every stage weighs as in
   one run, and `scripts/profile_summary.py` folds the samples into stages. Its `parse` workload
   reads a case alone, for timing the reader.
 
-- **One case, repeatably:** `cargo bench -p powerflow --bench dc_power_flow` runs the criterion
-  benchmarks in `powerflow/benches/dc_power_flow.rs`, which time parsing, the model and the
+- **One case, repeatably:** `cargo bench -p ybus_powerflow --bench dc_power_flow` runs the criterion
+  benchmarks in `ybus_powerflow/benches/dc_power_flow.rs`, which time parsing, the model and the
   solve on case2383wp. Criterion compares each run with the previous one on the same machine.
-- **Reassembly:** `cargo bench -p powerflow --bench assembly` times refilling case2383wp's
+- **Reassembly:** `cargo bench -p ybus_powerflow --bench assembly` times refilling case2383wp's
   B stamps, and a Jacobian-shaped pattern of 2×2 blocks built from them, through an assembly
-  map against building them afresh with `from_triplets` (`powerflow/benches/assembly.rs`).
-- **The AC power flow:** `cargo bench -p powerflow --bench ac_power_flow` times the AC model,
+  map against building them afresh with `from_triplets` (`ybus_powerflow/benches/assembly.rs`).
+- **The AC power flow:** `cargo bench -p ybus_powerflow --bench ac_power_flow` times the AC model,
   the three solution methods and one Newton Jacobian on case2383wp, and
   `scripts/benchmark-ac.sh [<output.csv>]` surveys every case with the `ac_survey` example, the
   method chosen by `YBUS_BENCH_METHOD` (`nr`, `fdxb` or `fdbx`) and reactive limits by

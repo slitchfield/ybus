@@ -1,6 +1,6 @@
 # ybus_ffi
 
-The C interface to [`powerflow`](../powerflow/): the `ybus` library, with the header
+The C interface to [`ybus_powerflow`](../ybus_powerflow/): the `ybus` library, with the header
 [`include/ybus.h`](include/). It's being built phase by phase from
 [`docs/FfiChecklist.md`](../docs/FfiChecklist.md), and isn't released yet.
 
@@ -286,4 +286,4 @@ its solution, as in MATPOWER, so check the status.
 - A case being changed, or an options handle being set, needs the caller's own lock.
 
 The Rust types behind the handles are checked to be `Send` and `Sync` by
-`powerflow/tests/thread_safety_test.rs`.
+`ybus_powerflow/tests/thread_safety_test.rs`.

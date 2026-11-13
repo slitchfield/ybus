@@ -1,7 +1,7 @@
 //! The optimal power flows through C: what the DC and AC OPFs share, their solver codes and the
 //! settings both solvers have, read and written on either OPF's options.
 
-use powerflow::opf::{KktFactorization, OpfSolver};
+use ybus_powerflow::opf::{KktFactorization, OpfSolver};
 
 use crate::boundary::{arg_mut, get_value, guard, Failure};
 use crate::status::ybus_status;
@@ -40,11 +40,11 @@ pub const YBUS_OPF_MAX_ITERATIONS: ybus_opf_status = 0;
 pub const YBUS_OPF_NUMERICAL_FAILURE: ybus_opf_status = -1;
 
 /// The code of an OPF's status
-pub(crate) fn status_code(status: powerflow::opf::Status) -> ybus_opf_status {
+pub(crate) fn status_code(status: ybus_powerflow::opf::Status) -> ybus_opf_status {
     match status {
-        powerflow::opf::Status::Converged => YBUS_OPF_CONVERGED,
-        powerflow::opf::Status::MaxIterations => YBUS_OPF_MAX_ITERATIONS,
-        powerflow::opf::Status::NumericalFailure => YBUS_OPF_NUMERICAL_FAILURE,
+        ybus_powerflow::opf::Status::Converged => YBUS_OPF_CONVERGED,
+        ybus_powerflow::opf::Status::MaxIterations => YBUS_OPF_MAX_ITERATIONS,
+        ybus_powerflow::opf::Status::NumericalFailure => YBUS_OPF_NUMERICAL_FAILURE,
     }
 }
 

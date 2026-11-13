@@ -1,7 +1,7 @@
 //! The status codes every fallible export returns, as `#define`s in the header. A code is never
 //! renumbered once released; new failures get new codes.
 
-use powerflow::PowerflowError;
+use ybus_powerflow::PowerflowError;
 
 /// A status code: `YBUS_OK` (0) on success, or the code of what failed, with a message that
 /// `ybus_last_error_message` returns.
@@ -10,7 +10,7 @@ pub type ybus_status = i32;
 
 /// Success.
 pub const YBUS_OK: ybus_status = 0;
-/// A failure without a code of its own, such as one added to `powerflow` after this version of
+/// A failure without a code of its own, such as one added to `ybus_powerflow` after this version of
 /// the library: its message says what it was.
 pub const YBUS_ERROR_OTHER: ybus_status = 1;
 /// A bug in ybus, caught before it could cross into C. The handles passed to the call should
@@ -35,7 +35,7 @@ pub const YBUS_ERROR_INVALID_FIELD: ybus_status = 9;
 /// The case has no such data: no bus names, or no costs.
 pub const YBUS_ERROR_MISSING_DATA: ybus_status = 10;
 
-// `powerflow`'s errors, from 100, one per `PowerflowError` variant in its declaration order
+// `ybus_powerflow`'s errors, from 100, one per `PowerflowError` variant in its declaration order
 
 /// A case file couldn't be read.
 pub const YBUS_ERROR_NO_CASE_FILE: ybus_status = 100;
@@ -93,11 +93,11 @@ pub const YBUS_ERROR_UNSUPPORTED_COST: ybus_status = 124;
 pub const YBUS_ERROR_UNSUPPORTED_GENERATOR: ybus_status = 125;
 /// The optimal power flow's solver refused to start, as for an option out of range.
 pub const YBUS_ERROR_SOLVER: ybus_status = 126;
-/// The GPU path failed. Reserved: the C library is built without the GPU path (`powerflow`'s
+/// The GPU path failed. Reserved: the C library is built without the GPU path (`ybus_powerflow`'s
 /// `cuda` feature), so no call returns it yet.
 pub const YBUS_ERROR_GPU: ybus_status = 127;
 
-/// The code of a `powerflow` error.
+/// The code of a `ybus_powerflow` error.
 pub(crate) fn powerflow_code(error: &PowerflowError) -> ybus_status {
     match error {
         PowerflowError::NoCaseFile { .. } => YBUS_ERROR_NO_CASE_FILE,
@@ -128,7 +128,7 @@ pub(crate) fn powerflow_code(error: &PowerflowError) -> ybus_status {
         PowerflowError::UnsupportedGenerator { .. } => YBUS_ERROR_UNSUPPORTED_GENERATOR,
         PowerflowError::Solver { .. } => YBUS_ERROR_SOLVER,
         // `PowerflowError` is #[non_exhaustive], so a variant added later is OTHER until it gets
-        //   a code. So is `Gpu`, which only exists with powerflow's `cuda` feature, which this
+        //   a code. So is `Gpu`, which only exists with ybus_powerflow's `cuda` feature, which this
         //   crate can't name; a workspace build with every feature unifies it in, but the C
         //   library is built without it.
         _ => YBUS_ERROR_OTHER,
@@ -140,7 +140,7 @@ mod tests {
     use std::collections::HashSet;
     use std::path::PathBuf;
 
-    use powerflow::opf::InteriorPointError;
+    use ybus_powerflow::opf::InteriorPointError;
 
     use super::*;
 
@@ -168,7 +168,8 @@ mod tests {
     }
 
     // Every current variant has its own code, from 100 in declaration order, so none falls to
-    //   OTHER. A variant added to powerflow later does, until it's listed here and given a code.
+    //   OTHER. A variant added to ybus_powerflow later does, until it's listed here and given a
+    //   code.
     #[test]
     fn each_powerflow_error_has_its_own_code() {
         let errors = [

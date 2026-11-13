@@ -1,5 +1,5 @@
 //! For the tests: MATPOWER's case files, which aren't committed but fetched by
-//! `scripts/fetch-matpower.sh`. The rules are `powerflow/tests/common`'s, in miniature: the
+//! `scripts/fetch-matpower.sh`. The rules are `ybus_powerflow/tests/common`'s, in miniature: the
 //! `MATPOWER_DIR` installation if set, otherwise the pinned download; a missing case is skipped,
 //! saying so, unless `YBUS_REQUIRE_CASES=1`, as CI sets.
 

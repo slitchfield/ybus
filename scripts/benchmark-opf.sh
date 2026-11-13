@@ -2,7 +2,7 @@
 # Surveys the DC or AC optimal power flow over every MATPOWER case with costs: times it, records
 #   its outcome, iterations and peak memory, and compares it with MATPOWER's results, from MP-Core
 #   and from the legacy implementation. The OPF results in docs/benchmarks/ come from this. Each
-#   case runs in its own process (powerflow's opf_survey example) under a time limit and an
+#   case runs in its own process (ybus_powerflow's opf_survey example) under a time limit and an
 #   address-space limit, so a case that fails is recorded as such instead of stopping the survey.
 #
 # Usage: scripts/benchmark-opf.sh [<output.csv>]
@@ -80,7 +80,7 @@ else
     echo "warning: without Octave, results aren't compared with MATPOWER's" >&2
 fi
 
-cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p powerflow \
+cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_powerflow \
     --example opf_survey
 SURVEY="${ROOT}/target/release/examples/opf_survey"
 

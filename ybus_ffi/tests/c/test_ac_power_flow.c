@@ -6,7 +6,7 @@
 #include "cases.h"
 #include "check.h"
 
-/* MATPOWER's results agree to within rounding: powerflow's own reference tests allow 1e-9 */
+/* MATPOWER's results agree to within rounding: ybus_powerflow's own reference tests allow 1e-9 */
 #define TOLERANCE 1e-9
 
 /* One column of a solution against the reference's column of that name */

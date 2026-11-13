@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Surveys the AC power flow over every MATPOWER case: times each step, records convergence,
 #   iterations and peak memory, and compares the results with MATPOWER's runpf. The AC results in
-#   docs/benchmarks/ come from this. Each case runs in its own process (powerflow's ac_survey
+#   docs/benchmarks/ come from this. Each case runs in its own process (ybus_powerflow's ac_survey
 #   example) under a time limit and an address-space limit, so a case that fails is recorded as
 #   such instead of stopping the survey.
 #
@@ -64,7 +64,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     fi
 fi
 
-cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p powerflow \
+cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_powerflow \
     --example ac_survey
 SURVEY="${ROOT}/target/release/examples/ac_survey"
 

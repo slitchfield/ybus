@@ -40,7 +40,7 @@ Set with the maintainer on 2026-11-03:
 
 Facts checked when this roadmap was written (2026-11-03):
 
-- **Costs:** `Case` already parses `gencost` (`powerflow/src/case.rs`), polynomial and
+- **Costs:** `Case` already parses `gencost` (`ybus_powerflow/src/case.rs`), polynomial and
   piecewise-linear, and 73 of the 78 MATPOWER cases carry it.
 - **MATPOWER's OPF runs locally:** under Octave 8.4.0, `runopf` and `rundcopf` solve case9 with
   MIPS (AC cost 5296.69, DC cost 5216.03). MIPS and GLPK are the only OPF solvers installed;
@@ -73,7 +73,7 @@ Facts checked when this roadmap was written (2026-11-03):
       come first, and the acceptance bar.
       Decided (2026-11-03):
       - **The solver** goes in a new workspace crate, `ybus_ipm`: MIPS now, the phase O3
-        solver later, behind one problem interface. It depends on `ybus_sparse`; `powerflow`,
+        solver later, behind one problem interface. It depends on `ybus_sparse`; `ybus_powerflow`,
         which holds the OPF formulation, depends on it.
       - **The reference is MATPOWER's default code.** Measured on case9, case14, case30, case118,
         case300 and case2383wp, AC and DC: MP-Core and the legacy code take the same iteration
@@ -126,10 +126,10 @@ Facts checked when this roadmap was written (2026-11-03):
         COLAMD in PR 2; the bar is 1e-12), except a
         failed run's diverged multipliers (about 3e24), within 3.3e-7. Each problem also meets
         `t_mips`'s known answers to its precision.
-- [x] Generator costs in `powerflow`: polynomial (with `opf_setup`'s handling) and
+- [x] Generator costs in `ybus_powerflow`: polynomial (with `opf_setup`'s handling) and
       piecewise-linear (with `makeAy`'s constraints), reactive-power cost rows, and the total
       cost.
-      - **`powerflow::opf::cost`:** `GenCost::evaluate` and `total_cost`, as `totcost` and
+      - **`ybus_powerflow::opf::cost`:** `GenCost::evaluate` and `total_cost`, as `totcost` and
         `polycost` compute them (piecewise linear costs extended along their end segments);
         `OpfCosts`, for the in-service generators: one-segment piecewise linear costs made
         linear and zero leading coefficients dropped, as `opf_setup` does, then the per-unit
@@ -164,7 +164,7 @@ Facts checked when this roadmap was written (2026-11-03):
         sets `OPENBLAS_NUM_THREADS=1` and `OMP_NUM_THREADS=1` unless they're already set.
 - [x] The DC OPF: `[Va, Pg, y]` with the power balance, flow limits, angle limits and the
       piecewise-linear rows, solved through the quadratic-program wrapper, against `rundcopf`.
-      - **`powerflow::opf::dc`:** `dc_opf` follows the legacy `opf_setup`'s DC model, after
+      - **`ybus_powerflow::opf::dc`:** `dc_opf` follows the legacy `opf_setup`'s DC model, after
         `ext2int`:
         - every bus of type REF has its angle fixed; there's no `bustypes` and no island check,
           as in MATPOWER's OPF
@@ -183,7 +183,7 @@ Facts checked when this roadmap was written (2026-11-03):
       - **Every local case with costs (73):** `local_cases_match_rundcopf`, run with
         `YBUS_DCOPF_CASES`. Its criteria follow what was found:
         - **The outcome** always matches: MATPOWER converges on 58 cases and fails on 15, and so
-          does `powerflow`, except on case3120sp (below).
+          does `ybus_powerflow`, except on case3120sp (below).
         - **Iteration counts** match on 56 of the 57 runs MATPOWER finishes without Octave's
           fallback (below). The exception is case2736sp, at 44 to MATPOWER's 45, since MIPS
           switched to COLAMD (`KKT_ORDERING`).
@@ -203,7 +203,7 @@ Facts checked when this roadmap was written (2026-11-03):
         UMFPACK's own LU, called directly, gives our step (case16am's third iteration: a norm of
         1.7e14 from both, against the fallback's 0.33). The references now record when this
         happened (a `singular` column): on 6 cases, 5 of which MATPOWER fails anyway. There the
-        iteration counts aren't compared. On case3120sp `powerflow` converges at 148 iterations
+        iteration counts aren't compared. On case3120sp `ybus_powerflow` converges at 148 iterations
         where MATPOWER fails at 150.
 
 ### PR 3: the AC OPF
@@ -273,7 +273,7 @@ with legacy results generated locally to explain differences.
       - **MP-Core against legacy:** the two agree on every outcome and on every converged run's
         iteration count, with objectives within 3.9e-13 (DC) and 6.8e-12 (AC, outside
         case8387pegase). They differ on the degenerate dispatch (86 MW on case8387pegase, DC) as
-        `powerflow` does, and fail after different numbers of iterations on 7 AC runs that fail
+        `ybus_powerflow` does, and fail after different numbers of iterations on 7 AC runs that fail
         in both. So the MP-Core references stand, and no case needs the legacy rule.
       - **Time against MATPOWER under Octave:** far faster on small cases (Octave's fixed costs),
         and close on large ones (0.64–1.27 times MATPOWER's time for AC). On the three largest
