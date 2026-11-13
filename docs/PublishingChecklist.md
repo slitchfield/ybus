@@ -135,11 +135,18 @@ and the root README notes the renames once.
         docs.rs page.
       - **`deny.toml`** no longer allows wildcard path dependencies, since every one now has a
         version.
-- [ ] Metadata for each published crate: its description reviewed for crates.io's search
+- [x] Metadata for each published crate: its description reviewed for crates.io's search
       results, up to five keywords, and categories from crates.io's list of slugs.
       - `ybus_cuda`'s description says it's experimental.
       - `publish = false` comes off the four crates, so the dry run in P4 can cover them.
         Publishing itself stays a manual step until P5.
+      - **Categories:** `mathematics` and `science` for all four, with `algorithms` for
+        `ybus_ipm`, `simulation` for `ybus_powerflow` and `hardware-support` for `ybus_cuda`.
+      - **The descriptions** say what each crate computes, so a search result can be judged
+        without opening it. `ybus_sparse`'s now names LDLᵀ, which it gained in O4.
+      - **The packages:** `cargo package --workspace --exclude ybus_ffi` packages all four and
+        builds each against the others' packages, as crates.io would. `ybus_powerflow`'s is
+        still 182 files until P3's `include` list.
 - [ ] A README for each crate. `ybus_ipm`, `ybus_powerflow` and `ybus_cuda` don't have one.
       Each says what the crate does, its status, a short example, and links back to the
       repository. Every link is absolute, `ybus_sparse`'s three relative ones included, since a

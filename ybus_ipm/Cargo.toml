@@ -1,8 +1,9 @@
 [package]
 name = "ybus_ipm"
 version.workspace = true
-description = "Interior-point solvers for nonlinear programs, starting with a reimplementation of MATPOWER's MIPS"
-publish = false
+description = "Interior-point solvers for nonlinear programs: a port of MATPOWER's MIPS, and Mehrotra's predictor-corrector"
+keywords = ["optimization", "interior-point", "nonlinear", "solver", "matpower"]
+categories = ["mathematics", "science", "algorithms"]
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

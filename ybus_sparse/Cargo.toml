@@ -1,7 +1,7 @@
 [package]
 name = "ybus_sparse"
 version.workspace = true
-description = "Sparse matrices for Rust: assembly, products, LU/Cholesky/CG solvers and Matrix Market I/O"
+description = "Sparse matrices: assembly, products, LU, Cholesky and LDLT factorizations, conjugate gradient and Matrix Market I/O"
 readme = "README.md"
 keywords = ["sparse", "matrix", "linear-algebra", "csr", "solver"]
 categories = ["mathematics", "science"]

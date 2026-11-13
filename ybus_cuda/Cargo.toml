@@ -1,8 +1,9 @@
 [package]
 name = "ybus_cuda"
 version.workspace = true
-description = "The GPU path for ybus_powerflow: sparse triangular solves with many right-hand sides on CUDA, behind a safe API"
-publish = false
+description = "Experimental GPU path for ybus_powerflow: sparse triangular solves with many right-hand sides on CUDA through cuSPARSE, behind a safe API"
+keywords = ["cuda", "gpu", "cusparse", "sparse", "triangular-solve"]
+categories = ["science", "hardware-support", "mathematics"]
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
