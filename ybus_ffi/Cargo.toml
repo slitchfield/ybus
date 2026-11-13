@@ -17,7 +17,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 # Default features only: the C build has neither rayon nor cuda (docs/FfiChecklist.md, F0)
-ybus_powerflow = { path = "../ybus_powerflow" }
+ybus_powerflow.workspace = true
 # For the DC power flow's ordering, ybus_sparse::compressed_matrix::Ordering, which ybus_powerflow
 #   uses but doesn't re-export
-ybus_sparse = { path = "../ybus_sparse" }
+ybus_sparse.workspace = true

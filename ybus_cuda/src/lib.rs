@@ -29,6 +29,12 @@ mod sparse;
 pub use factor::{GpuFactor, Timings};
 pub use pairs::{ColumnMax, GpuBlock, GpuOperator, Pair, PairUpdate};
 
+/// Runs the README's Rust examples as doctests, so they can't drift from the API. Compiled only
+/// for `cargo test --doc`: the README is written for crates.io, and isn't the crate docs.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 use std::sync::Arc;
 
 use cudarc::driver::{CudaContext, CudaStream};

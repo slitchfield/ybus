@@ -1,12 +1,15 @@
 [package]
 name = "ybus_ipm"
-version = "0.1.0"
-description = "Interior-point solvers for nonlinear programs, starting with a reimplementation of MATPOWER's MIPS"
-publish = false
+version.workspace = true
+description = "Interior-point solvers for nonlinear programs: a port of MATPOWER's MIPS, and Mehrotra's predictor-corrector"
+keywords = ["optimization", "interior-point", "nonlinear", "solver", "matpower"]
+categories = ["mathematics", "science", "algorithms"]
 edition.workspace = true
-license.workspace = true
+# The workspace's license, and MIPS's for the port in src/mips.rs and its tests (LICENSE-MIPS
+#   lists the files)
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
 repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-ybus_sparse = { path = "../ybus_sparse" }
+ybus_sparse.workspace = true

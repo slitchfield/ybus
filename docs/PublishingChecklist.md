@@ -123,26 +123,54 @@ and the root README notes the renames once.
 
 ## Phase P2: Manifests and licenses
 
-- [ ] Shared dependencies through `[workspace.dependencies]`: each workspace crate once, with
+- [x] Shared dependencies through `[workspace.dependencies]`: each workspace crate once, with
       both `path` and `version`, so the published manifests get versions. Members use
       `ybus_sparse.workspace = true`. The one version all four share moves to
       `[workspace.package]`, as `version.workspace = true` in each. Shared `homepage` and
       `documentation` fields go there too, where they apply to every crate.
-- [ ] Metadata for each published crate: its description reviewed for crates.io's search
+      - **Also shared:** `rayon`, which `ybus_sparse` and `ybus_powerflow` both use.
+      - **`ybus_ffi`** depends on the workspace entries too, but keeps its own `version`.
+      - **No `homepage` or `documentation`:** the repository is the homepage, which crates.io
+        advises against repeating, and an unset `documentation` links each crate to its own
+        docs.rs page.
+      - **`deny.toml`** no longer allows wildcard path dependencies, since every one now has a
+        version.
+- [x] Metadata for each published crate: its description reviewed for crates.io's search
       results, up to five keywords, and categories from crates.io's list of slugs.
       - `ybus_cuda`'s description says it's experimental.
       - `publish = false` comes off the four crates, so the dry run in P4 can cover them.
         Publishing itself stays a manual step until P5.
-- [ ] A README for each crate. `ybus_ipm`, `ybus_powerflow` and `ybus_cuda` don't have one.
+      - **Categories:** `mathematics` and `science` for all four, with `algorithms` for
+        `ybus_ipm`, `simulation` for `ybus_powerflow` and `hardware-support` for `ybus_cuda`.
+      - **The descriptions** say what each crate computes, so a search result can be judged
+        without opening it. `ybus_sparse`'s now names LDLᵀ, which it gained in O4.
+      - **The packages:** `cargo package --workspace --exclude ybus_ffi` packages all four and
+        builds each against the others' packages, as crates.io would. `ybus_powerflow`'s is
+        still 182 files until P3's `include` list.
+- [x] A README for each crate. `ybus_ipm`, `ybus_powerflow` and `ybus_cuda` don't have one.
       Each says what the crate does, its status, a short example, and links back to the
       repository. Every link is absolute, `ybus_sparse`'s three relative ones included, since a
       README is shown on crates.io and, for `ybus_sparse`, as its docs.rs front page.
-- [ ] License files in each package, the way `ybus_sparse` links `LICENSE-MIT` and
+      - **The examples are doc tests,** as `ybus_sparse`'s already were: each crate's `lib.rs`
+        includes its README under `#[cfg(doctest)]`. `ybus_cuda`'s is `no_run`, compiled but not
+        run, so `cargo test --doc` never touches a GPU; its GPU tests cover the same calls.
+      - **`ybus_powerflow`'s example** parses a three-bus case from text, so it needs no files.
+      - **`ybus_sparse`'s README** also loses its stale lines: the `git` dependency (now
+        `"0.1"`), MSRV 1.87 (now 1.88) and the power flow "being built". Its license links were
+        relative too, so six links in all are now absolute.
+      - **The READMEs aren't the crate docs yet:** P3 writes those front pages.
+- [x] License files in each package, the way `ybus_sparse` links `LICENSE-MIT` and
       `LICENSE-APACHE` to the root's.
       - **`ybus_ipm`'s license** becomes `(MIT OR Apache-2.0) AND BSD-3-Clause`, since its MIPS
         port is under MIPS's license. It ships `LICENSE-MIPS`.
       - **`AI-DISCLAIMER.md`** goes in each package too, linked the same way, since the root
         README cites it.
+      - **The links are symlinks,** which `cargo package` stores as the files they point to:
+        each package holds the license texts, not links.
+      - **`deny.toml`** allows BSD-3-Clause for `ybus_ipm` alone, as an exception, since
+        cargo-deny checks the workspace's own crates once they're publishable. A dependency
+        under that license still needs its own decision.
+      - **The root README's license section** gives `ybus_ipm`'s license too.
 
 ## Phase P3: Package contents and docs.rs
 

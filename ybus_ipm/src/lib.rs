@@ -38,3 +38,9 @@ mod vector;
 pub use interior_point_error::InteriorPointError;
 pub use problem::{Constraints, Problem, QuadraticProblem};
 pub use solution::{Solution, Status};
+
+/// Runs the README's Rust examples as doctests, so they can't drift from the API. Compiled only
+/// for `cargo test --doc`: the README is written for crates.io, and isn't the crate docs.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;

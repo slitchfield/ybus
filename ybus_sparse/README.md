@@ -17,14 +17,14 @@ Convert with `to_csr()`/`to_csc()` once the matrix is built, or build a compress
 directly from triplets or raw arrays.
 
 It is the numerical foundation of the [`ybus`](https://github.com/slitchfield/ybus) workspace,
-which is building DC and AC power flow on top of it; see
-[`docs/PowerFlowChecklist.md`](../docs/PowerFlowChecklist.md) for that roadmap.
+whose [`ybus_powerflow`](https://crates.io/crates/ybus_powerflow) computes DC and AC power flow
+on top of it.
 
 ## Quick start
 
 ```toml
 [dependencies]
-ybus_sparse = { git = "https://github.com/slitchfield/ybus" }
+ybus_sparse = "0.1"
 ```
 
 ```rust
@@ -197,22 +197,23 @@ checked method alongside it (`try_add`, `matmul`, `mul_vec`, `peek_at`, …).
 
 ## Development
 
-- **MSRV:** Rust 1.87, set for the whole workspace in the root `Cargo.toml`.
+- **MSRV:** Rust 1.88, set for the whole workspace in the root `Cargo.toml`.
 - **Tests:** in `tests/`. The products, factorizations and Kronecker products are checked
   against dense reference implementations and algebraic identities. The Matrix Market reader
   is fuzzed with truncated, malformed and oversized input.
 - **API documentation:** `cargo doc -p ybus_sparse --open --all-features`.
 
-See the [workspace README](../README.md) for `./check.sh`, CI and the rest of the docs.
+See the [workspace README](https://github.com/slitchfield/ybus#readme) for `./check.sh`, CI and
+the rest of the docs.
 
 ## License
 
-Licensed under either of the Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE))
-or the MIT license ([`LICENSE-MIT`](LICENSE-MIT)), at your option. See
-[`AI-DISCLAIMER.md`](AI-DISCLAIMER.md) for how this licensing relates to the use of AI in
+Licensed under either of the Apache License, Version 2.0 ([`LICENSE-APACHE`](https://github.com/slitchfield/ybus/blob/main/LICENSE-APACHE))
+or the MIT license ([`LICENSE-MIT`](https://github.com/slitchfield/ybus/blob/main/LICENSE-MIT)), at your option. See
+[`AI-DISCLAIMER.md`](https://github.com/slitchfield/ybus/blob/main/AI-DISCLAIMER.md) for how this licensing relates to the use of AI in
 developing the crate.
 
 ## References
 
 The published algorithms behind this crate, and the license terms of related software, are
-listed in the [workspace README](../README.md#references).
+listed in the [workspace README](https://github.com/slitchfield/ybus#references).
