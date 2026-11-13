@@ -1,5 +1,5 @@
 //! Optimal power flow, following MATPOWER's `runopf` with its default solver, MIPS (from the
-//! `interior_point` crate), or with the predictor-corrector method from the same crate
+//! `ybus_ipm` crate), or with the predictor-corrector method from the same crate
 //! ([`OpfSolver`]).
 //!
 //! - [`cost`]: the generator costs, evaluated as MATPOWER's `totcost` evaluates them and
@@ -10,7 +10,7 @@
 //! The solvers' types this module's API names are re-exported here, from their options
 //! ([`MipsOptions`], [`MehrotraOptions`], [`KktFactorization`]) to their results ([`Solution`],
 //! [`Status`], [`Multipliers`], [`History`], [`KktResiduals`]) and refusals ([`InteriorPointError`]), so that a caller
-//! needs no direct dependency on `interior_point`.
+//! needs no direct dependency on `ybus_ipm`.
 //!
 //! See phase O1 of `docs/OptimizationChecklist.md` for the roadmap.
 
@@ -26,12 +26,12 @@ pub mod derivatives;
 use std::f64::consts::PI;
 
 // The solvers' types this module's API names, so that choosing and reading a solver needs no
-//   direct dependency on interior_point
-pub use interior_point::interior_point_error::InteriorPointError;
-pub use interior_point::kkt::KktFactorization;
-pub use interior_point::mehrotra::{MehrotraIteration, MehrotraOptions};
-pub use interior_point::mips::{MipsIteration, MipsOptions};
-pub use interior_point::solution::{History, KktResiduals, Multipliers, Solution, Status};
+//   direct dependency on ybus_ipm
+pub use ybus_ipm::interior_point_error::InteriorPointError;
+pub use ybus_ipm::kkt::KktFactorization;
+pub use ybus_ipm::mehrotra::{MehrotraIteration, MehrotraOptions};
+pub use ybus_ipm::mips::{MipsIteration, MipsOptions};
+pub use ybus_ipm::solution::{History, KktResiduals, Multipliers, Solution, Status};
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use crate::case::{BusType, Case};
@@ -47,13 +47,13 @@ pub enum OpfSolver {
     /// crate's, whose results match MATPOWER's
     Mips(MipsOptions),
     /// The primal-dual method with Mehrotra's predictor-corrector
-    /// ([`interior_point::mehrotra`]), on the same problem, constraints and starting point
+    /// ([`ybus_ipm::mehrotra`]), on the same problem, constraints and starting point
     Mehrotra(MehrotraOptions),
 }
 
 impl OpfSolver {
     /// The same solver, with its KKT matrix factored by `kkt`: LU by default, or the pivoted
-    /// LDLᵀ (see [`interior_point::kkt`]).
+    /// LDLᵀ (see [`ybus_ipm::kkt`]).
     pub fn with_kkt_factorization(self, kkt: KktFactorization) -> OpfSolver {
         match self {
             OpfSolver::Mips(mut options) => {

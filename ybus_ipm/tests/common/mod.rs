@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use interior_point::problem::{
+use ybus_ipm::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
 };
 use ybus_sparse::compressed_matrix::CsrMatrix;

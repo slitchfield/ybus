@@ -10,9 +10,9 @@ use common::{
     dense, known, qp4_constraints, qp4_hessian, references, Banana, Hs71, Nonlinear2, Nonlinear3,
     Quadratic3,
 };
-use interior_point::mips::{mips, qps_mips, MipsOptions};
-use interior_point::problem::{Constraints, Problem, QuadraticProblem};
-use interior_point::solution::{Solution, Status};
+use ybus_ipm::mips::{mips, qps_mips, MipsOptions};
+use ybus_ipm::problem::{Constraints, Problem, QuadraticProblem};
+use ybus_ipm::solution::{Solution, Status};
 
 /// How far our results may be from MATPOWER's, relative to the larger magnitude (at least 1).
 /// Both solve the same small systems, but by different LU factorizations (UMFPACK's in

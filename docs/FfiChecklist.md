@@ -83,7 +83,7 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
         length check (too short is an error, never a partial write)
       - the scalars (`objective`, `iterations`, `mismatch_pu`) have plain getters
       - the OPF's `status` becomes a code
-      - the OPF's `solver` and `residuals` fields stay out, since they expose `interior_point`'s
+      - the OPF's `solver` and `residuals` fields stay out, since they expose `ybus_ipm`'s
         internals
 
       Pointers into the solution's own memory were the alternative: no copies, but a C caller

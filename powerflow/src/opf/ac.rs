@@ -30,11 +30,11 @@
 //! formulas (in `opf::derivatives`, public only for its tests). The results and multipliers are mapped back to the case
 //! as `nlpopf_solver` and `opf` map them.
 
-use interior_point::kkt::KktFactorization;
-use interior_point::mehrotra::{mehrotra, MehrotraOptions};
-use interior_point::mips::{mips, MipsOptions};
-use interior_point::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Problem};
-use interior_point::solution::{kkt_residuals, KktResiduals, Solution, Status};
+use ybus_ipm::kkt::KktFactorization;
+use ybus_ipm::mehrotra::{mehrotra, MehrotraOptions};
+use ybus_ipm::mips::{mips, MipsOptions};
+use ybus_ipm::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Problem};
+use ybus_ipm::solution::{kkt_residuals, KktResiduals, Solution, Status};
 use ybus_sparse::compressed_matrix::CsrMatrix;
 use ybus_sparse::Complex;
 

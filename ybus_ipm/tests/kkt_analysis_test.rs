@@ -2,9 +2,9 @@
 //   afresh when it changes: a problem whose Hessian's pattern changes part way through the solve
 //   still solves correctly, with a second analysis.
 
-use interior_point::mehrotra::{mehrotra, MehrotraOptions};
-use interior_point::mips::{mips, MipsOptions};
-use interior_point::problem::{Constraints, Problem};
+use ybus_ipm::mehrotra::{mehrotra, MehrotraOptions};
+use ybus_ipm::mips::{mips, MipsOptions};
+use ybus_ipm::problem::{Constraints, Problem};
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
 /// min (x₁ − 3)² + (x₂ − 3)² subject to x ≤ 2, whose optimum is (2, 2) with upper multipliers 2.

@@ -17,7 +17,8 @@ optimal power flows, and leave the power flows' stages as they were:
   constraints, and their derivatives) anywhere on its stack counts as that, unless it's
   allocation, so a sparse product inside the Hessian isn't counted as the solver's.
 - Sparse products and sums, and assembly from triplets, called from the interior-point solvers
-  (a frame of `interior_point::` on the stack) count as KKT assembly.
+  (a frame of `ybus_ipm::`, or `interior_point::` before the rename, on the stack) count as KKT
+  assembly.
 
 Two more apply to the pivoted LDLᵀ, and leave LU and Cholesky samples as they were:
 
@@ -38,6 +39,7 @@ from pathlib import Path
 # Each crate's frame prefix: its name since phase P1 of docs/PublishingChecklist.md, then its name
 #   before, so a profile recorded before the renames still folds into the same stages
 SPARSE = ("ybus_sparse::", "sparse_mat::")
+IPM = ("ybus_ipm::", "interior_point::")
 
 # (stage, patterns): a frame matches a stage if its demangled name contains any of the patterns
 STAGES = [
@@ -144,7 +146,7 @@ def stage_of(names):
     for context, patterns in CONTEXT_STAGES:
         if any(pattern in frame for frame in names for pattern in patterns):
             return context
-    if stage in KKT_ASSEMBLY and any("interior_point::" in frame for frame in names):
+    if stage in KKT_ASSEMBLY and any(crate in frame for frame in names for crate in IPM):
         return "KKT assembly"
     return stage
 

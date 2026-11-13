@@ -24,11 +24,11 @@
 
 use std::f64::consts::PI;
 
-use interior_point::kkt::KktFactorization;
-use interior_point::mehrotra::{qps_mehrotra, MehrotraOptions};
-use interior_point::mips::{qps_mips, MipsOptions};
-use interior_point::problem::{Constraints, QuadraticProblem};
-use interior_point::solution::{kkt_residuals, KktResiduals, Solution, Status};
+use ybus_ipm::kkt::KktFactorization;
+use ybus_ipm::mehrotra::{qps_mehrotra, MehrotraOptions};
+use ybus_ipm::mips::{qps_mips, MipsOptions};
+use ybus_ipm::problem::{Constraints, QuadraticProblem};
+use ybus_ipm::solution::{kkt_residuals, KktResiduals, Solution, Status};
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use crate::case::Case;

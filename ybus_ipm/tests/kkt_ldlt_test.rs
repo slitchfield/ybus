@@ -7,11 +7,11 @@
 mod common;
 
 use common::{qp4_constraints, qp4_hessian, Banana, Hs71, Nonlinear2, Nonlinear3, Quadratic3};
-use interior_point::kkt::KktFactorization;
-use interior_point::mehrotra::{mehrotra, qps_mehrotra, MehrotraIteration, MehrotraOptions};
-use interior_point::mips::{mips, MipsOptions};
-use interior_point::problem::{Constraints, Problem, QuadraticProblem};
-use interior_point::solution::{kkt_residuals, History, Multipliers, Solution, Status};
+use ybus_ipm::kkt::KktFactorization;
+use ybus_ipm::mehrotra::{mehrotra, qps_mehrotra, MehrotraIteration, MehrotraOptions};
+use ybus_ipm::mips::{mips, MipsOptions};
+use ybus_ipm::problem::{Constraints, Problem, QuadraticProblem};
+use ybus_ipm::solution::{kkt_residuals, History, Multipliers, Solution, Status};
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
 /// The bar for the objective, relative to the larger magnitude (at least 1)

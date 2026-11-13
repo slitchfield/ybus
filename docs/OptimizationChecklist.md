@@ -72,7 +72,7 @@ Facts checked when this roadmap was written (2026-11-03):
 - [x] **Decide:** where the solver lives, which MATPOWER code is the reference, which constraints
       come first, and the acceptance bar.
       Decided (2026-11-03):
-      - **The solver** goes in a new workspace crate, `interior_point`: MIPS now, the phase O3
+      - **The solver** goes in a new workspace crate, `ybus_ipm`: MIPS now, the phase O3
         solver later, behind one problem interface. It depends on `ybus_sparse`; `powerflow`,
         which holds the OPF formulation, depends on it.
       - **The reference is MATPOWER's default code.** Measured on case9, case14, case30, case118,
@@ -95,20 +95,20 @@ Facts checked when this roadmap was written (2026-11-03):
         1e-9 was.
       - **Three PRs,** below.
 
-### PR 1: the `interior_point` crate and generator costs
+### PR 1: the `ybus_ipm` crate and generator costs
 
-- [x] The `interior_point` crate and its problem interface: an objective with gradient and
+- [x] The `ybus_ipm` crate and its problem interface: an objective with gradient and
       Hessian, nonlinear constraints with Jacobians, the Lagrangian's Hessian, linear constraints
       and bounds; `MipsOptions` with MIPS's defaults; and a result with the multipliers.
-      `interior_point::problem` has the `Problem` trait (with nonlinear constraints and the
+      `ybus_ipm::problem` has the `Problem` trait (with nonlinear constraints and the
       Lagrangian's Hessian optional), `Constraints` (linear constraints and bounds, each
       optional) and `QuadraticProblem` (`½ xᵀ H x + cᵀ x`, as `qps_mips` builds). Constraint
       Jacobians take one row per constraint, transposed from MIPS's convention.
-      `interior_point::mips` has `MipsOptions` (MIPS's defaults, including step control's), the
+      `ybus_ipm::mips` has `MipsOptions` (MIPS's defaults, including step control's), the
       exit status, the multipliers as MIPS reports them, and each iteration's record.
 - [x] MIPS, ported from `mips.m`, and `qps_mips`'s quadratic-program wrapper, tested on the
       problems of `t_mips.m` and `t_qps_mips.m` with MATPOWER's tolerances and iteration counts.
-      - **`interior_point::mips::mips` and `qps_mips`,** following `mips.m` step by step: the
+      - **`ybus_ipm::mips::mips` and `qps_mips`,** following `mips.m` step by step: the
         bounds and linear constraints split into equalities and one- or two-sided inequalities,
         the starting slacks and multipliers, the reduced KKT system solved with `ybus_sparse`'s
         LU, ordered by AMD and by COLAMD since PR 2 (where MATLAB uses its backslash; a singular
@@ -119,7 +119,7 @@ Facts checked when this roadmap was written (2026-11-03):
       - **References:** `scripts/generate-mips-reference.sh` records MATPOWER's MIPS 1.5.2 on the
         problems of `t_mips.m` and `t_qps_mips.m`, plus two starts of Hock and Schittkowski's
         problem 71 where step control changes the run and where MIPS reaches its iteration
-        limit, each with step control off and on (`interior_point/tests/data/mips_reference.txt`).
+        limit, each with step control off and on (`ybus_ipm/tests/data/mips_reference.txt`).
       - **Agreement:** every run takes MATPOWER's exit status and iteration count (including the
         infeasible LP's numerical failure after 6, and 150 at the limit), and its solution,
         objective and multipliers agree within 6.5e-14 relative (1.0e-13 since the switch to
@@ -380,7 +380,7 @@ with legacy results generated locally to explain differences.
       1992). It takes the same problem interface as the MIPS crate.
       - **Decided with the maintainer (2026-11-07):**
         - **Method:** a primal-dual method with Mehrotra's predictor-corrector
-          (`interior_point::mehrotra`).
+          (`ybus_ipm::mehrotra`).
           - **Predictor:** an affine step (σ = 0) sets the centering σ = (μ_aff/μ)³.
           - **Corrector:** adds the predictor's second-order term.
           - **Per iteration:** one KKT factorization serves both solves.
@@ -421,9 +421,9 @@ with legacy results generated locally to explain differences.
           3. the OPF's choice of solver, with MIPS staying the default;
           4. the survey and the record.
 - [x] **The solver,** written from the literature, tested on the MIPS test problems.
-      - **`interior_point::mehrotra`** (`mehrotra`, `qps_mehrotra`), for MIPS's whole problem
+      - **`ybus_ipm::mehrotra`** (`mehrotra`, `qps_mehrotra`), for MIPS's whole problem
         class. It reports MIPS's multipliers and is checked by the solver-independent
-        `interior_point::solution::kkt_residuals`.
+        `ybus_ipm::solution::kkt_residuals`.
       - **On MIPS's test problems:** every problem converges where MATPOWER's MIPS does.
         - **The bar:** the objective within 1e-6 of MIPS's, x and the multipliers within 1e-4,
           t_mips's known answers, and KKT residuals below 1e-5.

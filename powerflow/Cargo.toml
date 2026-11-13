@@ -20,7 +20,7 @@ cuda = ["dep:ybus_cuda"]
 
 [dependencies]
 ybus_sparse = { path = "../ybus_sparse" }
-interior_point = { path = "../interior_point" }
+ybus_ipm = { path = "../ybus_ipm" }
 rayon = { version = "1", optional = true }
 ybus_cuda = { path = "../ybus_cuda", optional = true }
 

@@ -1,9 +1,9 @@
 % Records MIPS's results on the test problems of MATPOWER's own MIPS tests (mips/lib/t/t_mips.m
 %   and t_qps_mips.m), restated here, plus two starts of Hock and Schittkowski's problem 71 that
-%   exercise step control and the iteration limit, for interior_point's tests: each problem solved with step
+%   exercise step control and the iteration limit, for ybus_ipm's tests: each problem solved with step
 %   control off and on, printing the exit flag, iteration count, objective, solution and
 %   multipliers with 17 significant digits. Run through scripts/generate-mips-reference.sh, which
-%   fetches MATPOWER and writes interior_point/tests/data/mips_reference.txt.
+%   fetches MATPOWER and writes ybus_ipm/tests/data/mips_reference.txt.
 %
 % Each line is: name, step_control, then key=values pairs separated by '|', with vectors as
 %   space-separated numbers (empty when MIPS returns none).

@@ -1,13 +1,13 @@
-// Tests for the solver-independent KKT check (interior_point::solution::kkt_residuals): zero at
+// Tests for the solver-independent KKT check (ybus_ipm::solution::kkt_residuals): zero at
 //   a known exact optimum, each residual catching its own kind of error, and small at MIPS's
 //   solutions of MATPOWER's MIPS test problems, nonlinear ones included.
 
 mod common;
 
 use common::{dense, qp4_constraints, qp4_hessian, Hs71, Nonlinear3};
-use interior_point::mips::{mips, qps_mips, MipsOptions};
-use interior_point::problem::{Constraints, QuadraticProblem};
-use interior_point::solution::{kkt_residuals, Multipliers};
+use ybus_ipm::mips::{mips, qps_mips, MipsOptions};
+use ybus_ipm::problem::{Constraints, QuadraticProblem};
+use ybus_ipm::solution::{kkt_residuals, Multipliers};
 
 /// t_qps_mips's qp2: min ½ xᵀ [[1, −1], [−1, 2]] x − 2x₁ − 6x₂ subject to three rows ≤ (2, 2, 3)
 /// and x ≥ 0, whose optimum is x = (2/3, 4/3) with the first two rows binding

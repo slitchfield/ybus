@@ -106,7 +106,12 @@ and the root README notes the renames once.
       - **`rustfmt` re-sorted the imports** that the new name moved.
       - **`ybus_sparse/README.md`'s relative links** still resolve, since the directory depth
         is unchanged. P2 makes them absolute.
-- [ ] Rename `interior_point` to `ybus_ipm`, with `LICENSE-MIPS`'s list of files.
+- [x] Rename `interior_point` to `ybus_ipm`, with `LICENSE-MIPS`'s list of files.
+      - **Also renamed:** `AI-DISCLAIMER.md`'s account of the MIPS port, and the MIPS
+        reference generator's output path (`scripts/generate-mips-reference.sh` and
+        `generate_mips_reference.m`).
+      - **`profile_summary.py`** finds the solvers' frames for its KKT assembly stage under
+        either name. An old AC profile's stage table is unchanged.
 - [ ] Rename `powerflow` to `ybus_powerflow`. This includes `ybus_ffi`'s docs, header comment
       and `-p` flags. The C API's names don't change.
 

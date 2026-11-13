@@ -2,7 +2,7 @@
 
 use std::{fmt, path::PathBuf};
 
-use interior_point::interior_point_error::InteriorPointError;
+use ybus_ipm::interior_point_error::InteriorPointError;
 
 /// Errors returned by `powerflow` operations.
 #[derive(Debug, PartialEq)]

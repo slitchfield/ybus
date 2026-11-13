@@ -1,4 +1,4 @@
-// Tests the predictor-corrector method (interior_point::mehrotra) on the test problems of
+// Tests the predictor-corrector method (ybus_ipm::mehrotra) on the test problems of
 //   MATPOWER's MIPS tests (tests/common), with and without nonlinear constraints: it must converge
 //   wherever MATPOWER's MIPS does, with the objective within 1e-6 (relative) of MIPS's, the
 //   solution and multipliers close to MIPS's and to each problem's known answer, and small KKT
@@ -12,12 +12,12 @@ use common::{
     dense, known, qp4_constraints, qp4_hessian, references, Banana, Hs71, Nonlinear2, Nonlinear3,
     Quadratic3,
 };
-use interior_point::mehrotra::{mehrotra, qps_mehrotra, MehrotraOptions};
-use interior_point::problem::{
+use ybus_ipm::mehrotra::{mehrotra, qps_mehrotra, MehrotraOptions};
+use ybus_ipm::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
 };
-use interior_point::solution::kkt_residuals;
-use interior_point::solution::{Solution, Status};
+use ybus_ipm::solution::kkt_residuals;
+use ybus_ipm::solution::{Solution, Status};
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
 /// The bar for the objective, relative to the larger magnitude (at least 1)

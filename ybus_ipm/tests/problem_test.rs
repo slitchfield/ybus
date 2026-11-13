@@ -1,6 +1,6 @@
 // Tests for the problem interface: QuadraticProblem's objective, gradient and Hessian.
 
-use interior_point::problem::{Problem, QuadraticProblem};
+use ybus_ipm::problem::{Problem, QuadraticProblem};
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
 #[test]

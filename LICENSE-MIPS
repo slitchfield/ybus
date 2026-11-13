@@ -5,9 +5,9 @@ Parts of this repository are derived from MIPS, the MATPOWER Interior Point Solv
 (https://github.com/MATPOWER/mips), version 1.5.2 as distributed with MATPOWER 8.1, and are
 redistributed under MIPS's 3-clause BSD license, reproduced below:
 
-- interior_point/src/mips.rs: a step-for-step port of mips.m and qps_mips.m
+- ybus_ipm/src/mips.rs: a step-for-step port of mips.m and qps_mips.m
   (Copyright (c) 2009-2024 and 2010-2024, PSERC)
-- interior_point/tests/mips_test.rs: the test problems, starting points and expected answers of
+- ybus_ipm/tests/mips_test.rs: the test problems, starting points and expected answers of
   t_mips.m and t_qps_mips.m, restated in Rust (Copyright (c) 2010-2024, PSERC)
 - scripts/generate_mips_reference.m: the problem functions of t_mips.m, copied, and the problems
   of t_mips.m and t_qps_mips.m (Copyright (c) 2010-2024, PSERC)
