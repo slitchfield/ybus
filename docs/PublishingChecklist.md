@@ -174,14 +174,36 @@ and the root README notes the renames once.
 
 ## Phase P3: Package contents and docs.rs
 
-- [ ] An `include` list for each crate, so a package holds what builds and documents the
+- [x] An `include` list for each crate, so a package holds what builds and documents the
       library and nothing else: `src/`, `Cargo.toml`, the README and the license files.
       - **`ybus_powerflow`:** without `tests/`, `benches/` or `examples/`, as P0 decided.
       - **`ybus_cuda`:** `src/kernels.cu`, which `include_str!` compiles in, is under `src/`.
-      - **Targets whose files are left out:** Cargo drops the `[[bench]]` and `[[example]]`
-        declarations with a warning. The item makes the package warning-free.
+      - **Targets whose files are left out:** Cargo drops them from the published manifest, with
+        a warning for each. ~~The item makes the package warning-free.~~ Decided (2026-11-13):
+        the warnings are accepted, since they can't be avoided without shipping the tests.
+        - **Why there are more than planned:** `cargo package` writes every target into the
+          published manifest explicitly, so a test it discovered on its own warns just as a
+          declared `[[bench]]` does. That's 58 warnings, not 11: 12 for `ybus_sparse`, 6 for
+          `ybus_ipm`, 2 for `ybus_cuda` and 38 for `ybus_powerflow` (27 tests, 8 examples and 3
+          benches). Cargo 1.99 has no setting that silences them.
+        - **Why not ship the tests where they'd run:** a package then holds code no user of the
+          library builds, and `ybus_powerflow`'s would still warn. Moving the tests, benches and
+          examples into unpublished crates would make every package warning-free, at the cost
+          of moving them and the paths to their data.
+        - **What it means for P4:** the Package job fails on errors, not on cargo's warnings.
 
-      Each package's file count and size go in the PR.
+      | Crate | Files | Size | Compressed | Was (P2) |
+      |---|--:|--:|--:|--:|
+      | `ybus_sparse` | 35 | 351.4 KiB | 94.5 KiB | 48 files, 155.5 KiB |
+      | `ybus_ipm` | 17 | 124.4 KiB | 36.6 KiB | 25 files, 50.0 KiB |
+      | `ybus_cuda` | 14 | 94.9 KiB | 27.9 KiB | 17 files, 32.6 KiB |
+      | `ybus_powerflow` | 25 | 360.8 KiB | 97.0 KiB | 186 files, 332.5 KiB |
+
+      Each count includes the four files cargo adds: `Cargo.toml` as published, the original as
+      `Cargo.toml.orig`, `Cargo.lock` and `.cargo_vcs_info.json`.
+      - **The patterns start with `/`,** anchored at the package root. Without the slash,
+        `README.md` also matched `tests/data/matpower-reference/README.md`, as a `.gitignore`
+        pattern would.
 - [ ] docs.rs: `[package.metadata.docs.rs]` with `all-features = true`, and labels on the
       feature-gated items (`rayon`, `serde`, `cuda`), so a reader sees what each one needs.
       These need nightly's `doc_cfg`, behind `--cfg docsrs` so stable builds don't see it. The
