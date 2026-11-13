@@ -1,24 +1,24 @@
 # FFI checklist
 
 The roadmap for long-term goal 1 in [`LongTermGoals.md`](LongTermGoals.md): a stable C interface
-to `powerflow`, then Python and Julia bindings. Each unchecked item in phases F1 to F6 is sized to
-be one commit; phase F7's are coarser and are broken into commit-sized items when each is planned.
-Phase F0's decisions were made with the maintainer on 2026-11-10.
+to `ybus_powerflow`, then Python and Julia bindings. Each unchecked item in phases F1 to F6 is sized
+to be one commit; phase F7's are coarser and are broken into commit-sized items when each is
+planned. Phase F0's decisions were made with the maintainer on 2026-11-10.
 
 ## Goals
 
-1. **A C ABI first.** A crate of its own that wraps `powerflow` in `extern "C"` functions: opaque
-   handles for cases, options, models and solutions, status codes instead of panics, and buffers
-   the caller owns. It's the common ground the other languages can build on.
-2. **Python and Julia after it.** Python through PyO3 and maturin, binding `powerflow` directly;
-   Julia through the C library with `ccall`, so it shares the C layer's stability.
-3. **Out of scope at first:** `sparse_mat`'s matrices, the interior-point solvers on their own,
+1. **A C ABI first.** A crate of its own that wraps `ybus_powerflow` in `extern "C"` functions:
+   opaque handles for cases, options, models and solutions, status codes instead of panics, and
+   buffers the caller owns. It's the common ground the other languages can build on.
+2. **Python and Julia after it.** Python through PyO3 and maturin, binding `ybus_powerflow`
+   directly; Julia through the C library with `ccall`, so it shares the C layer's stability.
+3. **Out of scope at first:** `ybus_sparse`'s matrices, the interior-point solvers on their own,
    the DC outage studies and sensitivities, and the `rayon` and `cuda` features. Phase F7 lists
    them.
 
 **Conventions carried over from the earlier roadmaps:**
 - one commit per checklist item, on `dev/` branches, with the PR's description as its report
-- unsafe code only in the new crate, as `ybus_cuda` holds the GPU path's; `powerflow` keeps
+- unsafe code only in the new crate, as `ybus_cuda` holds the GPU path's; `ybus_powerflow` keeps
   `#![forbid(unsafe_code)]`
 - every exported function tested from C as well as from Rust, against the committed reference
   cases
@@ -38,12 +38,12 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
   `#[non_exhaustive]`. The OPF ones choose a solver through `OpfSolver`, which wraps
   `MipsOptions` or `MehrotraOptions`.
 - **Panics.** Invariants are checked with `unwrap`, `expect` and `panic!`, so a bug behind any of
-  them panics. The fuzz tests (`powerflow/tests/matpower_fuzz_test.rs`) already use
+  them panics. The fuzz tests (`ybus_powerflow/tests/matpower_fuzz_test.rs`) already use
   `catch_unwind` to check that the MATPOWER reader returns errors instead of panicking. The
   workspace's profiles keep the default `panic = "unwind"`.
 - **Two hazards for a C caller.**
   - **Mismatched cases.** A model is solved against a case passed again, and `check_case` in
-    `powerflow/src/topology.rs` compares only the tables' lengths, so a different case of the
+    `ybus_powerflow/src/topology.rs` compares only the tables' lengths, so a different case of the
     same size is solved silently with the wrong network.
   - **A borrowed model.** `DcStudy<'a>` borrows its `DcModel`, which a C handle can't express.
 
@@ -64,7 +64,7 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
 - [x] **Decide** the crate's name and form. Decided (2026-11-10): `ybus_ffi` in the workspace,
       with `[lib] name = "ybus"` so C links `-lybus` and includes `ybus.h`, matching the `ybus_`
       symbol prefix; `crate-type = ["cdylib", "staticlib", "rlib"]`, the `rlib` so Rust tests can
-      call the exports; `publish = false` until a release; `powerflow`'s default features only.
+      call the exports; `publish = false` until a release; `ybus_powerflow`'s default features only.
       The long-term goal suggested `powerflow-ffi`, but the other crates use underscores, and
       the library is the whole project's.
 - [x] **Decide** how a case crosses the boundary. Decided (2026-11-10): an opaque handle with
@@ -83,7 +83,7 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
         length check (too short is an error, never a partial write)
       - the scalars (`objective`, `iterations`, `mismatch_pu`) have plain getters
       - the OPF's `status` becomes a code
-      - the OPF's `solver` and `residuals` fields stay out, since they expose `interior_point`'s
+      - the OPF's `solver` and `residuals` fields stay out, since they expose `ybus_ipm`'s
         internals
 
       Pointers into the solution's own memory were the alternative: no copies, but a C caller
@@ -129,7 +129,7 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       dependency and a license exception), and writing it by hand (signatures could drift in
       ways the C compiler doesn't catch, such as a changed integer width).
 
-## Phase F1: Preparing `powerflow`
+## Phase F1: Preparing `ybus_powerflow`
 
 - [x] `check_case` compares the case's topology as well as the tables' lengths, so a model
       solved against a different case of the same size returns an error. Decided with the
@@ -143,7 +143,7 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
         of different lengths. Phase F2's status codes give each its own code.
 - [x] A test asserts at compile time that `Case`, the models, the options and the solutions are
       `Send` and `Sync`, so the thread-safety contract is checked rather than assumed
-      (`powerflow/tests/thread_safety_test.rs`, which also covers `DcStudy` and
+      (`ybus_powerflow/tests/thread_safety_test.rs`, which also covers `DcStudy` and
       `PowerflowError`).
 
 ## Phase F2: The crate and its boundary
@@ -175,7 +175,7 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
       decided with the maintainer (2026-11-10). The last error is set on failure only, so a
       later success doesn't clear it.
 - [x] `ybus_status` and the mapping from `PowerflowError`, with `YBUS_ERROR_OTHER` as the
-      mapping's catch-all arm, since `#[non_exhaustive]` requires one outside `powerflow`.
+      mapping's catch-all arm, since `#[non_exhaustive]` requires one outside `ybus_powerflow`.
       `ybus_last_error_message` copies the message into a caller's buffer and returns the length
       it needs. Each variant's code is from 100, in declaration order (`YBUS_ERROR_GPU` is
       reserved, since the C build has no `cuda`). No export can fail with a `PowerflowError`
@@ -237,16 +237,16 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
         the column MATPOWER writes each result to. The branch table gains the result codes 14
         to 17 (`PF`, `QF`, `PT` and `QT`), which a case doesn't have.
       - **The tests are fidelity, plus a C reference.** A Rust test checks that the FFI's
-        result is `powerflow`'s, bit for bit, under every ordering, on `three_bus.m` and on
+        result is `ybus_powerflow`'s, bit for bit, under every ordering, on `three_bus.m` and on
         case14, case30 and case118. A C test compares case14 with the committed CSVs, at
-        `powerflow`'s 1e-9.
+        `ybus_powerflow`'s 1e-9.
 
       That test found that `Ordering::Colamd` panicked in `DcModel::study`. COLAMD orders
       columns only, so Cholesky refuses it; B′ now goes straight to LU under it, a fix in
-      `powerflow` in its own commit.
+      `ybus_powerflow` in its own commit.
 - [x] `ybus_ac_power_flow`, in the same form, with the iteration count, mismatch, limited
       generators and factorization count. Tested as the DC power flow is: in Rust, against
-      `powerflow`'s own results under each method and both kinds of reactive limits; in C,
+      `ybus_powerflow`'s own results under each method and both kinds of reactive limits; in C,
       case14 against MATPOWER's `runpf`, without and with reactive limits.
 - [x] The DC and AC models: build from a case, solve against a case (with F1's stricter
       `check_case`), restamp (AC), and free. A C test solves several load scenarios against one
@@ -275,11 +275,11 @@ Phase F0's decisions were made with the maintainer on 2026-11-10.
         `MU_ANGMAX` (branch, 18 to 21).
       - **The status** takes MIPS's `exitflag` codes. A solve that doesn't converge still
         returns its solution.
-      - **Tests:** in Rust, `powerflow`'s results bit for bit under each solver and KKT
+      - **Tests:** in Rust, `ybus_powerflow`'s results bit for bit under each solver and KKT
         factorization; in C, case14 against MATPOWER's `rundcopf`.
 - [x] `ybus_ac_opf`, in the same form, with the voltage, reactive power and branch multipliers.
       Tested as the DC OPF is. In C, case14 is compared with MATPOWER's `runopf`, every column
-      at `powerflow`'s 1e-8, and the generators' PQ capability curves in `three_bus.m` are
+      at `ybus_powerflow`'s 1e-8, and the generators' PQ capability curves in `three_bus.m` are
       refused with `YBUS_ERROR_UNSUPPORTED_GENERATOR` until zeroed.
 
 ## Phase F6: Hardening and a first release
@@ -322,7 +322,7 @@ Coarse, and planned when its turn comes:
 - **DC outage studies** through C, after `DcStudy` owns or shares its model (an `Arc`, say)
   instead of borrowing it.
 - **Sensitivities** (PTDF and LODF), and builds with the `rayon` and `cuda` features.
-- **Python** through PyO3 and maturin, binding `powerflow` directly: cases from files or arrays,
-  the power flows and OPFs, and results as NumPy arrays. Tested with pytest in CI.
+- **Python** through PyO3 and maturin, binding `ybus_powerflow` directly: cases from files or
+  arrays, the power flows and OPFs, and results as NumPy arrays. Tested with pytest in CI.
 - **Julia** through the C library with `ccall`, wrapped in a small package, tested with Julia's
   own test runner in CI.

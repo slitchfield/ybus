@@ -1,8 +1,8 @@
 % Writes every MATPOWER case in <matpower-dir>/data as a literal-only case file in
-%   <output-dir>, for the powerflow tests. Run through scripts/normalize-cases.sh.
+%   <output-dir>, for the ybus_powerflow tests. Run through scripts/normalize-cases.sh.
 %
 % Some MATPOWER case files compute or rescale their data with code after the literals (for
-%   example converting loads from kW to MW), which the powerflow reader deliberately rejects.
+%   example converting loads from kW to MW), which the ybus_powerflow reader deliberately rejects.
 %   This runs each file through MATPOWER's own loadcase, which evaluates that code, and writes
 %   the resulting case back out as `mpc.<field> = [ ... ];` literals that the reader accepts.
 %
@@ -10,7 +10,7 @@
 %   isn't used because it writes %.9g, which would round the values loadcase computed.
 %
 % Writes version, baseMVA, bus, gen, branch, and gencost and bus_name when present; other
-%   fields aren't used by powerflow. Also writes SOURCE, recording the MATPOWER directory and
+%   fields aren't used by ybus_powerflow. Also writes SOURCE, recording the MATPOWER directory and
 %   the versions used. Files that loadcase can't load as a case (such as contingency tables)
 %   are listed and skipped.
 

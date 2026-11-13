@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use cudarc::driver::{CudaSlice, CudaStream};
-use sparse_mat::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use crate::factor::GpuFactor;
 use crate::sparse::{Csr, Product};

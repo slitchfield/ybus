@@ -1,0 +1,600 @@
+//! MATPOWER's DC and AC power flow results, as `scripts/generate-reference.sh` writes them: committed
+//! for case14, case30 and case118 in `tests/data/matpower-reference/`, whose README describes
+//! the files, and generated locally for any other case, whose results can't be committed.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use ybus_powerflow::ac::AcSolution;
+use ybus_powerflow::case::Case;
+use ybus_powerflow::dc::DcSolution;
+
+/// The committed reference results.
+pub fn committed_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("data")
+        .join("matpower-reference")
+}
+
+/// One case's `rundcpf` results, each table in the case's row order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reference {
+    /// Each bus's number and voltage angle (degrees).
+    pub bus: Vec<(usize, f64)>,
+    /// Each branch's from and to bus numbers, status, and real power flow at the from end (MW).
+    pub branch: Vec<(usize, usize, bool, f64)>,
+    /// Each generator's bus number and real power output (MW).
+    pub gen: Vec<(usize, f64)>,
+}
+
+/// The largest absolute differences between a solution and a reference.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Deviation {
+    /// Voltage angles (degrees).
+    pub va_deg: f64,
+    /// Branch flows at the from end (MW).
+    pub pf_mw: f64,
+    /// Generator outputs (MW).
+    pub pg_mw: f64,
+}
+
+impl Deviation {
+    /// Whether every difference is within `tolerance`'s. False if any is NaN.
+    pub fn within(&self, tolerance: &Deviation) -> bool {
+        self.va_deg <= tolerance.va_deg
+            && self.pf_mw <= tolerance.pf_mw
+            && self.pg_mw <= tolerance.pg_mw
+    }
+}
+
+/// Reads `<case>_dcpf_bus.csv`, `_branch.csv` and `_gen.csv` from `dir`, checking their headers
+/// and row numbers.
+pub fn read(dir: &Path, case: &str) -> Result<Reference, String> {
+    let bus = table(dir, case, "dcpf", "bus", "bus,va_deg")?;
+    let branch = table(dir, case, "dcpf", "branch", "row,from,to,status,pf_mw")?;
+    let gen = table(dir, case, "dcpf", "gen", "row,bus,pg_mw")?;
+    // Bus numbers and statuses are written with %d, so they convert exactly
+    Ok(Reference {
+        bus: bus.iter().map(|f| (f[0] as usize, f[1])).collect(),
+        branch: branch
+            .iter()
+            .map(|f| (f[0] as usize, f[1] as usize, f[2] != 0.0, f[3]))
+            .collect(),
+        gen: gen.iter().map(|f| (f[0] as usize, f[1])).collect(),
+    })
+}
+
+/// The rows of `<dir>/<case>_<run>_<kind>.csv` as numbers, without the leading `row` column
+/// where the header has one, after checking that it counts from 1.
+fn table(
+    dir: &Path,
+    case: &str,
+    run: &str,
+    kind: &str,
+    header: &str,
+) -> Result<Vec<Vec<f64>>, String> {
+    let path = dir.join(format!("{case}_{run}_{kind}.csv"));
+    let text = fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let mut lines = text.lines();
+    if lines.next() != Some(header) {
+        return Err(format!("{}: the header isn't {header}", path.display()));
+    }
+    let width = header.split(',').count();
+    let numbered = header.starts_with("row,");
+    lines
+        .enumerate()
+        .map(|(index, line)| {
+            let malformed = || format!("{}: line {} is malformed", path.display(), index + 2);
+            let fields: Vec<f64> = line
+                .split(',')
+                .map(str::parse)
+                .collect::<Result<_, _>>()
+                .map_err(|_| malformed())?;
+            if fields.len() != width || (numbered && fields[0] != (index + 1) as f64) {
+                return Err(malformed());
+            }
+            Ok(fields[usize::from(numbered)..].to_vec())
+        })
+        .collect()
+}
+
+/// One case's `runpf` results (Newton's method with MATPOWER's defaults, or fast-decoupled),
+/// each table in the case's row order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcReference {
+    /// Each bus's number, voltage magnitude (p.u.) and angle (degrees).
+    pub bus: Vec<(usize, f64, f64)>,
+    /// Each branch's from and to bus numbers, status, and real and reactive power flows at the
+    /// from end and at the to end (MW, MVAr).
+    pub branch: Vec<(usize, usize, bool, [f64; 4])>,
+    /// Each generator's bus number and real and reactive power output (MW, MVAr).
+    pub gen: Vec<(usize, f64, f64)>,
+    /// How many iterations `runpf` took (for fast-decoupled, P half-iterations).
+    pub iterations: usize,
+    /// Whether `runpf` converged.
+    pub success: bool,
+}
+
+/// Reads the Newton results, `<case>_acpf_bus.csv`, `_branch.csv`, `_gen.csv` and
+/// `_summary.csv`, from `dir`, checking their headers and row numbers.
+pub fn read_ac(dir: &Path, case: &str) -> Result<AcReference, String> {
+    read_ac_run(dir, case, "acpf")
+}
+
+/// Reads an AC run's results, `<case>_<run>_*.csv`, from `dir`: `run` is `acpf` (Newton),
+/// `fdxb` or `fdbx` (fast-decoupled).
+pub fn read_ac_run(dir: &Path, case: &str, run: &str) -> Result<AcReference, String> {
+    let bus = table(dir, case, run, "bus", "bus,vm_pu,va_deg")?;
+    let branch = table(
+        dir,
+        case,
+        run,
+        "branch",
+        "row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar",
+    )?;
+    let gen = table(dir, case, run, "gen", "row,bus,pg_mw,qg_mvar")?;
+    let summary = table(dir, case, run, "summary", "iterations,success")?;
+    let [run] = summary.as_slice() else {
+        return Err(format!("{case}: the AC summary should have one row"));
+    };
+    Ok(AcReference {
+        bus: bus.iter().map(|f| (f[0] as usize, f[1], f[2])).collect(),
+        branch: branch
+            .iter()
+            .map(|f| {
+                (
+                    f[0] as usize,
+                    f[1] as usize,
+                    f[2] != 0.0,
+                    [f[3], f[4], f[5], f[6]],
+                )
+            })
+            .collect(),
+        gen: gen.iter().map(|f| (f[0] as usize, f[1], f[2])).collect(),
+        iterations: run[0] as usize,
+        success: run[1] != 0.0,
+    })
+}
+
+/// The largest absolute differences between `solution` and `reference`, after checking that
+/// `reference` describes `case`: the same buses, branches (ends and status) and generators, in
+/// the same order.
+pub fn deviation(
+    case: &Case,
+    solution: &DcSolution,
+    reference: &Reference,
+) -> Result<Deviation, String> {
+    let same_buses = case
+        .bus
+        .iter()
+        .map(|bus| bus.bus_label)
+        .eq(reference.bus.iter().map(|bus| bus.0));
+    let same_branches = case
+        .branch
+        .iter()
+        .map(|branch| (branch.from_label, branch.to_label, branch.status))
+        .eq(reference
+            .branch
+            .iter()
+            .map(|branch| (branch.0, branch.1, branch.2)));
+    let same_gens = case
+        .generator
+        .iter()
+        .map(|generator| generator.bus_label)
+        .eq(reference.gen.iter().map(|generator| generator.0));
+    if !(same_buses && same_branches && same_gens) {
+        return Err("the reference's tables don't match the case's".to_string());
+    }
+    Ok(Deviation {
+        va_deg: largest_difference(&solution.va_deg, reference.bus.iter().map(|bus| bus.1)),
+        pf_mw: largest_difference(&solution.pf_mw, reference.branch.iter().map(|b| b.3)),
+        pg_mw: largest_difference(&solution.pg_mw, reference.gen.iter().map(|g| g.1)),
+    })
+}
+
+/// The largest `|a − e|`, or NaN if any difference is NaN, which `f64::max` would skip.
+fn largest_difference(actual: &[f64], expected: impl Iterator<Item = f64>) -> f64 {
+    actual
+        .iter()
+        .zip(expected)
+        .map(|(a, e)| (a - e).abs())
+        .fold(0.0, |largest, difference| {
+            if difference.is_nan() || difference > largest {
+                difference
+            } else {
+                largest
+            }
+        })
+}
+
+/// The largest absolute differences between an AC solution and `runpf`'s results.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AcDeviation {
+    /// Voltage magnitudes (p.u.).
+    pub vm_pu: f64,
+    /// Voltage angles (degrees).
+    pub va_deg: f64,
+    /// Generator real and reactive outputs (MW, MVAr).
+    pub pg_mw: f64,
+    pub qg_mvar: f64,
+    /// Branch flows at the from end and at the to end (MW, MVAr).
+    pub pf_mw: f64,
+    pub qf_mvar: f64,
+    pub pt_mw: f64,
+    pub qt_mvar: f64,
+}
+
+impl AcDeviation {
+    /// The largest of the differences, or NaN if any is NaN.
+    pub fn largest(&self) -> f64 {
+        [
+            self.vm_pu,
+            self.va_deg,
+            self.pg_mw,
+            self.qg_mvar,
+            self.pf_mw,
+            self.qf_mvar,
+            self.pt_mw,
+            self.qt_mvar,
+        ]
+        .into_iter()
+        .fold(0.0, |largest, d| {
+            if d.is_nan() || d > largest {
+                d
+            } else {
+                largest
+            }
+        })
+    }
+}
+
+/// The largest absolute differences between an AC `solution` and `reference`, after checking
+/// that `reference` describes `case`, as `deviation` does.
+pub fn ac_deviation(
+    case: &Case,
+    solution: &AcSolution,
+    reference: &AcReference,
+) -> Result<AcDeviation, String> {
+    let same_buses = case
+        .bus
+        .iter()
+        .map(|bus| bus.bus_label)
+        .eq(reference.bus.iter().map(|bus| bus.0));
+    let same_branches = case
+        .branch
+        .iter()
+        .map(|branch| (branch.from_label, branch.to_label, branch.status))
+        .eq(reference.branch.iter().map(|b| (b.0, b.1, b.2)));
+    let same_gens = case
+        .generator
+        .iter()
+        .map(|generator| generator.bus_label)
+        .eq(reference.gen.iter().map(|generator| generator.0));
+    if !(same_buses && same_branches && same_gens) {
+        return Err("the reference's tables don't match the case's".to_string());
+    }
+    let flow = |k: usize| reference.branch.iter().map(move |b| b.3[k]);
+    Ok(AcDeviation {
+        vm_pu: largest_difference(&solution.vm_pu, reference.bus.iter().map(|b| b.1)),
+        va_deg: largest_difference(&solution.va_deg, reference.bus.iter().map(|b| b.2)),
+        pg_mw: largest_difference(&solution.pg_mw, reference.gen.iter().map(|g| g.1)),
+        qg_mvar: largest_difference(&solution.qg_mvar, reference.gen.iter().map(|g| g.2)),
+        pf_mw: largest_difference(&solution.pf_mw, flow(0)),
+        qf_mvar: largest_difference(&solution.qf_mvar, flow(1)),
+        pt_mw: largest_difference(&solution.pt_mw, flow(2)),
+        qt_mvar: largest_difference(&solution.qt_mvar, flow(3)),
+    })
+}
+
+/// The generator rows (1-based, increasing) a run with reactive limits enforced held at a limit,
+/// from `<case>_<run>_limited.csv` in `dir` (`run` is `qlim1` or `qlim2`).
+pub fn read_limited(dir: &Path, case: &str, run: &str) -> Result<Vec<usize>, String> {
+    // The header is just "row", so `table` keeps it as data rather than as a row count. Written
+    //   with %d, so the rows convert exactly
+    let rows = table(dir, case, run, "limited", "row")?;
+    Ok(rows.iter().map(|fields| fields[0] as usize).collect())
+}
+
+/// One case's `rundcopf` results (MIPS forced), each table in the case's row order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DcOpfReference {
+    /// Each bus's voltage angle (degrees).
+    pub va_deg: Vec<f64>,
+    /// Each bus's real power price ($/MWh).
+    pub lam_p: Vec<f64>,
+    /// Each generator's real power output (MW).
+    pub pg_mw: Vec<f64>,
+    /// The multipliers of each generator's lower and upper real power limits ($/MWh).
+    pub mu_pmin: Vec<f64>,
+    pub mu_pmax: Vec<f64>,
+    /// Each branch's real power flow at the from end (MW).
+    pub pf_mw: Vec<f64>,
+    /// The multipliers of each branch's flow limit at the from and to ends ($/MWh).
+    pub mu_sf: Vec<f64>,
+    pub mu_st: Vec<f64>,
+    /// The multipliers of each branch's angle difference limits ($/degree).
+    pub mu_angmin: Vec<f64>,
+    pub mu_angmax: Vec<f64>,
+    /// The objective ($/hr).
+    pub objective: f64,
+    /// MIPS's iterations.
+    pub iterations: usize,
+    /// Whether MIPS converged.
+    pub success: bool,
+    /// Whether Octave found a KKT system singular to machine precision during the run, and so
+    /// solved it by least squares instead (see `generate_reference.m`).
+    pub singular: bool,
+    /// The objective with `rundcopf`'s default solver (NaN if it failed), and that solver.
+    pub default_objective: f64,
+    pub default_solver: String,
+}
+
+/// Reads `<case>_<run>_bus.csv`, `_gen.csv`, `_branch.csv` and `_summary.csv` from `dir`, for
+/// `run` `dcopf` (MP-Core) or `dcopf_legacy` (the legacy implementation).
+pub fn read_dcopf(dir: &Path, case: &str, run: &str) -> Result<DcOpfReference, String> {
+    let bus = table(dir, case, run, "bus", "bus,va_deg,lam_p")?;
+    let gen = table(
+        dir,
+        case,
+        run,
+        "gen",
+        "row,bus,status,pg_mw,mu_pmin,mu_pmax",
+    )?;
+    let branch = table(
+        dir,
+        case,
+        run,
+        "branch",
+        "row,from,to,status,pf_mw,mu_sf,mu_st,mu_angmin,mu_angmax",
+    )?;
+    let column = |rows: &[Vec<f64>], k: usize| rows.iter().map(|row| row[k]).collect();
+    let summary = summary(
+        dir,
+        case,
+        run,
+        "objective,iterations,success,singular,default_objective,default_solver",
+    )?;
+    Ok(DcOpfReference {
+        va_deg: column(&bus, 1),
+        lam_p: column(&bus, 2),
+        pg_mw: column(&gen, 2),
+        mu_pmin: column(&gen, 3),
+        mu_pmax: column(&gen, 4),
+        pf_mw: column(&branch, 3),
+        mu_sf: column(&branch, 4),
+        mu_st: column(&branch, 5),
+        mu_angmin: column(&branch, 6),
+        mu_angmax: column(&branch, 7),
+        objective: parse_field(&summary, 0)?,
+        iterations: parse_field::<usize>(&summary, 1)?,
+        success: parse_field::<u8>(&summary, 2)? == 1,
+        singular: parse_field::<u8>(&summary, 3)? == 1,
+        default_objective: parse_field(&summary, 4)?,
+        default_solver: summary[5].clone(),
+    })
+}
+
+/// The fields of a summary file's one line, after checking its header.
+fn summary(dir: &Path, case: &str, run: &str, header: &str) -> Result<Vec<String>, String> {
+    let path = dir.join(format!("{case}_{run}_summary.csv"));
+    let text = fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.first() != Some(&header) || lines.len() != 2 {
+        return Err(format!(
+            "{}: expected the header {header} and one line",
+            path.display()
+        ));
+    }
+    let fields: Vec<String> = lines[1].split(',').map(str::to_string).collect();
+    if fields.len() != header.split(',').count() {
+        return Err(format!("{}: line 2 is malformed", path.display()));
+    }
+    Ok(fields)
+}
+
+fn parse_field<T: std::str::FromStr>(fields: &[String], k: usize) -> Result<T, String> {
+    fields[k]
+        .parse()
+        .map_err(|_| format!("summary field {} ({:?}) is malformed", k + 1, fields[k]))
+}
+
+/// The largest absolute difference in each of a DC OPF's quantities from `rundcopf`'s, by
+/// name, and in the objective relative to its magnitude (at least 1).
+pub fn dcopf_deviation(
+    solution: &ybus_powerflow::opf::dc::DcOpfSolution,
+    reference: &DcOpfReference,
+) -> Vec<(&'static str, f64)> {
+    let pairs: [(&'static str, &[f64], &[f64]); 10] = [
+        ("va_deg", &solution.va_deg, &reference.va_deg),
+        ("lam_p", &solution.lam_p, &reference.lam_p),
+        ("pg_mw", &solution.pg_mw, &reference.pg_mw),
+        ("mu_pmin", &solution.mu_pmin, &reference.mu_pmin),
+        ("mu_pmax", &solution.mu_pmax, &reference.mu_pmax),
+        ("pf_mw", &solution.pf_mw, &reference.pf_mw),
+        ("mu_sf", &solution.mu_sf, &reference.mu_sf),
+        ("mu_st", &solution.mu_st, &reference.mu_st),
+        ("mu_angmin", &solution.mu_angmin, &reference.mu_angmin),
+        ("mu_angmax", &solution.mu_angmax, &reference.mu_angmax),
+    ];
+    let mut deviations: Vec<(&'static str, f64)> = pairs
+        .iter()
+        .map(|&(name, actual, expected)| {
+            let difference = if actual.len() == expected.len() {
+                largest_difference(actual, expected.iter().copied())
+            } else {
+                f64::NAN
+            };
+            (name, difference)
+        })
+        .collect();
+    let objective =
+        (solution.objective - reference.objective).abs() / reference.objective.abs().max(1.0);
+    deviations.push(("objective (relative)", objective));
+    deviations
+}
+
+/// One case's `runopf` results (AC, MIPS), each table in the case's row order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcOpfReference {
+    /// Per bus: voltage magnitude (p.u.) and angle (degrees), real and reactive power prices,
+    /// and the multipliers of the voltage magnitude limits.
+    pub vm_pu: Vec<f64>,
+    pub va_deg: Vec<f64>,
+    pub lam_p: Vec<f64>,
+    pub lam_q: Vec<f64>,
+    pub mu_vmin: Vec<f64>,
+    pub mu_vmax: Vec<f64>,
+    /// Per generator: real and reactive output, and the multipliers of their limits.
+    pub pg_mw: Vec<f64>,
+    pub qg_mvar: Vec<f64>,
+    pub mu_pmin: Vec<f64>,
+    pub mu_pmax: Vec<f64>,
+    pub mu_qmin: Vec<f64>,
+    pub mu_qmax: Vec<f64>,
+    /// Per branch: flows at both ends, and the multipliers of the flow and angle limits.
+    pub pf_mw: Vec<f64>,
+    pub qf_mvar: Vec<f64>,
+    pub pt_mw: Vec<f64>,
+    pub qt_mvar: Vec<f64>,
+    pub mu_sf: Vec<f64>,
+    pub mu_st: Vec<f64>,
+    pub mu_angmin: Vec<f64>,
+    pub mu_angmax: Vec<f64>,
+    /// The objective ($/hr), MIPS's iterations, whether it converged, and whether Octave's
+    /// least-squares fallback was taken.
+    pub objective: f64,
+    pub iterations: usize,
+    pub success: bool,
+    pub singular: bool,
+}
+
+/// Reads `<case>_<run>_bus.csv`, `_gen.csv`, `_branch.csv` and `_summary.csv` from `dir`, for
+/// `run` `opf` (MP-Core) or `opf_legacy` (the legacy implementation).
+pub fn read_acopf(dir: &Path, case: &str, run: &str) -> Result<AcOpfReference, String> {
+    let bus = table(
+        dir,
+        case,
+        run,
+        "bus",
+        "bus,vm_pu,va_deg,lam_p,lam_q,mu_vmin,mu_vmax",
+    )?;
+    let gen = table(
+        dir,
+        case,
+        run,
+        "gen",
+        "row,bus,status,pg_mw,qg_mvar,mu_pmin,mu_pmax,mu_qmin,mu_qmax",
+    )?;
+    let branch = table(
+        dir,
+        case,
+        run,
+        "branch",
+        "row,from,to,status,pf_mw,qf_mvar,pt_mw,qt_mvar,mu_sf,mu_st,mu_angmin,mu_angmax",
+    )?;
+    let column = |rows: &[Vec<f64>], k: usize| rows.iter().map(|row| row[k]).collect();
+    let summary = summary(dir, case, run, "objective,iterations,success,singular")?;
+    Ok(AcOpfReference {
+        vm_pu: column(&bus, 1),
+        va_deg: column(&bus, 2),
+        lam_p: column(&bus, 3),
+        lam_q: column(&bus, 4),
+        mu_vmin: column(&bus, 5),
+        mu_vmax: column(&bus, 6),
+        pg_mw: column(&gen, 2),
+        qg_mvar: column(&gen, 3),
+        mu_pmin: column(&gen, 4),
+        mu_pmax: column(&gen, 5),
+        mu_qmin: column(&gen, 6),
+        mu_qmax: column(&gen, 7),
+        pf_mw: column(&branch, 3),
+        qf_mvar: column(&branch, 4),
+        pt_mw: column(&branch, 5),
+        qt_mvar: column(&branch, 6),
+        mu_sf: column(&branch, 7),
+        mu_st: column(&branch, 8),
+        mu_angmin: column(&branch, 9),
+        mu_angmax: column(&branch, 10),
+        objective: parse_field(&summary, 0)?,
+        iterations: parse_field::<usize>(&summary, 1)?,
+        success: parse_field::<u8>(&summary, 2)? == 1,
+        singular: parse_field::<u8>(&summary, 3)? == 1,
+    })
+}
+
+/// The largest absolute difference in each of an AC OPF's quantities from `runopf`'s, by name,
+/// and in the objective relative to its magnitude (at least 1).
+pub fn acopf_deviation(
+    solution: &ybus_powerflow::opf::ac::AcOpfSolution,
+    reference: &AcOpfReference,
+) -> Vec<(&'static str, f64)> {
+    let s = solution;
+    let r = reference;
+    let pairs: [(&'static str, &[f64], &[f64]); 20] = [
+        ("vm_pu", &s.vm_pu, &r.vm_pu),
+        ("va_deg", &s.va_deg, &r.va_deg),
+        ("lam_p", &s.lam_p, &r.lam_p),
+        ("lam_q", &s.lam_q, &r.lam_q),
+        ("mu_vmin", &s.mu_vmin, &r.mu_vmin),
+        ("mu_vmax", &s.mu_vmax, &r.mu_vmax),
+        ("pg_mw", &s.pg_mw, &r.pg_mw),
+        ("qg_mvar", &s.qg_mvar, &r.qg_mvar),
+        ("mu_pmin", &s.mu_pmin, &r.mu_pmin),
+        ("mu_pmax", &s.mu_pmax, &r.mu_pmax),
+        ("mu_qmin", &s.mu_qmin, &r.mu_qmin),
+        ("mu_qmax", &s.mu_qmax, &r.mu_qmax),
+        ("pf_mw", &s.pf_mw, &r.pf_mw),
+        ("qf_mvar", &s.qf_mvar, &r.qf_mvar),
+        ("pt_mw", &s.pt_mw, &r.pt_mw),
+        ("qt_mvar", &s.qt_mvar, &r.qt_mvar),
+        ("mu_sf", &s.mu_sf, &r.mu_sf),
+        ("mu_st", &s.mu_st, &r.mu_st),
+        ("mu_angmin", &s.mu_angmin, &r.mu_angmin),
+        ("mu_angmax", &s.mu_angmax, &r.mu_angmax),
+    ];
+    let mut deviations: Vec<(&'static str, f64)> = pairs
+        .iter()
+        .map(|&(name, actual, expected)| {
+            let difference = if actual.len() == expected.len() {
+                largest_difference(actual, expected.iter().copied())
+            } else {
+                f64::NAN
+            };
+            (name, difference)
+        })
+        .collect();
+    let objective =
+        (solution.objective - reference.objective).abs() / reference.objective.abs().max(1.0);
+    deviations.push(("objective (relative)", objective));
+    deviations
+}
+
+/// MATPOWER's elapsed time for a run (s), from `<case>_<run>_time.csv`, which only local results
+/// have.
+pub fn read_time(dir: &Path, case: &str, run: &str) -> Result<f64, String> {
+    let rows = table(dir, case, run, "time", "et_s")?;
+    match rows.as_slice() {
+        [row] => Ok(row[0]),
+        _ => Err(format!("{case}_{run}_time.csv: expected one line")),
+    }
+}
+
+/// The largest `|a − e| / max(|e|, 1)`, or NaN if any is NaN or the lengths differ: a difference
+/// relative to the expected value's magnitude.
+pub fn relative_difference(actual: &[f64], expected: &[f64]) -> f64 {
+    if actual.len() != expected.len() {
+        return f64::NAN;
+    }
+    actual
+        .iter()
+        .zip(expected)
+        .map(|(a, e)| (a - e).abs() / e.abs().max(1.0))
+        .fold(0.0, |largest, d| {
+            if d.is_nan() || d > largest {
+                d
+            } else {
+                largest
+            }
+        })
+}

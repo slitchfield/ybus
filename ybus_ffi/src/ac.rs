@@ -1,7 +1,7 @@
 //! The AC power flow through C: its options, its solution, the power flow itself, and the
 //! model, built once from a case and solved (or re-stamped) for many scenarios.
 
-use powerflow::ac::{
+use ybus_powerflow::ac::{
     ac_power_flow_with_options, AcMethod, AcModel, AcOptions, AcSolution, ReactiveLimits,
 };
 

@@ -6,7 +6,7 @@
 //! are its `(p, cost)` points, interleaved as `p0, c0, p1, c1, …`. The rows are one per
 //! generator for real power, optionally followed by one per generator for reactive power.
 
-use powerflow::case::GenCost;
+use ybus_powerflow::case::GenCost;
 
 use super::YbusCase;
 use crate::boundary::{

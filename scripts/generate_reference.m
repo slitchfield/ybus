@@ -5,7 +5,7 @@
 %   scripts/generate-reference.sh, which fetches MATPOWER and passes its directory, the output
 %   directory and any cases as arguments.
 %
-% By default, generates the committed results in powerflow/tests/data/matpower-reference/,
+% By default, generates the committed results in ybus_powerflow/tests/data/matpower-reference/,
 %   which are only for cases derived from public sources (see docs/PowerFlowChecklist.md,
 %   Phase 1.5). Cases named as arguments are for local comparisons, and their results are never
 %   committed. A case MATPOWER fails on is reported and skipped, and the script ends with an
@@ -80,7 +80,7 @@
 %   Their results are written even when MIPS fails, since parity includes its failures.
 %   Under Octave, a KKT system singular to machine precision makes the backslash in MIPS warn
 %   and return a least-squares solution by QR rather than the LU solution, with which MIPS
-%   continues where an exact solve (as MATLAB's, or powerflow's) would stop it on too long a
+%   continues where an exact solve (as MATLAB's, or ybus_powerflow's) would stop it on too long a
 %   step; the summary's singular column records that it happened.
 % Values are printed with 17 significant digits, enough to round-trip a double exactly.
 %
@@ -369,7 +369,7 @@ for k = 1:numel(cases)
     % The AC power flow: runpf's defaults (Newton's method), then fast-decoupled XB and BX
     %   Fast-decoupled runs bypass MP-Core (exp.use_legacy_core), which MATPOWER 8.1 otherwise
     %   uses under Octave too: its fast-decoupled results differ from the legacy fdpf's by up
-    %   to 2.3e-7 (case14, FDXB) at the same iteration counts, and powerflow follows fdpf. For
+    %   to 2.3e-7 (case14, FDXB) at the same iteration counts, and ybus_powerflow follows fdpf. For
     %   Newton's method the two agree within 6.4e-12, so it keeps runpf's defaults.
     %   Runs with reactive limits enforced (pf.enforce_q_lims 1 and 2) also use the legacy core:
     %   over all of MATPOWER's cases, MP-Core's results differ from it (by up to 71 MW on

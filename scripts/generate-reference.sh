@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regenerates the committed DC and AC power flow reference results in
-#   powerflow/tests/data/matpower-reference/ by running MATPOWER's rundcpf and runpf under Octave.
-#   Needs Octave on PATH; fetches MATPOWER with scripts/fetch-matpower.sh (or uses MATPOWER_DIR).
+#   ybus_powerflow/tests/data/matpower-reference/ by running MATPOWER's rundcpf and runpf under
+#   Octave. Needs Octave on PATH; fetches MATPOWER with scripts/fetch-matpower.sh (or uses
+#   MATPOWER_DIR).
 #
 # Usage: scripts/generate-reference.sh [<output-dir> <case>...]
 #   With no arguments, regenerates the committed results for case14, case30 and case118. The
@@ -18,7 +19,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MATPOWER="$("${ROOT}/scripts/fetch-matpower.sh")"
-OUT="${ROOT}/powerflow/tests/data/matpower-reference"
+OUT="${ROOT}/ybus_powerflow/tests/data/matpower-reference"
 if [[ $# -gt 0 ]]; then
     if [[ $# -lt 2 ]]; then
         echo "usage: $0 [<output-dir> <case>...]" >&2

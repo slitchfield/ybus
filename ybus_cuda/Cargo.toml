@@ -1,7 +1,7 @@
 [package]
 name = "ybus_cuda"
 version = "0.1.0"
-description = "The GPU path for powerflow: sparse triangular solves with many right-hand sides on CUDA, behind a safe API"
+description = "The GPU path for ybus_powerflow: sparse triangular solves with many right-hand sides on CUDA, behind a safe API"
 publish = false
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-sparse_mat = { path = "../sparse_mat" }
+ybus_sparse = { path = "../ybus_sparse" }
 # The driver API, cuSPARSE and NVRTC (which compiles kernels.cu), loaded at run time (dynamic-loading), so every machine builds this
 #   crate without the CUDA toolkit and a machine without CUDA finds out when `Gpu::new` runs.
 #   The bindings are CUDA 13.0's, which any CUDA 13 driver serves.

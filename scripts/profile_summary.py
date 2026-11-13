@@ -17,7 +17,8 @@ optimal power flows, and leave the power flows' stages as they were:
   constraints, and their derivatives) anywhere on its stack counts as that, unless it's
   allocation, so a sparse product inside the Hessian isn't counted as the solver's.
 - Sparse products and sums, and assembly from triplets, called from the interior-point solvers
-  (a frame of `interior_point::` on the stack) count as KKT assembly.
+  (a frame of `ybus_ipm::`, or `interior_point::` before the rename, on the stack) count as KKT
+  assembly.
 
 Two more apply to the pivoted LDLᵀ, and leave LU and Cholesky samples as they were:
 
@@ -35,6 +36,13 @@ import re
 import sys
 from pathlib import Path
 
+# Each crate's frame prefix: its name since phase P1 of docs/PublishingChecklist.md, then its name
+#   before, so a profile recorded before the renames still folds into the same stages
+SPARSE = ("ybus_sparse::", "sparse_mat::")
+IPM = ("ybus_ipm::", "interior_point::")
+# The new name first: the old one is a suffix of it, so stripping it first would leave `ybus_`
+POWERFLOW = ("ybus_powerflow::", "powerflow::")
+
 # (stage, patterns): a frame matches a stage if its demangled name contains any of the patterns
 STAGES = [
     ("allocation and copying", ["malloc", "_libc_free", "cfree", "realloc", "brk",
@@ -47,7 +55,7 @@ STAGES = [
                                         "symbolic", "elimination_tree", "column_counts"]),
     # Every factorization's solves run through the Factorization trait, whose frames name the
     #   factorization module: matched here, before the factorizations' own "factor"
-    ("triangular solves", ["as sparse_mat::compressed_matrix::factorization::"]),
+    ("triangular solves", [f"as {crate}compressed_matrix::factorization::" for crate in SPARSE]),
     ("refactorization", ["refactor"]),
     ("numeric factorization", ["gilbert_peierls", "Lu>::factor", "Cholesky>::factor",
                                "cholesky::", "factor"]),
@@ -140,7 +148,7 @@ def stage_of(names):
     for context, patterns in CONTEXT_STAGES:
         if any(pattern in frame for frame in names for pattern in patterns):
             return context
-    if stage in KKT_ASSEMBLY and any("interior_point::" in frame for frame in names):
+    if stage in KKT_ASSEMBLY and any(crate in frame for frame in names for crate in IPM):
         return "KKT assembly"
     return stage
 
@@ -203,8 +211,9 @@ def summarize(path):
     for frame, count in own.most_common(12):
         lines.append(f"| `{shorten(frame)}` | {count / samples:.1%} |")
     ours = [(f, c) for f, c in total.most_common()
-            if ("powerflow::" in f or "sparse_mat::" in f) and c < samples]
-    lines += ["", "| Most samples in total (powerflow and sparse_mat) | Share |", "|---|--:|"]
+            if any(crate in f for crate in POWERFLOW + SPARSE) and c < samples]
+    lines += ["", "| Most samples in total (the power flow and the sparse matrices) | Share |",
+              "|---|--:|"]
     for frame, count in ours[:12]:
         lines.append(f"| `{shorten(frame)}` | {count / samples:.1%} |")
     return "\n".join(lines) + "\n"
@@ -236,7 +245,7 @@ def shorten(frame):
         frame = inner.split("::")[-1] + strip_generics(rest)
     else:
         frame = strip_generics(frame)
-    for prefix in ("sparse_mat::compressed_matrix::", "powerflow::"):
+    for prefix in [f"{crate}compressed_matrix::" for crate in SPARSE] + list(POWERFLOW):
         frame = frame.replace(prefix, "")
     return frame.rstrip(":").replace("|", "\\|")[:100]
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Surveys the DC power flow over every MATPOWER case: times each step, records peak memory and
 #   compares the results with MATPOWER's. The results in docs/benchmarks/ come from this. Each
-#   case runs in its own process (powerflow's dc_survey example) under a time limit and an
+#   case runs in its own process (ybus_powerflow's dc_survey example) under a time limit and an
 #   address-space limit, so a case too large for the current solvers is recorded as such
 #   instead of stopping the survey.
 #
@@ -53,7 +53,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     fi
 fi
 
-cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p powerflow \
+cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_powerflow \
     --example dc_survey
 SURVEY="${ROOT}/target/release/examples/dc_survey"
 

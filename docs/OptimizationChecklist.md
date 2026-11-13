@@ -29,7 +29,7 @@ Set with the maintainer on 2026-11-03:
 - one commit per checklist item, on `dev/` branches, with an uncommitted report as each PR's
   description and figures taken from git and the test runner
 - MATPOWER's BSD-licensed source may be consulted for the OPF formulation and MIPS, and the
-  README names the files consulted; `sparse_mat` and the phase O3 solver are written from
+  README names the files consulted; `ybus_sparse` and the phase O3 solver are written from
   published descriptions only
 - MATPOWER's results committed only for case14, case30 and case118 (public-source cases), and
   generated locally for the rest, one case per process under an address-space limit
@@ -40,7 +40,7 @@ Set with the maintainer on 2026-11-03:
 
 Facts checked when this roadmap was written (2026-11-03):
 
-- **Costs:** `Case` already parses `gencost` (`powerflow/src/case.rs`), polynomial and
+- **Costs:** `Case` already parses `gencost` (`ybus_powerflow/src/case.rs`), polynomial and
   piecewise-linear, and 73 of the 78 MATPOWER cases carry it.
 - **MATPOWER's OPF runs locally:** under Octave 8.4.0, `runopf` and `rundcopf` solve case9 with
   MIPS (AC cost 5296.69, DC cost 5216.03). MIPS and GLPK are the only OPF solvers installed;
@@ -63,7 +63,7 @@ Facts checked when this roadmap was written (2026-11-03):
 - **Hardware:** an NVIDIA RTX 4070 Ti SUPER (16 GB, compute capability 8.9), visible through WSL's
   `libcuda`. The CUDA toolkit isn't installed, so cuSPARSE and cuSOLVER aren't available until it
   is.
-- **In `sparse_mat`:** LU with refactoring and a given ordering, sparse right-hand sides,
+- **In `ybus_sparse`:** LU with refactoring and a given ordering, sparse right-hand sides,
   transposed solves, iterative refinement, condition estimates and parallel batch solves, all of
   which the KKT systems of an interior-point method can use.
 
@@ -72,8 +72,8 @@ Facts checked when this roadmap was written (2026-11-03):
 - [x] **Decide:** where the solver lives, which MATPOWER code is the reference, which constraints
       come first, and the acceptance bar.
       Decided (2026-11-03):
-      - **The solver** goes in a new workspace crate, `interior_point`: MIPS now, the phase O3
-        solver later, behind one problem interface. It depends on `sparse_mat`; `powerflow`,
+      - **The solver** goes in a new workspace crate, `ybus_ipm`: MIPS now, the phase O3
+        solver later, behind one problem interface. It depends on `ybus_sparse`; `ybus_powerflow`,
         which holds the OPF formulation, depends on it.
       - **The reference is MATPOWER's default code.** Measured on case9, case14, case30, case118,
         case300 and case2383wp, AC and DC: MP-Core and the legacy code take the same iteration
@@ -95,22 +95,22 @@ Facts checked when this roadmap was written (2026-11-03):
         1e-9 was.
       - **Three PRs,** below.
 
-### PR 1: the `interior_point` crate and generator costs
+### PR 1: the `ybus_ipm` crate and generator costs
 
-- [x] The `interior_point` crate and its problem interface: an objective with gradient and
+- [x] The `ybus_ipm` crate and its problem interface: an objective with gradient and
       Hessian, nonlinear constraints with Jacobians, the Lagrangian's Hessian, linear constraints
       and bounds; `MipsOptions` with MIPS's defaults; and a result with the multipliers.
-      `interior_point::problem` has the `Problem` trait (with nonlinear constraints and the
+      `ybus_ipm::problem` has the `Problem` trait (with nonlinear constraints and the
       Lagrangian's Hessian optional), `Constraints` (linear constraints and bounds, each
       optional) and `QuadraticProblem` (`½ xᵀ H x + cᵀ x`, as `qps_mips` builds). Constraint
       Jacobians take one row per constraint, transposed from MIPS's convention.
-      `interior_point::mips` has `MipsOptions` (MIPS's defaults, including step control's), the
+      `ybus_ipm::mips` has `MipsOptions` (MIPS's defaults, including step control's), the
       exit status, the multipliers as MIPS reports them, and each iteration's record.
 - [x] MIPS, ported from `mips.m`, and `qps_mips`'s quadratic-program wrapper, tested on the
       problems of `t_mips.m` and `t_qps_mips.m` with MATPOWER's tolerances and iteration counts.
-      - **`interior_point::mips::mips` and `qps_mips`,** following `mips.m` step by step: the
+      - **`ybus_ipm::mips::mips` and `qps_mips`,** following `mips.m` step by step: the
         bounds and linear constraints split into equalities and one- or two-sided inequalities,
-        the starting slacks and multipliers, the reduced KKT system solved with `sparse_mat`'s
+        the starting slacks and multipliers, the reduced KKT system solved with `ybus_sparse`'s
         LU, ordered by AMD and by COLAMD since PR 2 (where MATLAB uses its backslash; a singular
         system counts as MIPS's numerical failure, as MATLAB's NaN does), step control, the step
         lengths, the barrier
@@ -119,17 +119,17 @@ Facts checked when this roadmap was written (2026-11-03):
       - **References:** `scripts/generate-mips-reference.sh` records MATPOWER's MIPS 1.5.2 on the
         problems of `t_mips.m` and `t_qps_mips.m`, plus two starts of Hock and Schittkowski's
         problem 71 where step control changes the run and where MIPS reaches its iteration
-        limit, each with step control off and on (`interior_point/tests/data/mips_reference.txt`).
+        limit, each with step control off and on (`ybus_ipm/tests/data/mips_reference.txt`).
       - **Agreement:** every run takes MATPOWER's exit status and iteration count (including the
         infeasible LP's numerical failure after 6, and 150 at the limit), and its solution,
         objective and multipliers agree within 6.5e-14 relative (1.0e-13 since the switch to
         COLAMD in PR 2; the bar is 1e-12), except a
         failed run's diverged multipliers (about 3e24), within 3.3e-7. Each problem also meets
         `t_mips`'s known answers to its precision.
-- [x] Generator costs in `powerflow`: polynomial (with `opf_setup`'s handling) and
+- [x] Generator costs in `ybus_powerflow`: polynomial (with `opf_setup`'s handling) and
       piecewise-linear (with `makeAy`'s constraints), reactive-power cost rows, and the total
       cost.
-      - **`powerflow::opf::cost`:** `GenCost::evaluate` and `total_cost`, as `totcost` and
+      - **`ybus_powerflow::opf::cost`:** `GenCost::evaluate` and `total_cost`, as `totcost` and
         `polycost` compute them (piecewise linear costs extended along their end segments);
         `OpfCosts`, for the in-service generators: one-segment piecewise linear costs made
         linear and zero leading coefficients dropped, as `opf_setup` does, then the per-unit
@@ -164,7 +164,7 @@ Facts checked when this roadmap was written (2026-11-03):
         sets `OPENBLAS_NUM_THREADS=1` and `OMP_NUM_THREADS=1` unless they're already set.
 - [x] The DC OPF: `[Va, Pg, y]` with the power balance, flow limits, angle limits and the
       piecewise-linear rows, solved through the quadratic-program wrapper, against `rundcopf`.
-      - **`powerflow::opf::dc`:** `dc_opf` follows the legacy `opf_setup`'s DC model, after
+      - **`ybus_powerflow::opf::dc`:** `dc_opf` follows the legacy `opf_setup`'s DC model, after
         `ext2int`:
         - every bus of type REF has its angle fixed; there's no `bustypes` and no island check,
           as in MATPOWER's OPF
@@ -183,7 +183,7 @@ Facts checked when this roadmap was written (2026-11-03):
       - **Every local case with costs (73):** `local_cases_match_rundcopf`, run with
         `YBUS_DCOPF_CASES`. Its criteria follow what was found:
         - **The outcome** always matches: MATPOWER converges on 58 cases and fails on 15, and so
-          does `powerflow`, except on case3120sp (below).
+          does `ybus_powerflow`, except on case3120sp (below).
         - **Iteration counts** match on 56 of the 57 runs MATPOWER finishes without Octave's
           fallback (below). The exception is case2736sp, at 44 to MATPOWER's 45, since MIPS
           switched to COLAMD (`KKT_ORDERING`).
@@ -203,7 +203,7 @@ Facts checked when this roadmap was written (2026-11-03):
         UMFPACK's own LU, called directly, gives our step (case16am's third iteration: a norm of
         1.7e14 from both, against the fallback's 0.33). The references now record when this
         happened (a `singular` column): on 6 cases, 5 of which MATPOWER fails anyway. There the
-        iteration counts aren't compared. On case3120sp `powerflow` converges at 148 iterations
+        iteration counts aren't compared. On case3120sp `ybus_powerflow` converges at 148 iterations
         where MATPOWER fails at 150.
 
 ### PR 3: the AC OPF
@@ -273,7 +273,7 @@ with legacy results generated locally to explain differences.
       - **MP-Core against legacy:** the two agree on every outcome and on every converged run's
         iteration count, with objectives within 3.9e-13 (DC) and 6.8e-12 (AC, outside
         case8387pegase). They differ on the degenerate dispatch (86 MW on case8387pegase, DC) as
-        `powerflow` does, and fail after different numbers of iterations on 7 AC runs that fail
+        `ybus_powerflow` does, and fail after different numbers of iterations on 7 AC runs that fail
         in both. So the MP-Core references stand, and no case needs the legacy rule.
       - **Time against MATPOWER under Octave:** far faster on small cases (Octave's fixed costs),
         and close on large ones (0.64–1.27 times MATPOWER's time for AC). On the three largest
@@ -311,7 +311,7 @@ with legacy results generated locally to explain differences.
       - [x] **N-1 outages without per-outage allocation** (target 1;
         [`dc-contingency-allocation-2026-11-04.md`](benchmarks/dc-contingency-allocation-2026-11-04.md)):
         - **Changes:** reachability from a bridge forest built once per model, instead of an
-          adjacency rebuilt and searched per outage; `sparse_mat`'s `solve_sparse_into` with a
+          adjacency rebuilt and searched per outage; `ybus_sparse`'s `solve_sparse_into` with a
           reusable `SparseSolveWorkspace`; per-thread outage workspaces; and `finish` computing
           flows into the result and `Bbus θ` only at the reference buses.
         - **Results:** bit for bit the same. All outages of all cases take 4.5× less time
@@ -380,7 +380,7 @@ with legacy results generated locally to explain differences.
       1992). It takes the same problem interface as the MIPS crate.
       - **Decided with the maintainer (2026-11-07):**
         - **Method:** a primal-dual method with Mehrotra's predictor-corrector
-          (`interior_point::mehrotra`).
+          (`ybus_ipm::mehrotra`).
           - **Predictor:** an affine step (σ = 0) sets the centering σ = (μ_aff/μ)³.
           - **Corrector:** adds the predictor's second-order term.
           - **Per iteration:** one KKT factorization serves both solves.
@@ -421,9 +421,9 @@ with legacy results generated locally to explain differences.
           3. the OPF's choice of solver, with MIPS staying the default;
           4. the survey and the record.
 - [x] **The solver,** written from the literature, tested on the MIPS test problems.
-      - **`interior_point::mehrotra`** (`mehrotra`, `qps_mehrotra`), for MIPS's whole problem
+      - **`ybus_ipm::mehrotra`** (`mehrotra`, `qps_mehrotra`), for MIPS's whole problem
         class. It reports MIPS's multipliers and is checked by the solver-independent
-        `interior_point::solution::kkt_residuals`.
+        `ybus_ipm::solution::kkt_residuals`.
       - **On MIPS's test problems:** every problem converges where MATPOWER's MIPS does.
         - **The bar:** the objective within 1e-6 of MIPS's, x and the multipliers within 1e-4,
           t_mips's known answers, and KKT residuals below 1e-5.
@@ -529,7 +529,7 @@ with legacy results generated locally to explain differences.
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
-      fixed; a symmetric indefinite LDLᵀ factorization in `sparse_mat`, with Bunch–Kaufman-style
+      fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
       augmented KKT systems.
       - [x] **The analysis kept while the pattern holds** (target 1;
@@ -555,7 +555,7 @@ with legacy results generated locally to explain differences.
           - **The inertia** comes from D's signs.
           - **Bunch–Kaufman** stays a possible follow-up if the numbers call for it.
         - **Three PRs:**
-          - [x] **The factorization in `sparse_mat`:** `SymbolicCholesky::factor_ldlt` and
+          - [x] **The factorization in `ybus_sparse`:** `SymbolicCholesky::factor_ldlt` and
             `CsrMatrix::ldlt` give `Ldlt`, with its solves and `inertia()`. It's Davis's
             up-looking LDLᵀ on the Cholesky's exact pattern.
             - **Tested:** against the Cholesky on SPD matrices, against a known D (L₀ D₀ L₀ᵀ),
@@ -563,7 +563,7 @@ with legacy results generated locally to explain differences.
               that needs pivoting.
             - **Accuracy:** it degrades as 1/δ with the regularization (about 3e-10 at
               δ = 1e-8).
-          - [x] **The tools from the static-pivot attempt in the solvers,** kept in `sparse_mat`:
+          - [x] **The tools from the static-pivot attempt in the solvers,** kept in `ybus_sparse`:
             `CsrMatrix::symmetric_scaling` (Ruiz), `SymbolicCholesky::factor_ldlt_replacing`
             (tiny pivots replaced with their block's sign), and `Ldlt::solve_refined` and
             `Ldlt::solve_refined_normwise`.

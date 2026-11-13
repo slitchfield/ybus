@@ -7,7 +7,7 @@ when its turn comes.
 
 ## 1. Stable foreign function interfaces: C, Python and Julia
 
-Make `powerflow` (and the solvers beneath it) usable from other languages through stable
+Make `ybus_powerflow` (and the solvers beneath it) usable from other languages through stable
 interfaces built with Rust's established FFI tooling. Planned with the maintainer on 2026-11-10
 as a checklist of its own: [`FfiChecklist.md`](FfiChecklist.md).
 
@@ -26,7 +26,7 @@ as a checklist of its own: [`FfiChecklist.md`](FfiChecklist.md).
 
 ## 2. Benchmarks against published power flow libraries
 
-Compare `powerflow` with established libraries in the languages goal 1 reaches, on the same
+Compare `ybus_powerflow` with established libraries in the languages goal 1 reaches, on the same
 MATPOWER cases, by agreement and time, as the existing surveys compare it with MATPOWER.
 
 - **Candidates to survey first** (to confirm when planned): pandapower and lightsim2grid

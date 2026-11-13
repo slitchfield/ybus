@@ -1,5 +1,5 @@
 [workspace]
-members = ["sparse_mat", "powerflow", "interior_point", "ybus_cuda", "ybus_ffi"]
+members = ["ybus_sparse", "ybus_powerflow", "ybus_ipm", "ybus_cuda", "ybus_ffi"]
 # MSRV-aware dependency resolution: when generating a lockfile, prefer dependency versions
 #   that support rust-version. Cargo.lock is not committed, so CI resolves on every run.
 resolver = "3"

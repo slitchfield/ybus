@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Surveys the DC power flow's GPU path against the CPU's, for the CUDA spike: batched DC
 #   solves, PTDF columns, and single-branch outages solved whole and screened, on each case
-#   (powerflow's cuda_dc_survey example, which documents the columns). Each case runs in its
+#   (ybus_powerflow's cuda_dc_survey example, which documents the columns). Each case runs in its
 #   own process under a time limit and a memory limit, so a case that fails is recorded as such
 #   instead of stopping the survey.
 #
@@ -28,7 +28,7 @@ read -r -a CASES <<< "${YBUS_BENCH_CASES:-case118 case300 case1354pegase case238
     case_ACTIVSg2000 case9241pegase case13659pegase case_ACTIVSg25k case_ACTIVSg70k \
     case_SyntheticUSA}"
 
-cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p powerflow \
+cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_powerflow \
     --example cuda_dc_survey --features cuda,rayon
 SURVEY="${ROOT}/target/release/examples/cuda_dc_survey"
 

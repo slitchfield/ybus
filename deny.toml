@@ -15,7 +15,7 @@ ignore = []
 #   lists Unlicense, which only memchr (a dev-dependency, via serde_json) offers, as
 #   "Unlicense OR MIT"; MIT satisfies it, and cargo-deny warns about unused allowances.
 #   ISC, a permissive license equivalent to MIT, is libloading's only license: cudarc loads the
-#   CUDA libraries through it, for ybus_cuda and powerflow's optional `cuda` feature.
+#   CUDA libraries through it, for ybus_cuda and ybus_powerflow's optional `cuda` feature.
 allow = ["MIT", "Apache-2.0", "Unicode-3.0", "ISC"]
 confidence-threshold = 0.9
 
@@ -24,7 +24,7 @@ confidence-threshold = 0.9
 multiple-versions = "warn"
 wildcards = "deny"
 # Except path dependencies between workspace crates in unpublished (publish = false) crates,
-#   such as powerflow's on sparse_mat. A published crate still needs a version on them.
+#   such as ybus_powerflow's on ybus_sparse. A published crate still needs a version on them.
 allow-wildcard-paths = true
 
 [sources]

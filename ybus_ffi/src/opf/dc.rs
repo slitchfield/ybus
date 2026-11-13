@@ -1,7 +1,7 @@
 //! The DC optimal power flow through C: its options, its solution, and the OPF itself.
 
-use powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
-use powerflow::opf::OpfSolver;
+use ybus_powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
+use ybus_powerflow::opf::OpfSolver;
 
 use super::{
     get_float, get_kkt, get_max_iterations, get_solver, set_float, set_kkt, set_max_iterations,
@@ -490,7 +490,7 @@ pub unsafe extern "C" fn ybus_dc_opf_solution_status(
 mod tests {
     use std::ptr;
 
-    use powerflow::opf::KktFactorization;
+    use ybus_powerflow::opf::KktFactorization;
 
     use super::*;
     use crate::opf::{YBUS_KKT_LDLT, YBUS_KKT_LU};

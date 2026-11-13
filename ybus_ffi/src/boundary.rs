@@ -8,7 +8,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use powerflow::PowerflowError;
+use ybus_powerflow::PowerflowError;
 
 use crate::case::columns::ybus_field;
 use crate::status::{
@@ -21,7 +21,7 @@ use crate::status::{
 /// Why an export failed.
 #[derive(Debug)]
 pub(crate) enum Failure {
-    /// `powerflow` refused the call.
+    /// `ybus_powerflow` refused the call.
     Powerflow(PowerflowError),
     /// The named pointer argument was null.
     NullArgument(&'static str),

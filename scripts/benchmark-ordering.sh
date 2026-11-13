@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Compares LU orderings over every MATPOWER case: factors each case's AC Newton Jacobian (at a
 #   flat start) and DC B′ under AMD and COLAMD, recording fill and time. The ordering results in
-#   docs/benchmarks/ come from this. Each case runs in its own process (powerflow's
+#   docs/benchmarks/ come from this. Each case runs in its own process (ybus_powerflow's
 #   ordering_survey example) under a time limit and an address-space limit, so a case that fails
 #   is recorded as such instead of stopping the survey.
 #
@@ -33,7 +33,7 @@ else
     mapfile -t CASES < <(ls -Sr "${NORMALIZED}"/*.m | xargs -n 1 basename -s .m)
 fi
 
-cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p powerflow \
+cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_powerflow \
     --example ordering_survey
 SURVEY="${ROOT}/target/release/examples/ordering_survey"
 

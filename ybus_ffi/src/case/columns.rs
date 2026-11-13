@@ -7,8 +7,8 @@
 //! MATPOWER writes its results to, such as `YBUS_BRANCH_PF_MW` (14), which a case doesn't
 //! have.
 
-use powerflow::case::{Branch, Bus, BusType, Gen};
-use powerflow::Case;
+use ybus_powerflow::case::{Branch, Bus, BusType, Gen};
+use ybus_powerflow::Case;
 
 use super::YbusCase;
 use crate::boundary::{
@@ -736,7 +736,7 @@ pub unsafe extern "C" fn ybus_case_bus_name(
             .ok_or(Failure::MissingData("bus names"))?;
         let name = names
             .get(row)
-            .ok_or(powerflow::PowerflowError::RowOutOfRange {
+            .ok_or(ybus_powerflow::PowerflowError::RowOutOfRange {
                 table: "bus",
                 row,
                 len: names.len(),

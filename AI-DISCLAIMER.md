@@ -12,7 +12,7 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
 - **AI-assisted development:** from October 2026 on, most new code, tests and documentation were
   written with **Claude Code**, Anthropic's agentic coding tool, using the Claude Sonnet 5.5 and
   Claude Opus 5.5 models. That covers the large majority of the current source and tests,
-  including, in `sparse_mat`:
+  including, in `ybus_sparse`:
   - the generic element type, the products, Matrix Market I/O, and the optional `serde` and
     `rayon` features
   - the fixed-pattern compressed matrix type and its assembly maps (Phase 2)
@@ -20,11 +20,12 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
     the Gilbert–Peierls LU with refactoring (Phase 3)
   - the complex-capable solvers (Phase 4)
 
-  and the whole of `powerflow`: the case model and MATPOWER reader, the DC power flow, and the AC
-  power flow by Newton's method and fast-decoupled (Phases 1.5 and 4.5), with their tests,
+  and the whole of `ybus_powerflow`: the case model and MATPOWER reader, the DC power flow, and the
+  AC power flow by Newton's method and fast-decoupled (Phases 1.5 and 4.5), with their tests,
   survey tools and benchmark records. [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md)
-  records each phase. Likewise the whole of `interior_point` (MIPS) and the optimal power flow
-  in `powerflow` (phase O1 of [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md)).
+  records each phase. Likewise the whole of `ybus_ipm` (MIPS) and the optimal power flow
+  in `ybus_powerflow` (phase O1 of
+  [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md)).
 - **Commits:** commits produced with AI assistance carry a `Co-Authored-By: Claude …` trailer.
   Some of them also contain code the maintainer wrote and the AI committed. The trailer marks
   AI involvement, not exclusive AI authorship.
@@ -72,7 +73,7 @@ Considerable care went into attributing the ideas this code is built on:
   well as its documentation and technical notes. They are reimplementations in Rust, not
   translations; the README's [References](README.md#references) section names the MATPOWER
   files consulted, and the parts written from published formulas instead. MIPS is the
-  exception: `interior_point::mips` is ported step for step from MIPS's `mips.m` and
+  exception: `ybus_ipm::mips` is ported step for step from MIPS's `mips.m` and
   `qps_mips.m`, and `scripts/generate_mips_reference.m` copies the problem functions of MIPS's
   tests. Those files, and the Rust tests that restate the same problems, carry MIPS's copyright
   notice, and [`LICENSE-MIPS`](LICENSE-MIPS) holds its BSD license.
@@ -123,12 +124,12 @@ licensing follows current best practices for AI-assisted software development:
   for testing. The repository does include power flow results that MATPOWER computed from three
   public test cases (DC, and AC by Newton's method and fast-decoupled), as expected values for
   tests, MIPS's results on the test problems of MATPOWER's own MIPS tests
-  (`interior_point/tests/data/mips_reference.txt`, which contains no case data), and benchmark records that hold only case names and measurements. The results' sources
+  (`ybus_ipm/tests/data/mips_reference.txt`, which contains no case data), and benchmark records that hold only case names and measurements. The results' sources
   are credited in
-  [`powerflow/tests/data/matpower-reference/README.md`](powerflow/tests/data/matpower-reference/README.md).
+  [`ybus_powerflow/tests/data/matpower-reference/README.md`](ybus_powerflow/tests/data/matpower-reference/README.md).
 - **Compatible dependencies:** every dependency, including transitive and development ones, is
   available under the MIT or Apache-2.0 license (one also under Unicode-3.0, which it requires
-  alongside them), except libloading, which the GPU path (`ybus_cuda`, and powerflow's optional
+  alongside them), except libloading, which the GPU path (`ybus_cuda`, and ybus_powerflow's optional
   `cuda` feature) uses through cudarc and which is under ISC, a permissive license equivalent
   to MIT; some offer the Unlicense or BSD-2-Clause as further alternatives. `cargo deny`
   enforces this in CI, allowing only MIT, Apache-2.0, Unicode-3.0 and ISC.
