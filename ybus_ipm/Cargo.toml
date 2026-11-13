@@ -1,6 +1,6 @@
 [package]
 name = "ybus_ipm"
-version = "0.1.0"
+version.workspace = true
 description = "Interior-point solvers for nonlinear programs, starting with a reimplementation of MATPOWER's MIPS"
 publish = false
 edition.workspace = true
@@ -9,4 +9,4 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-ybus_sparse = { path = "../ybus_sparse" }
+ybus_sparse.workspace = true

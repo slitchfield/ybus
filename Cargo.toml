@@ -6,6 +6,10 @@ resolver = "3"
 
 # Shared by every crate in the workspace, which opt in with `<field>.workspace = true`
 [workspace.package]
+# The one version the four published crates share (docs/PublishingChecklist.md, P0). ybus_ffi
+#   keeps its own, since the C library is versioned on its own terms. A release bumps this and
+#   the matching versions in [workspace.dependencies] below together.
+version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/slitchfield/ybus"
@@ -13,6 +17,18 @@ repository = "https://github.com/slitchfield/ybus"
 #   `<uN>::is_multiple_of` (1.87), then by the `cuda` feature's libloading 0.9 (through cudarc),
 #   which needs 1.88.
 rust-version = "1.88"
+
+# The workspace's crates, each with its path and version: the path builds it here, and the
+#   version is what a published manifest keeps, so it must match [workspace.package]'s. Members
+#   depend on them with `<crate>.workspace = true`. rayon is listed too, since two crates use it.
+#   No homepage or documentation is shared: the repository is the homepage, and crates.io links
+#   each crate to its own docs.rs page when documentation is unset.
+[workspace.dependencies]
+ybus_sparse = { path = "ybus_sparse", version = "0.1.0" }
+ybus_ipm = { path = "ybus_ipm", version = "0.1.0" }
+ybus_cuda = { path = "ybus_cuda", version = "0.1.0" }
+ybus_powerflow = { path = "ybus_powerflow", version = "0.1.0" }
+rayon = "1"
 
 # The release build with debug line tables, for sampling profilers (samply, Nsight Systems) to
 #   name functions and lines without changing the optimized code: `--profile profiling`

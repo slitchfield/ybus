@@ -123,11 +123,18 @@ and the root README notes the renames once.
 
 ## Phase P2: Manifests and licenses
 
-- [ ] Shared dependencies through `[workspace.dependencies]`: each workspace crate once, with
+- [x] Shared dependencies through `[workspace.dependencies]`: each workspace crate once, with
       both `path` and `version`, so the published manifests get versions. Members use
       `ybus_sparse.workspace = true`. The one version all four share moves to
       `[workspace.package]`, as `version.workspace = true` in each. Shared `homepage` and
       `documentation` fields go there too, where they apply to every crate.
+      - **Also shared:** `rayon`, which `ybus_sparse` and `ybus_powerflow` both use.
+      - **`ybus_ffi`** depends on the workspace entries too, but keeps its own `version`.
+      - **No `homepage` or `documentation`:** the repository is the homepage, which crates.io
+        advises against repeating, and an unset `documentation` links each crate to its own
+        docs.rs page.
+      - **`deny.toml`** no longer allows wildcard path dependencies, since every one now has a
+        version.
 - [ ] Metadata for each published crate: its description reviewed for crates.io's search
       results, up to five keywords, and categories from crates.io's list of slugs.
       - `ybus_cuda`'s description says it's experimental.

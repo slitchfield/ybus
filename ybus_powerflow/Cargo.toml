@@ -1,6 +1,6 @@
 [package]
 name = "ybus_powerflow"
-version = "0.1.0"
+version.workspace = true
 description = "DC and AC power flow built on ybus_sparse"
 # Not ready to publish: the API doesn't exist yet. Remove once it does.
 publish = false
@@ -19,10 +19,10 @@ rayon = ["ybus_sparse/rayon", "dep:rayon"]
 cuda = ["dep:ybus_cuda"]
 
 [dependencies]
-ybus_sparse = { path = "../ybus_sparse" }
-ybus_ipm = { path = "../ybus_ipm" }
-rayon = { version = "1", optional = true }
-ybus_cuda = { path = "../ybus_cuda", optional = true }
+ybus_sparse.workspace = true
+ybus_ipm.workspace = true
+rayon = { workspace = true, optional = true }
+ybus_cuda = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The benchmarks in benches/, without plotting or parallel analysis, which keeps the dependency

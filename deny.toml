@@ -22,10 +22,9 @@ confidence-threshold = 0.9
 [bans]
 # Duplicate versions only warn: they cost build time, but aren't a correctness or license issue
 multiple-versions = "warn"
+# Path dependencies between the workspace's crates count too: each has a version, set once in the
+#   root Cargo.toml's [workspace.dependencies]
 wildcards = "deny"
-# Except path dependencies between workspace crates in unpublished (publish = false) crates,
-#   such as ybus_powerflow's on ybus_sparse. A published crate still needs a version on them.
-allow-wildcard-paths = true
 
 [sources]
 # Only crates.io; no git or alternative-registry dependencies
