@@ -19,3 +19,9 @@ rust-version = "1.88"
 [profile.profiling]
 inherits = "release"
 debug = "line-tables-only"
+
+# The test builds, optimized at level 1: the case sweeps in the tests run several times faster,
+#   for slower rebuilds. Debug assertions and overflow checks stay on, and `cargo build` keeps
+#   the dev profile's opt-level 0.
+[profile.test]
+opt-level = 1
