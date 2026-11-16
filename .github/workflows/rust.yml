@@ -75,3 +75,15 @@ jobs:
       #   Advisories can appear without any change here, so this job can start failing on
       #   an unchanged branch; that is the point of running it.
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The publish dry run: each publishable crate is packaged, then built from its package as
+      #   crates.io would build it. The packages hold no tests, so MATPOWER isn't fetched. The
+      #   script fails on any warning but the accepted ones (docs/PublishingChecklist.md, P3).
+      - run: scripts/check-package.sh

@@ -190,7 +190,8 @@ and the root README notes the renames once.
           library builds, and `ybus_powerflow`'s would still warn. Moving the tests, benches and
           examples into unpublished crates would make every package warning-free, at the cost
           of moving them and the paths to their data.
-        - **What it means for P4:** the Package job fails on errors, not on cargo's warnings.
+        - **What it means for P4:** the Package job fails on errors, not on these warnings.
+          Refined in P4 (2026-11-16): any other kind of warning fails it.
 
       | Crate | Files | Size | Compressed | Was (P2) |
       |---|--:|--:|--:|--:|
@@ -233,7 +234,8 @@ and the root README notes the renames once.
 
 ## Phase P4: Release checks in CI
 
-- [ ] A **Package** CI job: `cargo publish --workspace --dry-run`.
+- [x] A **Package** CI job: `cargo publish --workspace --dry-run`, run by
+      `scripts/check-package.sh`, which also runs locally.
       - What it does: packages every publishable crate, then builds each from its package, in
         dependency order, as crates.io would.
       - **Before the first release,** unpublished crates resolve against a local registry of
@@ -241,7 +243,21 @@ and the root README notes the renames once.
         to the path dependencies: all four crates packaged and built, in 26 s on the
         maintainer's laptop.
       - **`ybus_ffi`** is skipped through its `publish = false`, with no `--exclude` needed.
-      - **Packaging warnings** fail the job.
+      - ~~**Packaging warnings** fail the job.~~ Decided (2026-11-16): the job fails on errors,
+        and on any warning but two accepted kinds. Each is matched in full, as cargo 1.99 words it:
+        - `ignoring test|example|benchmark … not included in the published package`, P3's 58
+        - `aborting upload due to dry run`, once for each crate
+
+        Anything else, such as `manifest has no description`, fails it.
+      - **Found:**
+        - Cargo says "benchmark", not "bench", which the script's first run caught.
+        - **A license file left out of `include` isn't caught.** With an SPDX `license`, cargo
+          doesn't look for the files. That was tried on a scratch worktree, along with a
+          removed `description`, which failed the script as it should.
+        - **It stays out of `check.sh`:** it rebuilds each crate from its package. That takes
+          8 s locally with the dependencies cached, and longer from cold.
+        - The script uses `--locked`, so a `Cargo.lock` out of date fails it, as it would fail
+          the publish.
 - [ ] **Semver checks** with `cargo-semver-checks`, against each crate's last published version.
       - **Required before each release:** a release isn't published until the check passes
         for the version it bumps to.

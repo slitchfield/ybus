@@ -32,6 +32,11 @@ one: optimal power flow, interior-point solvers and acceleration.
   clippy with `-D warnings`, and the tests with no features, all features and each optional
   feature alone, plus doc tests (including the `ybus_sparse` README's example).
   The benchmarks run once, as tests, in the first of those passes only.
+- **Packages:** `scripts/check-package.sh` dry-runs the publish of the four published crates,
+  building each from its package as crates.io would, and fails on any warning but the accepted
+  ones for the tests, examples and benches left out
+  ([`docs/PublishingChecklist.md`](docs/PublishingChecklist.md), P3 and P4). The Package CI job
+  runs it.
 - **Dependencies:** `cargo deny --all-features check` checks advisories, licenses, banned
   crates and sources against `deny.toml`. The Dependencies CI job runs it.
 - **MATPOWER test data:** `scripts/fetch-matpower.sh` downloads a pinned MATPOWER release
