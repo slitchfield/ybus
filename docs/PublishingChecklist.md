@@ -284,9 +284,18 @@ and the root README notes the renames once.
         mark it in the version and the changelog.
       - **When it starts:** it needs a published baseline, so it starts with the first
         release after 0.1.0.
-- [ ] A changelog, `CHANGELOG.md` in Keep a Changelog's form, with 0.1.0's entry written by hand.
-      `release-plz` writes the entries after it; how they're laid out across the four crates is
-      settled with its configuration in P5.
+- [x] A changelog, `CHANGELOG.md` in Keep a Changelog's form, with 0.1.0's entry written by hand.
+      `release-plz` writes the entries after it. ~~How they're laid out across the four crates is
+      settled with its configuration in P5.~~ Decided (2026-11-16): one file at the root.
+      - **One entry per release,** since the crates share one version, with a subsection for
+        each crate it changes. P5 points release-plz's configuration at this one file.
+      - **0.1.0's entry** lists what each crate does, from its README and front page, and
+        marks `ybus_cuda` experimental. Its date stays `YYYY-MM-DD` until the release, when
+        `docs/Releasing.md` has it filled in.
+      - **Its links** point to the `v0.1.0` tag that P5 creates, so they don't resolve until
+        then.
+      - **Not in the packages:** the `include` lists are unchanged. crates.io links to the
+        repository, where the changelog is.
 - [ ] `docs/Releasing.md`, the guide to P5's first release by hand, step by step:
       - the account and token
       - the dry run, the publish, the tag and the GitHub release
