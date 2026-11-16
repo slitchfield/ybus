@@ -359,16 +359,29 @@ fn limits_network(vg: f64) -> Case {
     case
 }
 
+/// The distance between two finite values of the same sign in units in the last place.
+fn ulps(a: f64, b: f64) -> u64 {
+    assert_eq!(a.is_sign_negative(), b.is_sign_negative(), "{a} and {b}");
+    a.to_bits().abs_diff(b.to_bits())
+}
+
 #[test]
 fn reactive_limits_are_ignored_by_default() {
     let mut case = limits_network(1.06);
     let unlimited = ac_power_flow(&case).unwrap();
     case.generator[1].qmax_mvar = unlimited.qg_mvar[1] - 5.0;
     let solution = ac_power_flow(&case).unwrap();
-    assert_eq!(
-        solution.qg_mvar[1], unlimited.qg_mvar[1],
-        "not enforced by default"
-    );
+    // The solve doesn't read the limits, so its voltages are the same, bit for bit
+    assert_eq!(solution.vm_pu, unlimited.vm_pu, "not enforced by default");
+    assert_eq!(solution.va_deg, unlimited.va_deg, "not enforced by default");
+    // Each bus's Q is then shared among its generators in proportion to their limits, as
+    //   MATPOWER's pfsoln does, which reads qmax even for a bus's only generator:
+    //   qmin + (Q - qmin) / (qmax - qmin + eps) · (qmax - qmin). So Q comes back to within
+    //   rounding, and whether that rounding cancels exactly depends on Q's last bits, which
+    //   depend on the C library's sin and cos (it cancels on Ubuntu 24.04's glibc, and not
+    //   on 26.04's)
+    let (q, q_unlimited) = (solution.qg_mvar[1], unlimited.qg_mvar[1]);
+    assert!(ulps(q, q_unlimited) <= 4, "{q} vs {q_unlimited}");
     assert!(solution.limited_generators.is_empty());
     assert_eq!(AcOptions::default().reactive_limits, ReactiveLimits::Ignore);
 }
