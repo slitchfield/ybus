@@ -87,7 +87,8 @@ one: optimal power flow, interior-point solvers and acceleration.
   checklist of `ybus_sparse`'s core functionality.
 - [`docs/benchmarks/`](docs/benchmarks/) records performance baselines, such as the DC power
   flow on every MATPOWER case.
-- [`CHANGELOG.md`](CHANGELOG.md) records each release of the published crates.
+- [`CHANGELOG.md`](CHANGELOG.md) records each release of the published crates, and
+  [`docs/Releasing.md`](docs/Releasing.md) is the guide to making one.
 - [`AI-DISCLAIMER.md`](AI-DISCLAIMER.md) describes how AI was used to build this repository and
   how to report missing attribution.
 - API documentation: `cargo doc --workspace --open --all-features`.

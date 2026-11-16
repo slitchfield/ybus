@@ -296,7 +296,7 @@ and the root README notes the renames once.
         then.
       - **Not in the packages:** the `include` lists are unchanged. crates.io links to the
         repository, where the changelog is.
-- [ ] `docs/Releasing.md`, the guide to P5's first release by hand, step by step:
+- [x] [`docs/Releasing.md`](Releasing.md), the guide to P5's first release by hand, step by step:
       - the account and token
       - the dry run, the publish, the tag and the GitHub release
       - the checks afterwards
@@ -304,11 +304,23 @@ and the root README notes the renames once.
 
       The maintainer corrects it while working through those steps. It gains `release-plz`'s
       routine once that's set up.
+      - **It opens with the rules for every release:** the CI jobs pass, the semver check
+        passes from the second release on, and the changelog has the entry.
+      - **Also covered:**
+        - checking that the four names are still free (none was taken on 2026-11-16)
+        - filling in the changelog's date
+        - a token limited to `publish-new` and `ybus_*`, with a short expiry
+        - what to do if the publish stops partway
+      - **Checked:** each command's flags against `cargo publish --help`, `cargo login --help`
+        and `gh release create --help`. None of the publishing steps was run.
+      - **Left to P5:** the release workflow's file name, which trusted publishing needs, and
+        the routine for releases after 0.1.0.
 
 ## Phase P5: The first release
 
-The maintainer does the first four items by hand, following `docs/Releasing.md`, as the
-first-time workflow to learn before anything automates it. `release-plz` is set up after them.
+The maintainer does the first four items by hand, following
+[`docs/Releasing.md`](Releasing.md), as the first-time workflow to learn before anything
+automates it. `release-plz` is set up after them.
 
 - [ ] A crates.io account through GitHub, and an API token scoped to publishing new crates,
       with an expiry. The first publish of a new crate can't use trusted publishing.
