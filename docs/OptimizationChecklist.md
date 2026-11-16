@@ -558,7 +558,16 @@ with legacy results generated locally to explain differences.
                  rather than copied, which only a unit test of the diagonal step reaches. A
                  search of 200,000 small random Hessians found no input where it shows, since
                  the products' sums start at `+0.0`.
-             - [ ] the planned constraint Jacobians
+             - [x] **The planned constraint Jacobians:** `FlowsPlan` (`flows`' scalings and
+               merge) and `SquaredMagnitudesPlan` (`squared_magnitudes`' scaling, real part and
+               `hstack`). The constraints' two `widen`s are kept `AssemblyMap`s, and
+               `branch_flows` goes through the plans, so the Hessian's flows do too. There's
+               no zero-dropping step here, so these plans never decline.
+               - **Bit for bit:** against `flows` and `squared_magnitudes` on the same cases.
+                 The 72-case snapshot still hashes as `main`'s.
+               - **Planted bugs caught:** `Y`'s scaled term reassociated, by the tests, and two
+                 of `dg`'s blocks swapped, by the reference tests. Reassociating `C`'s term
+                 changes nothing: `C`'s entries are all 1, which multiplies exactly.
              - [ ] the record
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.

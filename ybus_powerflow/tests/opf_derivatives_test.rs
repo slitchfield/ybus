@@ -9,8 +9,8 @@ mod common;
 use ybus_powerflow::ac::AcModel;
 use ybus_powerflow::case::Case;
 use ybus_powerflow::opf::derivatives::{
-    flows, squared_magnitude_hessian, squared_magnitudes, weighted_hessian,
-    SquaredMagnitudeHessianPlan, WeightedHessianPlan,
+    flows, squared_magnitude_hessian, squared_magnitudes, weighted_hessian, FlowsPlan,
+    SquaredMagnitudeHessianPlan, SquaredMagnitudesPlan, WeightedHessianPlan,
 };
 use ybus_sparse::compressed_matrix::CsrMatrix;
 use ybus_sparse::Complex;
@@ -453,4 +453,48 @@ fn a_plan_declines_only_a_dropped_diagonal() {
         &weighted_hessian(&c, &y, &v, &[0.5], &[-0.25]),
         "one branch",
     );
+}
+
+#[test]
+fn flows_and_squared_magnitude_plans_match_the_functions_bit_for_bit() {
+    let mut rng = Lcg(13);
+    let complex_bits = |m: &CsrMatrix<C64>| -> Vec<(u64, u64)> {
+        m.values()
+            .iter()
+            .map(|v| (v.re.to_bits(), v.im.to_bits()))
+            .collect()
+    };
+    let mut compared = 0;
+    for network in networks() {
+        for (end, c, y) in &network.pairs {
+            let what = format!("{} {end}", network.name);
+            let (flows_plan, magnitudes_plan) =
+                (FlowsPlan::new(c, y), SquaredMagnitudesPlan::new(c, y));
+            for _ in 0..4 {
+                let v = random_voltages(network.nb, &mut rng);
+                let (planned, direct) = (flows_plan.evaluate(&v), flows(c, y, &v));
+                let s_bits = |f: &ybus_powerflow::opf::derivatives::Flows| -> Vec<(u64, u64)> {
+                    f.s.iter()
+                        .map(|s| (s.re.to_bits(), s.im.to_bits()))
+                        .collect()
+                };
+                assert_eq!(s_bits(&planned), s_bits(&direct), "{what}: S");
+                for (p, d) in [
+                    (&planned.ds_dva, &direct.ds_dva),
+                    (&planned.ds_dvm, &direct.ds_dvm),
+                ] {
+                    assert_eq!(p.pointers(), d.pointers(), "{what}");
+                    assert_eq!(p.indices(), d.indices(), "{what}");
+                    assert_eq!(complex_bits(p), complex_bits(d), "{what}");
+                }
+                let (squared, jacobian) = magnitudes_plan.evaluate(&direct);
+                let (direct_squared, direct_jacobian) = squared_magnitudes(&direct);
+                let bits = |x: &[f64]| x.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&squared), bits(&direct_squared), "{what}: |S|²");
+                assert_identical(&jacobian, &direct_jacobian, &what);
+                compared += 1;
+            }
+        }
+    }
+    assert!(compared > 0);
 }

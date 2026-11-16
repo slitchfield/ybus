@@ -695,6 +695,133 @@ impl SquaredMagnitudeHessianPlan {
     }
 }
 
+/// [`flows`] for one `C` and `Y`, planned once: the same [`Flows`], patterns and values bit for
+/// bit, at any voltages.
+#[derive(Clone, Debug)]
+pub struct FlowsPlan {
+    c: CsrMatrix<C64>,
+    c_rows: Vec<usize>,
+    y: CsrMatrix<C64>,
+    y_conj: CsrMatrix<C64>,
+    y_rows: Vec<usize>,
+    /// `first + second`, over `C`'s and `Y`'s patterns
+    sum: SumPlan,
+    pattern: CsrMatrix<C64>,
+}
+
+impl FlowsPlan {
+    /// Plans `flows(c, y, ·)`. Panics unless `c` and `y` are both `rows × nb`.
+    pub fn new(c: &CsrMatrix<C64>, y: &CsrMatrix<C64>) -> Self {
+        assert_eq!(c.shape(), y.shape(), "C and Y are both rows × nb");
+        let y_conj = y.conj();
+        let sum = c.plan_sum(&y_conj).expect("both rows × nb");
+        let pattern = sum.add(c, &y_conj).expect("planned");
+        FlowsPlan {
+            c_rows: entry_rows(c),
+            c: c.clone(),
+            y_rows: entry_rows(y),
+            y: y.clone(),
+            y_conj,
+            sum,
+            pattern: pattern.map(|_| ZERO),
+        }
+    }
+
+    /// [`Flows`] at voltages `v`, bit for bit `flows(c, y, v)`. Panics unless there is one
+    /// voltage per bus.
+    pub fn evaluate(&self, v: &[C64]) -> Flows {
+        let d = PolarDerivatives::new(v);
+        let cv = self.c.mul_vec(v).expect("C has a column per bus");
+        let i_conj = conj(&self.y.mul_vec(v).expect("Y has a column per bus"));
+        let derivative = |dv: &[C64]| {
+            let dv_conj = conj(dv);
+            // scale_rows multiplies factor · value, then scale_cols value · factor
+            let first: Vec<C64> = (self.c.values().iter().zip(&self.c_rows))
+                .zip(self.c.indices())
+                .map(|((&value, &row), &col)| i_conj[row] * value * dv[col])
+                .collect();
+            let second: Vec<C64> = (self.y_conj.values().iter().zip(&self.y_rows))
+                .zip(self.y_conj.indices())
+                .map(|((&value, &row), &col)| cv[row] * value * dv_conj[col])
+                .collect();
+            let mut values = vec![ZERO; self.sum.num_stored()];
+            self.sum
+                .add_values(&first, &second, &mut values)
+                .expect("the planned lengths");
+            with_values(&self.pattern, values)
+        };
+        Flows {
+            s: cv.iter().zip(&i_conj).map(|(cv, i)| cv * i).collect(),
+            ds_dva: derivative(&d.va),
+            ds_dvm: derivative(&d.vm),
+        }
+    }
+}
+
+/// [`squared_magnitudes`] for the [`Flows`] of one `C` and `Y`, planned once: the same squared
+/// magnitudes and Jacobian, bit for bit.
+#[derive(Clone, Debug)]
+pub struct SquaredMagnitudesPlan {
+    ds_dva_stored: usize,
+    ds_dvm_stored: usize,
+    /// The row of each entry of the two derivatives, concatenated
+    rows: Vec<usize>,
+    /// The Jacobian's entries from the two derivatives' values, concatenated
+    sources: Vec<usize>,
+    pattern: CsrMatrix<f64>,
+}
+
+impl SquaredMagnitudesPlan {
+    /// Plans `squared_magnitudes` for the flows of `c` and `y`. Panics unless `c` and `y` are
+    /// both `rows × nb`.
+    pub fn new(c: &CsrMatrix<C64>, y: &CsrMatrix<C64>) -> Self {
+        let flows = FlowsPlan::new(c, y);
+        let (dva, dvm) = (&flows.pattern, &flows.pattern);
+        let traced = CsrMatrix::hstack([tagged(dva, 0), tagged(dvm, dva.num_stored())])
+            .expect("both rows × nb");
+        let mut rows = entry_rows(dva);
+        rows.extend(entry_rows(dvm));
+        SquaredMagnitudesPlan {
+            ds_dva_stored: dva.num_stored(),
+            ds_dvm_stored: dvm.num_stored(),
+            rows,
+            sources: sources(&traced),
+            pattern: pattern(&traced),
+        }
+    }
+
+    /// The Jacobian's pattern, with every value zero.
+    pub fn pattern(&self) -> &CsrMatrix<f64> {
+        &self.pattern
+    }
+
+    /// The squared apparent power of each row of `flows`' `S`, and its derivatives with respect
+    /// to `[Va, Vm]` (real, rows × 2nb), bit for bit `squared_magnitudes(flows)`. Panics unless
+    /// `flows` is for this plan's `C` and `Y`.
+    pub fn evaluate(&self, flows: &Flows) -> (Vec<f64>, CsrMatrix<f64>) {
+        assert_eq!(
+            flows.ds_dva.num_stored(),
+            self.ds_dva_stored,
+            "flows for this plan"
+        );
+        assert_eq!(
+            flows.ds_dvm.num_stored(),
+            self.ds_dvm_stored,
+            "flows for this plan"
+        );
+        let squared = flows.s.iter().map(|s| s.norm_sqr()).collect();
+        let twice_conj: Vec<C64> = flows.s.iter().map(|s| 2.0 * s.conj()).collect();
+        // ds.scale_rows(twice_conj).real(), for both derivatives
+        let scaled: Vec<f64> = (flows.ds_dva.values().iter())
+            .chain(flows.ds_dvm.values())
+            .zip(&self.rows)
+            .map(|(&value, &row)| (twice_conj[row] * value).re)
+            .collect();
+        let jacobian = with_values(&self.pattern, gather(&scaled, &self.sources));
+        (squared, jacobian)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
