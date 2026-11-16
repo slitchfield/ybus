@@ -169,6 +169,7 @@ impl DcStudy<'_> {
     }
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
 impl DcStudy<'_> {
     /// Uploads B′'s factorization to `gpu`, for [`DcGpuStudy`]'s batched solves.
     ///
@@ -446,6 +447,7 @@ pub struct DcGpuSensitivity<'s, 'g> {
     shifted: bool,
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
 impl DcSensitivity<'_> {
     /// Uploads the sensitivity's factorization and Bf to `gpu`, for [`DcGpuSensitivity`]'s
     /// PTDF columns and transfers. With a distributed slack, its shift is computed here, on

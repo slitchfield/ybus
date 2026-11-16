@@ -8,6 +8,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# What the published package holds: the library's source, the README and the license texts.
+#   The tests, benches and examples stay in the repository (docs/PublishingChecklist.md, P3), and
+#   cargo package warns once for each, as it drops their targets from the published manifest.
+include = ["/src/**/*", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/AI-DISCLAIMER.md"]
 
 [dependencies]
 ybus_sparse.workspace = true
@@ -15,3 +19,10 @@ ybus_sparse.workspace = true
 #   crate without the CUDA toolkit and a machine without CUDA finds out when `Gpu::new` runs.
 #   The bindings are CUDA 13.0's, which any CUDA 13 driver serves.
 cudarc = { version = "0.19", default-features = false, features = ["std", "driver", "cusparse", "nvrtc", "dynamic-loading", "cuda-13000"] }
+
+# docs.rs builds the docs for one target: the API is the same on every platform. The crate has
+#   no features; all-features and `--cfg docsrs` are set as in the other published crates.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]

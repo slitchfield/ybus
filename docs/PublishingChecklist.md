@@ -174,20 +174,62 @@ and the root README notes the renames once.
 
 ## Phase P3: Package contents and docs.rs
 
-- [ ] An `include` list for each crate, so a package holds what builds and documents the
+- [x] An `include` list for each crate, so a package holds what builds and documents the
       library and nothing else: `src/`, `Cargo.toml`, the README and the license files.
       - **`ybus_powerflow`:** without `tests/`, `benches/` or `examples/`, as P0 decided.
       - **`ybus_cuda`:** `src/kernels.cu`, which `include_str!` compiles in, is under `src/`.
-      - **Targets whose files are left out:** Cargo drops the `[[bench]]` and `[[example]]`
-        declarations with a warning. The item makes the package warning-free.
+      - **Targets whose files are left out:** Cargo drops them from the published manifest, with
+        a warning for each. ~~The item makes the package warning-free.~~ Decided (2026-11-13):
+        the warnings are accepted, since they can't be avoided without shipping the tests.
+        - **Why there are more than planned:** `cargo package` writes every target into the
+          published manifest explicitly, so a test it discovered on its own warns just as a
+          declared `[[bench]]` does. That's 58 warnings, not 11: 12 for `ybus_sparse`, 6 for
+          `ybus_ipm`, 2 for `ybus_cuda` and 38 for `ybus_powerflow` (27 tests, 8 examples and 3
+          benches). Cargo 1.99 has no setting that silences them.
+        - **Why not ship the tests where they'd run:** a package then holds code no user of the
+          library builds, and `ybus_powerflow`'s would still warn. Moving the tests, benches and
+          examples into unpublished crates would make every package warning-free, at the cost
+          of moving them and the paths to their data.
+        - **What it means for P4:** the Package job fails on errors, not on cargo's warnings.
 
-      Each package's file count and size go in the PR.
-- [ ] docs.rs: `[package.metadata.docs.rs]` with `all-features = true`, and labels on the
+      | Crate | Files | Size | Compressed | Was (P2) |
+      |---|--:|--:|--:|--:|
+      | `ybus_sparse` | 35 | 351.4 KiB | 94.5 KiB | 48 files, 155.5 KiB |
+      | `ybus_ipm` | 17 | 124.4 KiB | 36.6 KiB | 25 files, 50.0 KiB |
+      | `ybus_cuda` | 14 | 94.9 KiB | 27.9 KiB | 17 files, 32.6 KiB |
+      | `ybus_powerflow` | 25 | 360.8 KiB | 97.0 KiB | 186 files, 332.5 KiB |
+
+      Each count includes the four files cargo adds: `Cargo.toml` as published, the original as
+      `Cargo.toml.orig`, `Cargo.lock` and `.cargo_vcs_info.json`.
+      - **The patterns start with `/`,** anchored at the package root. Without the slash,
+        `README.md` also matched `tests/data/matpower-reference/README.md`, as a `.gitignore`
+        pattern would.
+- [x] docs.rs: `[package.metadata.docs.rs]` with `all-features = true`, and labels on the
       feature-gated items (`rayon`, `serde`, `cuda`), so a reader sees what each one needs.
       These need nightly's `doc_cfg`, behind `--cfg docsrs` so stable builds don't see it. The
       item builds the docs as docs.rs would, `ybus_cuda` included, and fixes what breaks.
-- [ ] A front page for each crate: crate-level docs with a short example that runs as a doc
+      - **The labels:** nightly's `doc_cfg` labels an item gated directly by `#[cfg(feature)]`
+        on its own, such as `par_solve_outages`, the `Gpu` re-export and `PowerflowError::Gpu`.
+        Items inside a gated private module carry `#[cfg_attr(docsrs, doc(cfg(...)))]`: the
+        `rayon` products and `serde` impls in `ybus_sparse`, and `DcStudy::gpu` and
+        `DcSensitivity::gpu`.
+      - **One target,** `x86_64-unknown-linux-gnu`, since no API differs by platform.
+        `ybus_ipm` and `ybus_cuda` have no features, but carry the same metadata.
+      - **Checked:** `cargo +nightly rustdoc -p <crate> --lib --all-features -- --cfg docsrs
+        -D warnings`, with `DOCS_RS=1`, builds all four with nothing to fix, `ybus_cuda`
+        included, since CUDA is loaded at run time. The generated pages label every gated
+        item. The nightly was rustc 1.102.0-nightly (2026-11-12).
+- [x] A front page for each crate: crate-level docs with a short example that runs as a doc
       test, and for `ybus_powerflow` and `ybus_ipm` a guide to their modules.
+      - **Each front page** has an example, then a guide. `ybus_sparse` also lists its
+        features, `ybus_ipm` says which solver to choose, and `ybus_powerflow` says where to
+        start: one solve, or a model kept for many.
+      - **The examples are shorter than the READMEs':** a two-bus case for `ybus_powerflow`,
+        and a bounded QP whose multiplier is checked for `ybus_ipm`.
+      - **`ybus_cuda`'s example is `no_run`,** like its README's.
+      - **The roadmap mentions are now links,** so they resolve on docs.rs.
+      - **Checked:** each crate's docs build on stable with `-D warnings` and on nightly as
+        docs.rs builds them, and every example passes as a doc test.
 
 ## Phase P4: Release checks in CI
 

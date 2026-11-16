@@ -2,6 +2,33 @@
 //!
 //! minimize `f(x)` subject to `g(x) = 0`, `h(x) ≤ 0`, `l ≤ A x ≤ u` and `xmin ≤ x ≤ xmax`.
 //!
+//! # Example
+//!
+//! A quadratic program, minimize `½ ‖x‖² − x₁ − 2 x₂` with `x₁ ≤ 0.5`, solved by MIPS:
+//!
+//! ```
+//! use ybus_ipm::mips::{qps_mips, MipsOptions};
+//! use ybus_ipm::{Constraints, QuadraticProblem};
+//! use ybus_sparse::SparseMatrix;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let identity = SparseMatrix::from_triplets(2, 2, vec![(0, 0, 1.0), (1, 1, 1.0)])?.to_csr();
+//! let qp = QuadraticProblem { h: Some(identity), c: vec![-1.0, -2.0] };
+//! let constraints = Constraints {
+//!     xmax: Some(vec![0.5, f64::INFINITY]),
+//!     ..Constraints::default()
+//! };
+//! let solution = qps_mips(&qp, &constraints, None, &MipsOptions::default())?;
+//! assert!(solution.converged());
+//! assert!((solution.x[0] - 0.5).abs() < 1e-6 && (solution.x[1] - 2.0).abs() < 1e-6);
+//! // The bound on x₁ is active, with multiplier 0.5: relaxing it by δ lowers f by about δ / 2
+//! assert!((solution.multipliers.upper[0] - 0.5).abs() < 1e-6);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Guide
+//!
 //! - [`problem`]: the programs the solvers take: a [`problem::Problem`] supplies the objective
 //!   and any nonlinear constraints with their derivatives, and [`problem::Constraints`] the
 //!   linear constraints and bounds.
@@ -21,7 +48,23 @@
 //! Every solver takes its arguments in the same order: the problem, its `constraints`, the
 //! starting point `x0` and the options.
 //!
-//! The linear algebra is [`ybus_sparse`]'s. See `docs/OptimizationChecklist.md` for the roadmap.
+//! # Which solver
+//!
+//! - **MIPS** when results must match MATPOWER's, which they do with the default LU
+//!   factorization of the KKT systems.
+//! - **The predictor-corrector method** for fewer iterations, written from the literature
+//!   rather than to match MATPOWER.
+//!
+//! Either factors its KKT systems by LU or by LDLᵀ, chosen by `kkt_factorization` in its
+//! options ([`kkt::KktFactorization`]). With LDLᵀ, the predictor-corrector method also
+//! corrects an indefinite Hessian using the factorization's inertia.
+//!
+//! A general nonlinear program implements [`Problem`], with its derivatives; a quadratic or
+//! linear one is a [`QuadraticProblem`], for `qps_mips` and `qps_mehrotra`.
+//!
+//! The linear algebra is [`ybus_sparse`]'s. See the
+//! [roadmap](https://github.com/slitchfield/ybus/blob/main/docs/OptimizationChecklist.md) for
+//! what's planned.
 
 // No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
 //   API

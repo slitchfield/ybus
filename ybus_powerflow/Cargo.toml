@@ -8,6 +8,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# What the published package holds: the library's source, the README and the license texts.
+#   The tests, benches and examples stay in the repository (docs/PublishingChecklist.md, P3), and
+#   cargo package warns once for each, as it drops their targets from the published manifest.
+include = ["/src/**/*", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/AI-DISCLAIMER.md"]
 
 [features]
 # Parallel batches: outages, PTDF and LODF columns (DcStudy::par_solve_outages,
@@ -48,3 +52,11 @@ harness = false
 [[bench]]
 name = "ac_power_flow"
 harness = false
+
+# docs.rs builds the docs with every feature, and with `--cfg docsrs`, under which lib.rs labels
+#   each optional item with the feature it needs. One target is enough: the API is the same on
+#   every platform.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]
