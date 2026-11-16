@@ -525,7 +525,7 @@ with legacy results generated locally to explain differences.
                - **Decided with the maintainer (2026-11-08):** the DC OPF's
                  predictor-corrector default switches to LDLᵀ, which it now qualifies for under
                  #59's rule. MIPS and `MehrotraOptions::default()` keep LU.
-          2. the OPF's evaluation (bound 1.4–1.6× on AC), through plans kept for the solve
+          2. [x] the OPF's evaluation (bound 1.4–1.6× on AC), through plans kept for the solve
              that replay today's arithmetic bit for bit. Decided with the maintainer
              (2026-11-16): bit for bit; the plans public in `ybus_sparse`; the Hessian, then the
              constraints' Jacobians. In four commits:
@@ -591,7 +591,19 @@ with legacy results generated locally to explain differences.
                - **Planted bugs caught:** a `+0.0` sentinel, a covered zero term added as is,
                  and the absent positions taken as the union of the two parts' drops rather
                  than their intersection.
-             - [ ] the record
+             - [x] **The record**
+               ([`opf-evaluation-2026-11-16.md`](benchmarks/opf-evaluation-2026-11-16.md)):
+               - **Bit for bit:** the 72-case snapshot matches `main`'s, and none of the 1,825
+                 result columns of either solver's AC survey differs.
+               - **Speed, interleaved on one machine:** the predictor-corrector method on LDLᵀ
+                 is 1.38–1.48× faster on case2383wp, case9241pegase and case_ACTIVSg25k, and
+                 1.28× on case300. MIPS on LU is 1.08–1.22× faster, its LU dominating.
+               - **The surveys' medians:** 1.26× (predictor-corrector, 1.28× in total) and 1.22×
+                 (MIPS).
+               - **The evaluation itself** is 2.6–2.8× faster on every profiled workload: 19.3%
+                 of case9241pegase's predictor-corrector solve, from 39.3%.
+               - **Next:** the KKT assembly, now 18.1% there, which `from_triplets` rebuilds at
+                 every factorization. That's target 3.
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
