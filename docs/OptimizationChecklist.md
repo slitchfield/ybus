@@ -525,7 +525,22 @@ with legacy results generated locally to explain differences.
                - **Decided with the maintainer (2026-11-08):** the DC OPF's
                  predictor-corrector default switches to LDLᵀ, which it now qualifies for under
                  #59's rule. MIPS and `MehrotraOptions::default()` keep LU.
-          2. the OPF's evaluation (bound 1.4–1.6× on AC);
+          2. the OPF's evaluation (bound 1.4–1.6× on AC), through plans kept for the solve
+             that replay today's arithmetic bit for bit. Decided with the maintainer
+             (2026-11-16): bit for bit; the plans public in `ybus_sparse`; the Hessian, then the
+             constraints' Jacobians. In four commits:
+             - [x] **Product and sum plans in `ybus_sparse`:** `ProductPlan`
+               (`plan_product`) records each product term in `matmul`'s order, and `SumPlan`
+               (`plan_sum`) each entry's sources as `try_add` merges them.
+               - **Bit for bit** with `matmul` and `try_add`, pattern and values, on random real
+                 and complex matrices in both orientations, with `±0.0`, cancellations and
+                 magnitudes from 1e-8 to 1e16.
+               - **Planted bugs caught:** terms in reverse order, a copied entry turned into an
+                 add of zero (which turns `-0.0` into `+0.0`), and an output not zeroed first.
+                 Swapping `a + b` to `b + a` is not a bug: IEEE addition commutes bit for bit.
+             - [ ] the planned Lagrangian Hessian
+             - [ ] the planned constraint Jacobians
+             - [ ] the record
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays

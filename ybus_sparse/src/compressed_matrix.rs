@@ -40,6 +40,7 @@ mod ops;
 mod ordering;
 #[cfg(feature = "rayon")]
 mod parallel;
+mod plans;
 pub(crate) mod product;
 mod properties;
 #[cfg(feature = "serde")]
@@ -54,6 +55,7 @@ pub use factorization::Factorization;
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
 pub use multifrontal::{Amalgamation, Ldlt, LdltOptions, SymbolicLdlt};
 pub use ordering::Ordering;
+pub use plans::{ProductPlan, SumPlan};
 pub use solvers::SparseSolveWorkspace;
 pub use static_ldlt::Inertia;
 

@@ -24,6 +24,9 @@ releases.
   `CscMatrix`) for the numerical work, generic over the element type, `f64` by default.
 - Arithmetic, sparse products, norms and selections, and refilling values into a fixed pattern
   through an assembly map.
+- Product and sum plans (`ProductPlan`, `SumPlan`): a product or sum planned once for fixed
+  patterns, then recomputed from new values bit for bit as `matmul` and `try_add` compute it,
+  with no hashing, sorting or allocation.
 - Factorizations: sparse LU with threshold partial pivoting, Cholesky, and LDLᵀ with
   Bunch–Kaufman pivoting, with orderings (AMD, COLAMD, reverse Cuthill–McKee), condition estimates,
   and solves with many right-hand sides.
