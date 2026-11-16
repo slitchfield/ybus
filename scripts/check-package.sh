@@ -23,8 +23,17 @@ LOG="$(mktemp)"
 trap 'rm -f "${LOG}"' EXIT
 
 # cargo's progress and warnings go to stderr: show them as they come, and keep a copy. With
-#   pipefail, cargo's own failure fails the script.
-cargo publish --workspace --dry-run --locked 2>&1 | tee "${LOG}"
+#   pipefail, cargo's own failure fails the script. --color never, since CI sets
+#   CARGO_TERM_COLOR=always, and colour codes before "warning:" would hide every line from the
+#   checks below.
+cargo publish --workspace --dry-run --locked --color never 2>&1 | tee "${LOG}"
+
+# The dry run says it aborted each upload. If no such line is found, the output wasn't read as
+#   expected, and the warning check below would pass whatever cargo said.
+if ! grep -q '^warning: aborting upload due to dry run$' "${LOG}"; then
+    echo "error: found no 'aborting upload due to dry run' in cargo's output; can't check its warnings" >&2
+    exit 1
+fi
 
 ACCEPTED='^warning: (ignoring (test|example|benchmark) `[^`]+` as `[^`]+` is not included in the published package|aborting upload due to dry run)$'
 UNEXPECTED="$(grep '^warning:' "${LOG}" | grep -Ev "${ACCEPTED}" || true)"

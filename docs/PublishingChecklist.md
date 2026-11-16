@@ -252,6 +252,11 @@ and the root README notes the renames once.
         Anything else, such as `manifest has no description`, fails it.
       - **Found:**
         - Cargo says "benchmark", not "bench", which the script's first run caught.
+        - **CI colours cargo's output:** `dtolnay/rust-toolchain` sets `CARGO_TERM_COLOR=always`.
+          On the PR's first run, the colour codes hid every `warning:` line from the filter, so
+          it counted no accepted warnings, and would have passed any other warning too. The
+          script now passes `--color never`. It also fails if it finds none of the dry run's
+          own notices, so output it can't read fails the check instead of passing it.
         - **A license file left out of `include` isn't caught.** With an SPDX `license`, cargo
           doesn't look for the files. That was tried on a scratch worktree, along with a
           removed `description`, which failed the script as it should.
