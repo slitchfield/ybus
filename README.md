@@ -37,6 +37,10 @@ one: optimal power flow, interior-point solvers and acceleration.
   ones for the tests, examples and benches left out
   ([`docs/PublishingChecklist.md`](docs/PublishingChecklist.md), P3 and P4). The Package CI job
   runs it.
+- **Docs as docs.rs builds them:** `scripts/check-docsrs.sh` documents the four crates on
+  nightly, with every feature and the feature labels, and fails on any warning. It needs
+  `rustup toolchain install nightly`. The Docs CI job runs it, advisory, so a nightly change
+  doesn't block a PR.
 - **Dependencies:** `cargo deny --all-features check` checks advisories, licenses, banned
   crates and sources against `deny.toml`. The Dependencies CI job runs it.
 - **MATPOWER test data:** `scripts/fetch-matpower.sh` downloads a pinned MATPOWER release

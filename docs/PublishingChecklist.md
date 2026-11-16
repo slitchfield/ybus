@@ -219,7 +219,8 @@ and the root README notes the renames once.
       - **Checked:** `cargo +nightly rustdoc -p <crate> --lib --all-features -- --cfg docsrs
         -D warnings`, with `DOCS_RS=1`, builds all four with nothing to fix, `ybus_cuda`
         included, since CUDA is loaded at run time. The generated pages label every gated
-        item. The nightly was rustc 1.102.0-nightly (2026-11-12).
+        item. The nightly was rustc 1.102.0-nightly (2026-11-12). P4's advisory Docs job
+        repeats this check on every push.
 - [x] A front page for each crate: crate-level docs with a short example that runs as a doc
       test, and for `ybus_powerflow` and `ybus_ipm` a guide to their modules.
       - **Each front page** has an example, then a guide. `ybus_sparse` also lists its
@@ -258,6 +259,15 @@ and the root README notes the renames once.
           8 s locally with the dependencies cached, and longer from cold.
         - The script uses `--locked`, so a `Cargo.lock` out of date fails it, as it would fail
           the publish.
+- [x] A **Docs** CI job that builds each crate's docs as docs.rs does, run by
+      `scripts/check-docsrs.sh`, which also runs locally. Added to P4 (2026-11-16), from P3's
+      check by hand.
+      - **What it runs:** P3's command for each of the four crates, on nightly, with
+        `--target-dir target/docsrs` so the stable build in `target/` stays as it is.
+      - **Advisory,** decided (2026-11-16): the job has `continue-on-error`, so it reports a
+        broken label or intra-doc link without failing the run. A change in nightly can break
+        it with nothing changed here, and that mustn't block an unrelated PR.
+      - **Not in `check.sh`,** which needs only stable.
 - [ ] **Semver checks** with `cargo-semver-checks`, against each crate's last published version.
       - **Required before each release:** a release isn't published until the check passes
         for the version it bumps to.

@@ -87,3 +87,18 @@ jobs:
       #   crates.io would build it. The packages hold no tests, so MATPOWER isn't fetched. The
       #   script fails on any warning but the accepted ones (docs/PublishingChecklist.md, P3).
       - run: scripts/check-package.sh
+
+  docs-nightly:
+    name: Docs (nightly, advisory)
+    runs-on: ubuntu-latest
+    # The feature labels need nightly's doc_cfg, as docs.rs builds them. A nightly change can
+    #   break this job with nothing changed here, so it reports without failing the run, and
+    #   nothing waits on it.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/docsrs"
+      - run: scripts/check-docsrs.sh
