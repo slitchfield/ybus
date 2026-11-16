@@ -538,7 +538,26 @@ with legacy results generated locally to explain differences.
                - **Planted bugs caught:** terms in reverse order, a copied entry turned into an
                  add of zero (which turns `-0.0` into `+0.0`), and an output not zeroed first.
                  Swapping `a + b` to `b + a` is not a bug: IEEE addition commutes bit for bit.
-             - [ ] the planned Lagrangian Hessian
+             - [x] **The planned Lagrangian Hessian:** `WeightedHessianPlan` and
+               `SquaredMagnitudeHessianPlan` in `opf::derivatives`, kept by the AC OPF's
+               problem with two sum plans and `widen`'s assembly as an `AssemblyMap`.
+               - **The one pattern that depends on values:** `bilinear_hessian`'s diagonal
+                 terms go through `from_diagonal`, which drops zeros. Where `M + Mᵀ` stores the
+                 position, the plan copies its value for a zero term, as `try_add` does. Where
+                 only the term can, a zero term makes the plan decline, and the Hessian is
+                 computed by the functions, as before. A bus no limited branch touches has no
+                 term at all.
+               - **A decline can be unnecessary:** if the real part's term is zero but the
+                 imaginary part's isn't, the joined Hessian still stores the position. The
+                 fallback costs one evaluation by the functions, never a different result.
+               - **Bit for bit:** against the functions on case14, case30, case118 and a 4-bus
+                 case, at random voltages with random, zero and signed-zero weights. The
+                 72-case OPF snapshot hashes identically to `main`'s on all four solver and
+                 model pairs.
+               - **Planted bugs caught:** the scalings reassociated, and a zero term added
+                 rather than copied, which only a unit test of the diagonal step reaches. A
+                 search of 200,000 small random Hessians found no input where it shows, since
+                 the products' sums start at `+0.0`.
              - [ ] the planned constraint Jacobians
              - [ ] the record
           3. allocation and KKT assembly;
