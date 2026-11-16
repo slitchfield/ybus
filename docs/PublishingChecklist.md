@@ -190,7 +190,8 @@ and the root README notes the renames once.
           library builds, and `ybus_powerflow`'s would still warn. Moving the tests, benches and
           examples into unpublished crates would make every package warning-free, at the cost
           of moving them and the paths to their data.
-        - **What it means for P4:** the Package job fails on errors, not on cargo's warnings.
+        - **What it means for P4:** the Package job fails on errors, not on these warnings.
+          Refined in P4 (2026-11-16): any other kind of warning fails it.
 
       | Crate | Files | Size | Compressed | Was (P2) |
       |---|--:|--:|--:|--:|
@@ -218,7 +219,8 @@ and the root README notes the renames once.
       - **Checked:** `cargo +nightly rustdoc -p <crate> --lib --all-features -- --cfg docsrs
         -D warnings`, with `DOCS_RS=1`, builds all four with nothing to fix, `ybus_cuda`
         included, since CUDA is loaded at run time. The generated pages label every gated
-        item. The nightly was rustc 1.102.0-nightly (2026-11-12).
+        item. The nightly was rustc 1.102.0-nightly (2026-11-12). P4's advisory Docs job
+        repeats this check on every push.
 - [x] A front page for each crate: crate-level docs with a short example that runs as a doc
       test, and for `ybus_powerflow` and `ybus_ipm` a guide to their modules.
       - **Each front page** has an example, then a guide. `ybus_sparse` also lists its
@@ -233,7 +235,8 @@ and the root README notes the renames once.
 
 ## Phase P4: Release checks in CI
 
-- [ ] A **Package** CI job: `cargo publish --workspace --dry-run`.
+- [x] A **Package** CI job: `cargo publish --workspace --dry-run`, run by
+      `scripts/check-package.sh`, which also runs locally.
       - What it does: packages every publishable crate, then builds each from its package, in
         dependency order, as crates.io would.
       - **Before the first release,** unpublished crates resolve against a local registry of
@@ -241,21 +244,64 @@ and the root README notes the renames once.
         to the path dependencies: all four crates packaged and built, in 26 s on the
         maintainer's laptop.
       - **`ybus_ffi`** is skipped through its `publish = false`, with no `--exclude` needed.
-      - **Packaging warnings** fail the job.
-- [ ] **Semver checks** with `cargo-semver-checks`, against each crate's last published version.
+      - ~~**Packaging warnings** fail the job.~~ Decided (2026-11-16): the job fails on errors,
+        and on any warning but two accepted kinds. Each is matched in full, as cargo 1.99 words it:
+        - `ignoring test|example|benchmark … not included in the published package`, P3's 58
+        - `aborting upload due to dry run`, once for each crate
+
+        Anything else, such as `manifest has no description`, fails it.
+      - **Found:**
+        - Cargo says "benchmark", not "bench", which the script's first run caught.
+        - **CI colours cargo's output:** `dtolnay/rust-toolchain` sets `CARGO_TERM_COLOR=always`.
+          On the PR's first run, the colour codes hid every `warning:` line from the filter, so
+          it counted no accepted warnings, and would have passed any other warning too. The
+          script now passes `--color never`. It also fails if it finds none of the dry run's
+          own notices, so output it can't read fails the check instead of passing it.
+        - **A license file left out of `include` isn't caught.** With an SPDX `license`, cargo
+          doesn't look for the files. That was tried on a scratch worktree, along with a
+          removed `description`, which failed the script as it should.
+        - **It stays out of `check.sh`:** it rebuilds each crate from its package. That takes
+          8 s locally with the dependencies cached, and longer from cold.
+        - The script uses `--locked`, so a `Cargo.lock` out of date fails it, as it would fail
+          the publish.
+- [x] A **Docs** CI job that builds each crate's docs as docs.rs does, run by
+      `scripts/check-docsrs.sh`, which also runs locally. Added to P4 (2026-11-16), from P3's
+      check by hand.
+      - **What it runs:** P3's command for each of the four crates, on nightly, with
+        `--target-dir target/docsrs` so the stable build in `target/` stays as it is.
+      - **Advisory,** decided (2026-11-16): the job has `continue-on-error`, so it reports a
+        broken label or intra-doc link without failing the run. A change in nightly can break
+        it with nothing changed here, and that mustn't block an unrelated PR.
+      - **Not in `check.sh`,** which needs only stable.
+- [x] **Semver checks** with `cargo-semver-checks`, against each crate's last published version.
+      Decided (2026-11-16): a policy now, with no job until there's a baseline.
       - **Required before each release:** a release isn't published until the check passes
-        for the version it bumps to.
-      - **A per-PR job,** reporting without failing, is decided with the item. A failing one
+        for the version it bumps to. `docs/Releasing.md` states the rule.
+      - **Where it runs:** in release-plz's release PR, once P5 sets it up. A release by hand
+        before then runs `cargo semver-checks --workspace` first.
+      - **At 0.x,** a minor bump (0.1 to 0.2) is the breaking one, and a patch bump must break
+        nothing. With one shared version, a break in any crate bumps all four.
+      - **A per-PR job,** reporting without failing, isn't added yet. Before 0.1.0 it would
+        have nothing to compare against. It's decided once the baseline exists. A failing one
         would fail every intended break between releases.
       - **What it misses:** it catches breaks in the API's signatures and types, not in
         behaviour. A behaviour change, such as F4's to `DcModel::study`, still needs a person to
         mark it in the version and the changelog.
       - **When it starts:** it needs a published baseline, so it starts with the first
         release after 0.1.0.
-- [ ] A changelog, `CHANGELOG.md` in Keep a Changelog's form, with 0.1.0's entry written by hand.
-      `release-plz` writes the entries after it; how they're laid out across the four crates is
-      settled with its configuration in P5.
-- [ ] `docs/Releasing.md`, the guide to P5's first release by hand, step by step:
+- [x] A changelog, `CHANGELOG.md` in Keep a Changelog's form, with 0.1.0's entry written by hand.
+      `release-plz` writes the entries after it. ~~How they're laid out across the four crates is
+      settled with its configuration in P5.~~ Decided (2026-11-16): one file at the root.
+      - **One entry per release,** since the crates share one version, with a subsection for
+        each crate it changes. P5 points release-plz's configuration at this one file.
+      - **0.1.0's entry** lists what each crate does, from its README and front page, and
+        marks `ybus_cuda` experimental. Its date stays `YYYY-MM-DD` until the release, when
+        `docs/Releasing.md` has it filled in.
+      - **Its links** point to the `v0.1.0` tag that P5 creates, so they don't resolve until
+        then.
+      - **Not in the packages:** the `include` lists are unchanged. crates.io links to the
+        repository, where the changelog is.
+- [x] [`docs/Releasing.md`](Releasing.md), the guide to P5's first release by hand, step by step:
       - the account and token
       - the dry run, the publish, the tag and the GitHub release
       - the checks afterwards
@@ -263,11 +309,23 @@ and the root README notes the renames once.
 
       The maintainer corrects it while working through those steps. It gains `release-plz`'s
       routine once that's set up.
+      - **It opens with the rules for every release:** the CI jobs pass, the semver check
+        passes from the second release on, and the changelog has the entry.
+      - **Also covered:**
+        - checking that the four names are still free (none was taken on 2026-11-16)
+        - filling in the changelog's date
+        - a token limited to `publish-new` and `ybus_*`, with a short expiry
+        - what to do if the publish stops partway
+      - **Checked:** each command's flags against `cargo publish --help`, `cargo login --help`
+        and `gh release create --help`. None of the publishing steps was run.
+      - **Left to P5:** the release workflow's file name, which trusted publishing needs, and
+        the routine for releases after 0.1.0.
 
 ## Phase P5: The first release
 
-The maintainer does the first four items by hand, following `docs/Releasing.md`, as the
-first-time workflow to learn before anything automates it. `release-plz` is set up after them.
+The maintainer does the first four items by hand, following
+[`docs/Releasing.md`](Releasing.md), as the first-time workflow to learn before anything
+automates it. `release-plz` is set up after them.
 
 - [ ] A crates.io account through GitHub, and an API token scoped to publishing new crates,
       with an expiry. The first publish of a new crate can't use trusted publishing.

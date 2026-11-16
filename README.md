@@ -32,6 +32,15 @@ one: optimal power flow, interior-point solvers and acceleration.
   clippy with `-D warnings`, and the tests with no features, all features and each optional
   feature alone, plus doc tests (including the `ybus_sparse` README's example).
   The benchmarks run once, as tests, in the first of those passes only.
+- **Packages:** `scripts/check-package.sh` dry-runs the publish of the four published crates,
+  building each from its package as crates.io would, and fails on any warning but the accepted
+  ones for the tests, examples and benches left out
+  ([`docs/PublishingChecklist.md`](docs/PublishingChecklist.md), P3 and P4). The Package CI job
+  runs it.
+- **Docs as docs.rs builds them:** `scripts/check-docsrs.sh` documents the four crates on
+  nightly, with every feature and the feature labels, and fails on any warning. It needs
+  `rustup toolchain install nightly`. The Docs CI job runs it, advisory, so a nightly change
+  doesn't block a PR.
 - **Dependencies:** `cargo deny --all-features check` checks advisories, licenses, banned
   crates and sources against `deny.toml`. The Dependencies CI job runs it.
 - **MATPOWER test data:** `scripts/fetch-matpower.sh` downloads a pinned MATPOWER release
@@ -78,6 +87,8 @@ one: optimal power flow, interior-point solvers and acceleration.
   checklist of `ybus_sparse`'s core functionality.
 - [`docs/benchmarks/`](docs/benchmarks/) records performance baselines, such as the DC power
   flow on every MATPOWER case.
+- [`CHANGELOG.md`](CHANGELOG.md) records each release of the published crates, and
+  [`docs/Releasing.md`](docs/Releasing.md) is the guide to making one.
 - [`AI-DISCLAIMER.md`](AI-DISCLAIMER.md) describes how AI was used to build this repository and
   how to report missing attribution.
 - API documentation: `cargo doc --workspace --open --all-features`.
