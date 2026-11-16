@@ -239,6 +239,11 @@ pub fn squared_magnitude_hessian(
 
 const ZERO: C64 = C64::new(0.0, 0.0);
 
+/// A dropped diagonal term's stand-in. `x + (-0.0)` is `x` bit for bit for every `x`, `-0.0`
+/// included, so every sum a dropped term takes part in gives what `try_add` gives by copying
+/// the other operand's value, and the term needs no special case downstream.
+const DROPPED: C64 = C64::new(-0.0, -0.0);
+
 /// `m`'s pattern, with each entry's value its slot plus `offset + 1`, so that the operations
 /// that only move entries (transposes and stacks) can be traced: an entry with value `t` came
 /// from slot `t - 1` of the values they were applied to.
@@ -309,11 +314,11 @@ fn mul_vec_values(pattern: &CsrMatrix<C64>, values: &[C64], x: &[C64]) -> Vec<C6
 /// drops a zero
 #[derive(Clone, Copy, Debug)]
 enum Diagonal {
-    /// `M + Mᵀ` stores `(i, i)`: the block adds the term, or keeps `M + Mᵀ`'s value where the
-    /// term is zero and dropped
-    Covered { block: usize, sum: usize },
-    /// Only the term can store `(i, i)`: the block's pattern has it, so a zero term, which
-    /// `from_diagonal` would drop, can't be planned
+    /// `M + Mᵀ` stores `(i, i)`: the block adds the term, or, where the term is zero and
+    /// dropped, keeps `M + Mᵀ`'s value, which adding `DROPPED` does
+    Covered,
+    /// Only the term can store `(i, i)`. The block's pattern has the position; a zero term,
+    /// which `from_diagonal` drops, is held as `DROPPED`, and the position reported as absent
     Stored,
     /// Neither `M`'s nor `Mᵀ`'s row `i` stores anything, so the term is `d·0 + conj(d)·0`,
     /// which `from_diagonal` drops; only a NaN or infinite term would be kept
@@ -351,15 +356,15 @@ impl BilinearPlan {
         let sum = m.plan_sum(&mt).expect("both nb × nb");
         let sum_pattern = sum.add(&m, &mt).expect("the planned operands");
         let nonempty = |a: &CsrMatrix<C64>, i: usize| a.pointers()[i] < a.pointers()[i + 1];
-        let mut kinds: Vec<Option<Diagonal>> = (0..nb)
+        let kinds: Vec<Diagonal> = (0..nb)
             .map(|i| match slot(&sum_pattern, i, i) {
-                Some(_) => None, // covered: its slots come from the joined pattern below
-                None if nonempty(&m, i) || nonempty(&mt, i) => Some(Diagonal::Stored),
-                None => Some(Diagonal::Empty),
+                Some(_) => Diagonal::Covered,
+                None if nonempty(&m, i) || nonempty(&mt, i) => Diagonal::Stored,
+                None => Diagonal::Empty,
             })
             .collect();
         let held: Vec<usize> = (0..nb)
-            .filter(|&i| !matches!(kinds[i], Some(Diagonal::Empty)))
+            .filter(|&i| !matches!(kinds[i], Diagonal::Empty))
             .collect();
         let diagonal_pattern =
             CsrMatrix::<C64>::from_triplets(nb, nb, held.iter().map(|&i| (i, i, ZERO)))
@@ -370,14 +375,6 @@ impl BilinearPlan {
         let block = with_diagonal
             .add(&sum_pattern, &diagonal_pattern)
             .expect("the planned operands");
-        for (i, kind) in kinds.iter_mut().enumerate() {
-            if kind.is_none() {
-                *kind = Some(Diagonal::Covered {
-                    block: slot(&block, i, i).expect("held"),
-                    sum: slot(&sum_pattern, i, i).expect("covered"),
-                });
-            }
-        }
         let vm_va_traced = tagged(&block, 0).transpose().to_csr();
         BilinearPlan {
             m_rows: entry_rows(&m),
@@ -387,7 +384,7 @@ impl BilinearPlan {
             mt,
             sum,
             with_diagonal,
-            diagonal: kinds.into_iter().map(|k| k.expect("classified")).collect(),
+            diagonal: kinds,
             vm_va_sources: sources(&vm_va_traced),
             vm_va: pattern(&vm_va_traced),
             vm_vm: sum_pattern,
@@ -415,15 +412,24 @@ impl BilinearPlan {
     }
 
     /// One block with its diagonal terms `terms`, as `bilinear_hessian` adds them through
-    /// `from_diagonal` and `try_add`, or `None` where that would store a different pattern
-    fn add_diagonal(&self, sum: &[C64], terms: &[C64]) -> Option<Vec<C64>> {
+    /// `from_diagonal` and `try_add`, over the block pattern, with the buses whose term was
+    /// dropped where nothing else stores the position (`Stored`). Their entries hold
+    /// `DROPPED`. `None` only for a NaN or infinite term on an `Empty` bus, which
+    /// `from_diagonal` would keep where the pattern has no position.
+    fn add_diagonal(&self, sum: &[C64], terms: &[C64]) -> Option<(Vec<C64>, Vec<usize>)> {
         let mut held = Vec::with_capacity(terms.len());
-        for (&kind, &term) in self.diagonal.iter().zip(terms) {
+        let mut dropped = Vec::new();
+        for (i, (&kind, &term)) in self.diagonal.iter().zip(terms).enumerate() {
+            // from_diagonal drops a term equal to zero, of either sign
+            let zero = term == ZERO;
             match kind {
-                Diagonal::Covered { .. } => held.push(term),
-                Diagonal::Stored if term == ZERO => return None,
+                Diagonal::Covered => held.push(if zero { DROPPED } else { term }),
+                Diagonal::Stored if zero => {
+                    held.push(DROPPED);
+                    dropped.push(i);
+                }
                 Diagonal::Stored => held.push(term),
-                Diagonal::Empty if term != ZERO => return None,
+                Diagonal::Empty if !zero => return None,
                 Diagonal::Empty => {}
             }
         }
@@ -431,21 +437,20 @@ impl BilinearPlan {
         self.with_diagonal
             .add_values(sum, &held, &mut block)
             .expect("the planned lengths");
-        // A zero term is dropped, so try_add copies M + Mᵀ's value rather than adding 0
-        for (&kind, &term) in self.diagonal.iter().zip(terms) {
-            if let Diagonal::Covered { block: b, sum: s } = kind {
-                if term == ZERO {
-                    block[b] = sum[s];
-                }
-            }
-        }
-        Some(block)
+        Some((block, dropped))
     }
 
     /// The four blocks `(Va Va, Va Vm, Vm Va, Vm Vm)` of `bilinear_hessian(M, v)` for `M`'s
     /// values `m`: the first three over the block pattern with its diagonal, the last over
-    /// `M + Mᵀ`'s. `None` where `bilinear_hessian` would store a different pattern.
-    fn evaluate(&self, m: &[C64], v: &[C64], d: &PolarDerivatives) -> Option<[Vec<C64>; 4]> {
+    /// `M + Mᵀ`'s. Also the buses whose `Va Va` and `Va Vm` terms were dropped (see
+    /// `add_diagonal`), and `None` where `add_diagonal` returns it.
+    #[allow(clippy::type_complexity)]
+    fn evaluate(
+        &self,
+        m: &[C64],
+        v: &[C64],
+        d: &PolarDerivatives,
+    ) -> Option<([Vec<C64>; 4], [Vec<usize>; 2])> {
         let mt = gather(m, &self.mt_sources);
         let m_conj_v = mul_vec_values(&self.m, m, &conj(v));
         let mt_v = mul_vec_values(&self.mt, &mt, v);
@@ -456,21 +461,22 @@ impl BilinearPlan {
                 .map(|((d, a), b)| d * a + d.conj() * b)
                 .collect()
         };
-        let va_va = self.add_diagonal(&self.sum(m, &mt, &d.va, &d.va), &terms(&d.va_va))?;
-        let va_vm = self.add_diagonal(&self.sum(m, &mt, &d.va, &d.vm), &terms(&d.va_vm))?;
+        let (va_va, aa) = self.add_diagonal(&self.sum(m, &mt, &d.va, &d.va), &terms(&d.va_va))?;
+        let (va_vm, av) = self.add_diagonal(&self.sum(m, &mt, &d.va, &d.vm), &terms(&d.va_vm))?;
         let vm_va = gather(&va_vm, &self.vm_va_sources);
         let vm_vm = self.sum(m, &mt, &d.vm, &d.vm);
-        Some([va_va, va_vm, vm_va, vm_vm])
+        Some(([va_va, va_vm, vm_va, vm_vm], [aa, av]))
     }
 }
 
 /// [`weighted_hessian`] for one `C` and `Y`, planned once: the same Hessian, pattern and
 /// values bit for bit, for any voltages and weights.
 ///
-/// `evaluate` returns `None` in the one case the plan doesn't cover: a bus whose diagonal term
-/// in the Hessian (see the module documentation) is exactly zero, where no other term stores
-/// that position, so that `weighted_hessian`'s pattern lacks it. The caller then uses
-/// `weighted_hessian` itself.
+/// `evaluate` returns `None` where `weighted_hessian`'s pattern lacks a position the plan's
+/// has: a bus whose diagonal terms (see the module documentation) are exactly zero in both the
+/// real and the imaginary part, where nothing else stores the position, as at the far end of a
+/// branch whose flow is exactly zero. The caller then uses `weighted_hessian` itself. (A NaN or
+/// infinite term, where no position is planned, is declined too.)
 #[derive(Clone, Debug)]
 pub struct WeightedHessianPlan {
     nb: usize,
@@ -543,22 +549,42 @@ impl WeightedHessianPlan {
     }
 
     /// The Hessian's values at voltages `v` for weights `p` and `q`, in `pattern()`'s order,
-    /// bit for bit `weighted_hessian(c, y, v, p, q)`'s, or `None` where its pattern differs.
-    fn evaluate_values(&self, v: &[C64], p: &[f64], q: &[f64]) -> Option<Vec<f64>> {
+    /// and the slots `weighted_hessian`'s pattern lacks, which hold `-0.0`. Every other value is
+    /// bit for bit `weighted_hessian(c, y, v, p, q)`'s. `None` for a NaN or infinite term where
+    /// no position is planned.
+    fn evaluate_values(&self, v: &[C64], p: &[f64], q: &[f64]) -> Option<(Vec<f64>, Vec<usize>)> {
         assert_eq!(v.len(), self.nb, "one voltage per bus");
         assert_eq!(p.len(), self.y_conj.shape().0, "one weight per row");
         assert_eq!(q.len(), p.len(), "one weight per row");
         // bilinear_hessian computes the voltages' derivatives afresh for each of its calls,
         //   always to the same values
         let d = PolarDerivatives::new(v);
-        let real = self.bilinear.evaluate(&self.weighted(p), v, &d)?;
-        let imaginary = self.bilinear.evaluate(&self.weighted(q), v, &d)?;
-        // real[k].real() + imaginary[k].imag(), over the same pattern, so each entry's sum
+        let (real, real_dropped) = self.bilinear.evaluate(&self.weighted(p), v, &d)?;
+        let (imaginary, imaginary_dropped) = self.bilinear.evaluate(&self.weighted(q), v, &d)?;
+        // real[k].real().try_add(&imaginary[k].imag()): where one part's term was dropped, its
+        //   DROPPED adds as try_add's copy of the other part's value
         let mut concatenated = Vec::with_capacity(self.join_sources.len());
         for (re, im) in real.iter().zip(&imaginary) {
             concatenated.extend(re.iter().zip(im).map(|(re, im)| re.re + im.im));
         }
-        Some(gather(&concatenated, &self.join_sources))
+        // A position is absent where both parts dropped the term: (i, i) for Va Va, and
+        //   (i, nb + i) and (nb + i, i) for Va Vm and its transpose Vm Va
+        let nb = self.nb;
+        let mut absent = Vec::new();
+        for (block, (re, im)) in real_dropped.iter().zip(&imaginary_dropped).enumerate() {
+            for &i in re.iter().filter(|i| im.binary_search(i).is_ok()) {
+                let positions: &[(usize, usize)] = if block == 0 {
+                    &[(i, i)]
+                } else {
+                    &[(i, nb + i), (nb + i, i)]
+                };
+                for &(row, col) in positions {
+                    absent.push(slot(&self.pattern, row, col).expect("a planned position"));
+                }
+            }
+        }
+        absent.sort_unstable();
+        Some((gather(&concatenated, &self.join_sources), absent))
     }
 
     /// The Hessian (real, 2nb × 2nb over `[Va, Vm]`) of `pᵀ Re(S) + qᵀ Im(S)` at voltages `v`,
@@ -567,8 +593,10 @@ impl WeightedHessianPlan {
     ///
     /// Panics unless there is one voltage per bus and one weight per row.
     pub fn evaluate(&self, v: &[C64], p: &[f64], q: &[f64]) -> Option<CsrMatrix<f64>> {
-        self.evaluate_values(v, p, q)
-            .map(|values| with_values(&self.pattern, values))
+        match self.evaluate_values(v, p, q)? {
+            (values, absent) if absent.is_empty() => Some(with_values(&self.pattern, values)),
+            _ => None,
+        }
     }
 }
 
@@ -588,7 +616,8 @@ pub struct SquaredMagnitudeHessianPlan {
     /// `dSᴴ ([2μ] dS)`
     product: ProductPlan,
     weighted: WeightedHessianPlan,
-    /// `Re(dSᴴ [2μ] dS)` plus the weighted Hessian
+    /// `Re(dSᴴ [2μ] dS)`'s pattern, and its sum with the weighted Hessian
+    outer: CsrMatrix<f64>,
     sum: SumPlan,
     pattern: CsrMatrix<f64>,
 }
@@ -622,6 +651,7 @@ impl SquaredMagnitudeHessianPlan {
             ds_adjoint_sources: sources(&adjoint_traced),
             product,
             weighted,
+            outer,
             sum,
             pattern,
         }
@@ -634,11 +664,28 @@ impl SquaredMagnitudeHessianPlan {
 
     /// The Hessian (real, 2nb × 2nb over `[Va, Vm]`) of `μᵀ |S|²` at voltages `v`, with `flows`
     /// the [`Flows`] there, bit for bit `squared_magnitude_hessian(c, y, v, flows, mu)`, or
-    /// `None` where its pattern differs from the plan's.
+    /// `None` where its pattern differs from the plan's: where the weighted Hessian's does (see
+    /// [`WeightedHessianPlan`]) and `dSᴴ [μ] dS` doesn't store the position either.
     ///
     /// Panics unless `flows` is for this plan's `C` and `Y`, with one voltage per bus and one
     /// multiplier per row.
     pub fn evaluate(&self, v: &[C64], flows: &Flows, mu: &[f64]) -> Option<CsrMatrix<f64>> {
+        match self.evaluate_with_absent(v, flows, mu)? {
+            (hessian, absent) if absent.is_empty() => Some(hessian),
+            _ => None,
+        }
+    }
+
+    /// The Hessian over the plan's pattern, with the slots `squared_magnitude_hessian`'s
+    /// pattern lacks, which hold `-0.0`: for a sum with a matrix that stores those positions,
+    /// where adding `-0.0` gives `try_add`'s copy of the other value. `None` for a NaN or
+    /// infinite term where no position is planned.
+    pub(crate) fn evaluate_with_absent(
+        &self,
+        v: &[C64],
+        flows: &Flows,
+        mu: &[f64],
+    ) -> Option<(CsrMatrix<f64>, Vec<usize>)> {
         assert_eq!(mu.len(), self.rows, "one multiplier per row");
         assert_eq!(flows.s.len(), self.rows, "flows for this plan's C and Y");
         assert_eq!(
@@ -686,12 +733,24 @@ impl SquaredMagnitudeHessianPlan {
             .zip(&flows.s)
             .map(|(m, s)| 2.0 * m * s.im)
             .collect();
-        let weighted = self.weighted.evaluate_values(v, &p, &q)?;
+        let (weighted, weighted_absent) = self.weighted.evaluate_values(v, &p, &q)?;
         let mut values = vec![0.0; self.sum.num_stored()];
         self.sum
             .add_values(&outer, &weighted, &mut values)
             .expect("the planned lengths");
-        Some(with_values(&self.pattern, values))
+        // An absent position of the weighted Hessian stays absent unless dSᴴ [μ] dS stores it,
+        //   where the sum's -0.0 gives try_add's copy
+        let weighted_pattern = self.weighted.pattern();
+        let absent = weighted_absent
+            .into_iter()
+            .map(|k| {
+                let row = weighted_pattern.pointers().partition_point(|&p| p <= k) - 1;
+                (row, weighted_pattern.indices()[k])
+            })
+            .filter(|&(row, col)| slot(&self.outer, row, col).is_none())
+            .map(|(row, col)| slot(&self.pattern, row, col).expect("a planned position"))
+            .collect();
+        Some((with_values(&self.pattern, values), absent))
     }
 }
 
@@ -826,12 +885,18 @@ impl SquaredMagnitudesPlan {
 mod tests {
     use super::*;
 
+    fn bits(values: &[C64]) -> Vec<(u64, u64)> {
+        values
+            .iter()
+            .map(|v| (v.re.to_bits(), v.im.to_bits()))
+            .collect()
+    }
+
     /// `add_diagonal` against what `bilinear_hessian` does, `sum.try_add(&from_diagonal(terms))`,
-    /// with a `-0.0` in the sum where the term is zero: try_add copies it, while adding the
-    /// term would make it `+0.0`. Searches of whole Hessians didn't reach this case, as the
-    /// products start their sums at `+0.0`, but the plan must still copy as try_add does.
+    /// with `-0.0`s in the sum where the term is zero: try_add copies them, which adding
+    /// `DROPPED` reproduces, while adding a `+0.0` term would turn them into `+0.0`.
     #[test]
-    fn a_zero_diagonal_term_leaves_the_sum_as_it_is() {
+    fn a_dropped_diagonal_term_leaves_every_value_as_try_add_does() {
         // M's pattern covers (0, 0) and (1, 1); bus 2 is only reached through Mᵀ
         let m =
             CsrMatrix::<C64>::from_triplets(3, 3, vec![(0, 0, ZERO), (1, 1, ZERO), (0, 2, ZERO)])
@@ -848,27 +913,54 @@ mod tests {
         .take(sum_pattern.num_stored())
         .collect();
         let sum_matrix = with_values(&sum_pattern, sum.clone());
+        let bus_2 = slot(&plan.block, 2, 2).unwrap();
         for terms in [
             [ZERO, ZERO, C64::new(1.0, 1.0)],
             [C64::new(-0.0, 0.0), C64::new(0.5, 0.0), C64::new(-2.0, 0.0)],
             [C64::new(3.0, 0.0), ZERO, C64::new(1.0, -1.0)],
+            [ZERO, C64::new(-0.0, -0.0), ZERO],
         ] {
-            let planned = plan
-                .add_diagonal(&sum, &terms)
-                .expect("bus 2's term isn't zero");
+            let (planned, dropped) = plan.add_diagonal(&sum, &terms).unwrap();
             let direct = sum_matrix
                 .try_add(&CsrMatrix::from_diagonal(terms))
                 .unwrap();
-            let bits = |values: &[C64]| -> Vec<(u64, u64)> {
-                values
-                    .iter()
-                    .map(|v| (v.re.to_bits(), v.im.to_bits()))
-                    .collect()
-            };
-            assert_eq!(plan.block.indices(), direct.indices());
-            assert_eq!(bits(&planned), bits(direct.values()), "terms {terms:?}");
+            if terms[2] == ZERO {
+                // Bus 2's term is the only entry at (2, 2): absent, holding -0.0
+                assert_eq!(dropped, vec![2]);
+                assert_eq!(bits(&planned[bus_2..=bus_2]), bits(&[DROPPED]));
+                let mut kept = planned.clone();
+                kept.remove(bus_2);
+                assert_eq!(bits(&kept), bits(direct.values()), "terms {terms:?}");
+            } else {
+                assert!(dropped.is_empty());
+                assert_eq!(plan.block.indices(), direct.indices());
+                assert_eq!(bits(&planned), bits(direct.values()), "terms {terms:?}");
+            }
         }
-        // Bus 2's term is the only entry at (2, 2), so a zero one changes the pattern
-        assert!(plan.add_diagonal(&sum, &[ZERO, ZERO, ZERO]).is_none());
+        // A NaN term where nothing is planned, which from_diagonal would keep, is declined
+        let empty =
+            BilinearPlan::new(CsrMatrix::<C64>::from_triplets(2, 2, vec![(0, 0, ZERO)]).unwrap());
+        let sum = vec![ZERO; empty.sum.num_stored()];
+        assert!(empty
+            .add_diagonal(&sum, &[ZERO, C64::new(f64::NAN, 0.0)])
+            .is_none());
+        assert!(empty.add_diagonal(&sum, &[ZERO, ZERO]).is_some());
+    }
+
+    /// The sentinel's premise, for every kind of value: adding -0.0 leaves it as it is
+    #[test]
+    fn adding_negative_zero_leaves_every_value_as_it_is() {
+        for x in [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            1e-310,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            assert_eq!((x + -0.0).to_bits(), x.to_bits(), "{x}");
+        }
     }
 }

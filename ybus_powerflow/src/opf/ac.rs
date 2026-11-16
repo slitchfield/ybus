@@ -247,6 +247,10 @@ struct HessianPlans {
     /// `widen`'s assembly of the costs' entries and the voltage block, as a kept map
     widened: CsrMatrix<f64>,
     widen: AssemblyMap,
+    /// Whether the bus Hessian's pattern stores every position a branch end's Hessian can lack
+    /// (each bus's `(i, i)`, `(i, nb + i)` and `(nb + i, i)`), so that summing it in restores
+    /// the position as `try_add`'s union does. It does whenever Ybus stores its diagonal.
+    bus_covers_diagonals: bool,
 }
 
 struct BranchHessianPlans {
@@ -259,6 +263,16 @@ struct BranchHessianPlans {
 impl HessianPlans {
     fn new(problem: &AcOpfProblem) -> Self {
         let bus = WeightedHessianPlan::new(&problem.identity, &problem.ybus);
+        let nb = problem.nb;
+        let stores = |row, col| {
+            let pattern = bus.pattern();
+            let start = pattern.pointers()[row];
+            pattern.indices()[start..pattern.pointers()[row + 1]]
+                .binary_search(&col)
+                .is_ok()
+        };
+        let bus_covers_diagonals =
+            (0..nb).all(|i| stores(i, i) && stores(i, nb + i) && stores(nb + i, i));
         let mut voltage = bus.pattern().clone();
         let branches = (!problem.flow_max.is_empty()).then(|| {
             let from = SquaredMagnitudeHessianPlan::new(&problem.cf, &problem.yf);
@@ -285,6 +299,7 @@ impl HessianPlans {
             branches,
             widened,
             widen,
+            bus_covers_diagonals,
         }
     }
 }
@@ -481,11 +496,17 @@ impl AcOpfProblem {
     ) -> Option<CsrMatrix<f64>> {
         let plans = self.hessian.as_ref().expect("made with the problem");
         let (lam_p, lam_q) = multipliers.eq.split_at(self.nb);
+        // The bus Hessian must match its plan's pattern. A branch end's may lack positions,
+        //   which hold -0.0: the bus Hessian stores them, so the sums give try_add's union,
+        //   with the bus Hessian's values copied there
         let mut voltage = plans.bus.evaluate(v, lam_p, lam_q)?;
         if let (Some(branches), Some((from, to))) = (&plans.branches, self.branch_flows(v)) {
             let (mu_f, mu_t) = multipliers.ineq.split_at(self.flow_max.len());
-            let hf = branches.from.evaluate(v, &from, mu_f)?;
-            let ht = branches.to.evaluate(v, &to, mu_t)?;
+            let (hf, absent_f) = branches.from.evaluate_with_absent(v, &from, mu_f)?;
+            let (ht, absent_t) = branches.to.evaluate_with_absent(v, &to, mu_t)?;
+            if !plans.bus_covers_diagonals && !(absent_f.is_empty() && absent_t.is_empty()) {
+                return None;
+            }
             voltage = branches.bus_from.add(&voltage, &hf).expect("planned");
             voltage = branches.bus_from_to.add(&voltage, &ht).expect("planned");
         }

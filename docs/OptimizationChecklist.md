@@ -544,12 +544,10 @@ with legacy results generated locally to explain differences.
                - **The one pattern that depends on values:** `bilinear_hessian`'s diagonal
                  terms go through `from_diagonal`, which drops zeros. Where `M + Mᵀ` stores the
                  position, the plan copies its value for a zero term, as `try_add` does. Where
-                 only the term can, a zero term makes the plan decline, and the Hessian is
+                 only the term can, a zero term made the plan decline, and the Hessian was
                  computed by the functions, as before. A bus no limited branch touches has no
-                 term at all.
-               - **A decline can be unnecessary:** if the real part's term is zero but the
-                 imaginary part's isn't, the joined Hessian still stores the position. The
-                 fallback costs one evaluation by the functions, never a different result.
+                 term at all. ~~Declines would be rare.~~ They weren't: see the -0.0 item
+                 below, which replaced the decline in the OPF.
                - **Bit for bit:** against the functions on case14, case30, case118 and a 4-bus
                  case, at random voltages with random, zero and signed-zero weights. The
                  72-case OPF snapshot hashes identically to `main`'s on all four solver and
@@ -568,6 +566,31 @@ with legacy results generated locally to explain differences.
                - **Planted bugs caught:** `Y`'s scaled term reassociated, by the tests, and two
                  of `dg`'s blocks swapped, by the reference tests. Reassociating `C`'s term
                  changes nothing: `C`'s entries are all 1, which multiplies exactly.
+             - [x] **Dropped terms held as `-0.0`, after the surveys found the fallback
+               running on every iteration of the large cases.**
+               - **Why:** near-zero-impedance ties (case2383wp's branch row 82 has `r = 0`,
+                 `x = 1e-4`) keep their two buses at exactly equal voltages, so the tie's flow
+                 is exactly `0` at every iteration. The flow Hessian's weights `2μ Re S` and
+                 `2μ Im S` are then `0`, and its diagonal term at the far bus is dropped. All
+                 32 evaluations of case2383wp's solve declined. Each computed the Hessian
+                 twice, so the cases above 2,000 buses ran 0.95–1.00×, while the small ones
+                 gained 1.13–1.28×.
+               - **Decided with the maintainer (2026-11-16):** hold a dropped term as `-0.0`.
+                 `x + (-0.0)` is `x` bit for bit for every `x`, `-0.0` included, so every later
+                 sum gives `try_add`'s copy of the other operand. That replaces the copy step
+                 for a covered position too.
+               - **The pattern:** the plans report the positions really absent, where both the
+                 real and the imaginary part dropped the term and nothing else stores it. The
+                 bus Hessian stores every diagonal position, since Ybus stores its diagonal,
+                 which the plans check when they're made. So the Lagrangian's pattern never
+                 changes, and it falls back only if that check fails, or for a NaN term.
+                 `WeightedHessianPlan::evaluate` and `SquaredMagnitudeHessianPlan::evaluate`
+                 still return `None` for a really absent position, and only then.
+               - **Bit for bit:** the 72-case snapshot still hashes as `main`'s. case2383wp on
+                 the predictor-corrector method now takes 512 ms, from 765 ms (1.49×).
+               - **Planted bugs caught:** a `+0.0` sentinel, a covered zero term added as is,
+                 and the absent positions taken as the union of the two parts' drops rather
+                 than their intersection.
              - [ ] the record
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.

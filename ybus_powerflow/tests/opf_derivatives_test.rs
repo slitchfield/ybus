@@ -374,7 +374,7 @@ fn weighted_hessian_plans_match_the_function_bit_for_bit() {
             let plan = WeightedHessianPlan::new(c, y);
             for _ in 0..4 {
                 let v = random_voltages(network.nb, &mut rng);
-                for (set, (p, q)) in weight_sets(c.shape().0, &mut rng).into_iter().enumerate() {
+                for (p, q) in weight_sets(c.shape().0, &mut rng) {
                     let direct = weighted_hessian(c, y, &v, &p, &q);
                     let what = format!("{} {end}", network.name);
                     match plan.evaluate(&v, &p, &q) {
@@ -382,18 +382,11 @@ fn weighted_hessian_plans_match_the_function_bit_for_bit() {
                             assert_identical(&planned, &direct, &what);
                             compared += 1;
                         }
-                        // A plan declines where a diagonal term of the real or the imaginary
-                        //   part is zero with nothing else at its position. With every weight
-                        //   zero, both are, and the function's pattern lacks the position;
-                        //   with some zero, the other part may still store it, and the decline
-                        //   only costs a call to the function
+                        // A plan declines only where the function's pattern lacks a position
+                        //   the plan's has: a diagonal term zero in both the real and the
+                        //   imaginary part, with nothing else at its position
                         None => {
-                            if set == 1 || set == 3 {
-                                assert!(
-                                    direct.num_stored() < plan.pattern().num_stored(),
-                                    "{what}"
-                                );
-                            }
+                            assert!(direct.num_stored() < plan.pattern().num_stored(), "{what}");
                             declined += 1;
                         }
                     }
