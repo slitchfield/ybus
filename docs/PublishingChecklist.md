@@ -268,10 +268,16 @@ and the root README notes the renames once.
         broken label or intra-doc link without failing the run. A change in nightly can break
         it with nothing changed here, and that mustn't block an unrelated PR.
       - **Not in `check.sh`,** which needs only stable.
-- [ ] **Semver checks** with `cargo-semver-checks`, against each crate's last published version.
+- [x] **Semver checks** with `cargo-semver-checks`, against each crate's last published version.
+      Decided (2026-11-16): a policy now, with no job until there's a baseline.
       - **Required before each release:** a release isn't published until the check passes
-        for the version it bumps to.
-      - **A per-PR job,** reporting without failing, is decided with the item. A failing one
+        for the version it bumps to. `docs/Releasing.md` states the rule.
+      - **Where it runs:** in release-plz's release PR, once P5 sets it up. A release by hand
+        before then runs `cargo semver-checks --workspace` first.
+      - **At 0.x,** a minor bump (0.1 to 0.2) is the breaking one, and a patch bump must break
+        nothing. With one shared version, a break in any crate bumps all four.
+      - **A per-PR job,** reporting without failing, isn't added yet. Before 0.1.0 it would
+        have nothing to compare against. It's decided once the baseline exists. A failing one
         would fail every intended break between releases.
       - **What it misses:** it catches breaks in the API's signatures and types, not in
         behaviour. A behaviour change, such as F4's to `DcModel::study`, still needs a person to
