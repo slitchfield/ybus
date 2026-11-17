@@ -1596,3 +1596,49 @@ fn an_lu_analysis_can_take_a_given_permutation() {
         SparseError::NotSquare { shape: (2, 3) }
     );
 }
+
+#[test]
+fn a_kept_lu_analysis_factors_as_a_fresh_one_after_its_fill_changes() {
+    // The kept analysis reserves the last factorization's sizes. Pivoting changes the fill
+    //   between these matrices of one pattern; each factorization must still equal a fresh
+    //   analysis's, bit for bit
+    let pattern = [
+        (0, 0),
+        (0, 2),
+        (1, 0),
+        (1, 1),
+        (2, 1),
+        (2, 2),
+        (3, 0),
+        (3, 3),
+        (2, 3),
+    ];
+    let matrix = |values: [f64; 9]| {
+        CscMatrix::from_triplets(
+            4,
+            4,
+            pattern.iter().zip(values).map(|(&(i, j), v)| (i, j, v)),
+        )
+        .unwrap()
+    };
+    let matrices = [
+        matrix([4.0, 1.0, 1.0, 3.0, 1.0, 5.0, 1.0, 2.0, 0.5]),
+        matrix([1e-9, 1.0, 7.0, 1e-9, 3.0, 1e-9, 2.0, 1.0, 4.0]),
+        matrix([4.0, 1.0, 1.0, 3.0, 1.0, 5.0, 1.0, 2.0, 0.5]),
+    ];
+    let kept = matrices[0].analyze_lu(Ordering::Amd).unwrap();
+    for a in &matrices {
+        let reused = kept.factor(a, LuOptions::default()).unwrap();
+        let fresh = a
+            .analyze_lu(Ordering::Amd)
+            .unwrap()
+            .factor(a, LuOptions::default())
+            .unwrap();
+        let b = [1.0, -2.0, 0.5, 3.0];
+        let bits = |x: Vec<f64>| x.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert_eq!(
+            bits(reused.solve(&b).unwrap()),
+            bits(fresh.solve(&b).unwrap())
+        );
+    }
+}

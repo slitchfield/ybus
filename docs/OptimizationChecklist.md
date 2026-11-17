@@ -638,7 +638,24 @@ with legacy results generated locally to explain differences.
                - **Not done here:** #79's plans still allocate their intermediate vectors. Those
                  move into scratch in the next commit only if the allocation profile names them.
                - **Bit for bit:** the 72-case snapshot still matches `main`'s.
-             - [ ] the rest of the loops' allocation
+             - [x] **The rest of the loops' allocation, by profile.**
+               - **What the profile found:** samply on case9241pegase after the first two
+                 commits, attributing each "allocation and copying" sample to its nearest frame
+                 from our crates.
+                 - **The KKT assembly** was already down to 2.2% of the predictor-corrector
+                   solve, from 18.1%.
+                 - **#79's plans' intermediate vectors** came to about 0.1%, so they stay as they
+                   are.
+                 - **MIPS's allocation** was almost all `lu::gilbert_peierls` growing `L`'s and
+                   `U`'s arrays one push at a time: 5.9% of the solve.
+                 - **The LDLᵀ's** was spread over sites of 0.4% or less, left for the kernel's
+                   PR.
+               - **The change:** `SymbolicLu` keeps the last factorization's sizes of `L` and
+                 `U`, in atomics, so the analysis stays `Send`, `Sync` and `Clone`. Each
+                 factorization reserves them, and a repivoting refactorization reserves its own
+                 old sizes. Only the capacity changes, never the arithmetic.
+               - **Bit for bit:** the 72-case snapshot still matches `main`'s. A kept analysis
+                 whose fill changes between factorizations factors as a fresh one does.
              - [ ] the record
           4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays

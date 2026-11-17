@@ -10,6 +10,8 @@
 
 use num_complex::ComplexFloat;
 use num_traits::NumCast;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::Relaxed;
 
 use super::access::check_permutation;
 use super::cholesky::inverse_permutation;
@@ -51,6 +53,37 @@ pub struct SymbolicLu {
     prefer_diagonal: bool,
     a_ptr: Vec<usize>,
     a_idx: Vec<usize>,
+    /// The stored counts of the last factorization's `L` and `U`, which the next one reserves
+    fill: FillHint,
+}
+
+/// The last factorization's sizes of `L` and `U`, so the next one with the same analysis
+/// reserves its arrays once rather than growing them entry by entry. Atomic, so the analysis
+/// stays `Sync` and shareable across threads; a hint only, so any value is safe.
+#[derive(Debug, Default)]
+struct FillHint {
+    l: AtomicUsize,
+    u: AtomicUsize,
+}
+
+impl Clone for FillHint {
+    fn clone(&self) -> Self {
+        let (l, u) = self.get();
+        let hint = FillHint::default();
+        hint.set(l, u);
+        hint
+    }
+}
+
+impl FillHint {
+    fn get(&self) -> (usize, usize) {
+        (self.l.load(Relaxed), self.u.load(Relaxed))
+    }
+
+    fn set(&self, l: usize, u: usize) {
+        self.l.store(l, Relaxed);
+        self.u.store(u, Relaxed);
+    }
 }
 
 /// The outcome of a successful [`Lu::refactor`] call: whether the previous pivots were reused or
@@ -115,6 +148,7 @@ impl<T: Scalar> CscMatrix<T> {
             prefer_diagonal: ordering != Ordering::Colamd,
             a_ptr: self.ptr.clone(),
             a_idx: self.idx.clone(),
+            fill: FillHint::default(),
         })
     }
 
@@ -139,6 +173,7 @@ impl<T: Scalar> CscMatrix<T> {
             prefer_diagonal: true,
             a_ptr: self.ptr.clone(),
             a_idx: self.idx.clone(),
+            fill: FillHint::default(),
         })
     }
 }
@@ -197,7 +232,15 @@ impl SymbolicLu {
         if matrix.shape != (n, n) || matrix.ptr != self.a_ptr || matrix.idx != self.a_idx {
             return Err(SparseError::PatternMismatch);
         }
-        gilbert_peierls(matrix, &self.col_perm, options, self.prefer_diagonal)
+        let lu = gilbert_peierls(
+            matrix,
+            &self.col_perm,
+            options,
+            self.prefer_diagonal,
+            self.fill.get(),
+        )?;
+        self.fill.set(lu.l.num_stored(), lu.u.num_stored());
+        Ok(lu)
     }
 }
 
@@ -227,12 +270,18 @@ fn gilbert_peierls<T: Scalar + ComplexFloat>(
     q: &[usize],
     options: LuOptions,
     prefer_diagonal: bool,
+    // The stored counts of L and U to reserve, a hint (see FillHint)
+    (reserve_l, reserve_u): (usize, usize),
 ) -> Result<Lu<T>, SparseError> {
     let tau = threshold::<T>(options);
     let n = q.len();
     let mut pinv: Vec<Option<usize>> = vec![None; n];
-    let (mut l_ptr, mut l_idx, mut l_val) = (vec![0], vec![], vec![]);
-    let (mut u_ptr, mut u_idx, mut u_val) = (vec![0], vec![], vec![]);
+    let mut l_ptr = Vec::with_capacity(n + 1);
+    let mut u_ptr = Vec::with_capacity(n + 1);
+    l_ptr.push(0);
+    u_ptr.push(0);
+    let (mut l_idx, mut l_val) = (Vec::with_capacity(reserve_l), Vec::with_capacity(reserve_l));
+    let (mut u_idx, mut u_val) = (Vec::with_capacity(reserve_u), Vec::with_capacity(reserve_u));
     let mut x = vec![T::zero(); n];
     let mut visited = vec![usize::MAX; n];
     // The reach in postorder, and the depth-first search's stack of (row, next child slot)
@@ -682,8 +731,14 @@ impl<T: Scalar + ComplexFloat> Lu<T> {
                 .fold(pivot.abs(), |a, b| if b > a { b } else { a });
             if pivot == T::zero() || pivot.abs() < tau * largest {
                 // Too small to reuse: factor afresh, leaving self as it was if that fails
-                *self =
-                    gilbert_peierls(matrix, &self.col_perm, self.options, self.prefer_diagonal)?;
+                let reserve = (self.l.num_stored(), self.u.num_stored());
+                *self = gilbert_peierls(
+                    matrix,
+                    &self.col_perm,
+                    self.options,
+                    self.prefer_diagonal,
+                    reserve,
+                )?;
                 return Ok(RefactorOutcome::Repivoted);
             }
             u_val[diagonal] = pivot;
