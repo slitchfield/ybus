@@ -11,6 +11,9 @@ use crate::compressed_matrix::Inertia;
 use crate::sparse_error::SparseError;
 use crate::Scalar;
 
+#[cfg(test)]
+mod reference;
+
 /// One block of `D` in a pivoted `L D Lᴴ` factorization.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DBlock<T> {
@@ -100,6 +103,10 @@ pub(crate) struct FrontFactor<T> {
 /// candidate passes means the matrix is singular (see [`DenseLdlt`]), an error.
 /// Without it, the factorization stops when no candidate passes, and the rest are delayed.
 ///
+/// Only the lower triangle is updated as the factorization goes; the upper is written once, at
+/// the end, from it. Reading `conj(a_ji)` for `a_ij` above the diagonal gives the same values
+/// and magnitudes, so the result is bit for bit what updating both triangles gave.
+///
 /// `scratch` is working space, reused across calls so a pivot allocates nothing.
 ///
 /// Returns `SparseError::SingularMatrix` naming the front position where no pivot was found
@@ -163,11 +170,48 @@ pub(crate) fn factor_front<T: Scalar + ComplexFloat>(
             }
         }
     }
+    mirror(a, m, p, &blocks);
     Ok(FrontFactor {
         order,
         eliminated: p,
         blocks,
     })
+}
+
+/// Entry `(i, j)`'s stored half: itself in the lower triangle, or `(j, i)` above it, which is its
+/// conjugate, with the same magnitude
+fn stored<T: Copy>(a: &[T], m: usize, i: usize, j: usize) -> T {
+    if i >= j {
+        a[i + j * m]
+    } else {
+        a[j + i * m]
+    }
+}
+
+/// Writes the upper triangle as updating both triangles left it: zero above the diagonal in the
+/// first `eliminated` rows, except each 2×2 block's `conj(d21)`, and the conjugate of the lower
+/// triangle in the trailing square
+fn mirror<T: Scalar + ComplexFloat>(
+    a: &mut [T],
+    m: usize,
+    eliminated: usize,
+    blocks: &[DBlock<T>],
+) {
+    for j in 0..m {
+        for i in 0..j.min(eliminated) {
+            a[i + j * m] = T::zero();
+        }
+        for i in eliminated..j {
+            a[i + j * m] = a[j + i * m].conj();
+        }
+    }
+    let mut start = 0;
+    for block in blocks {
+        if block.size() == 2 {
+            a[start + (start + 1) * m] = a[start + 1 + start * m].conj();
+        }
+        start += block.size();
+    }
 }
 
 /// A chosen pivot, by current positions: 1×1 at `q`, or 2×2 on `q` and `r`
@@ -193,7 +237,7 @@ fn column_max<T: ComplexFloat>(
         if skip.contains(&i) {
             continue;
         }
-        let value = a[i + j * m].abs();
+        let value = stored(a, m, i, j).abs();
         if row.is_none() || value > best {
             best = value;
             row = Some(i);
@@ -225,8 +269,9 @@ fn threshold_pivot<T: Scalar + ComplexFloat>(
     let (gamma_q, _) = column_max(a, m, q, p, m, &[q, r]);
     let (gamma_r, _) = column_max(a, m, r, p, m, &[q, r]);
     let a_rr = a[at(r, r)].re();
-    let b = a[at(r, q)].abs();
-    let det = Float::abs(a_qq * a_rr - magnitude_squared(a[at(r, q)]));
+    let a_rq = stored(a, m, r, q);
+    let b = a_rq.abs();
+    let det = Float::abs(a_qq * a_rr - magnitude_squared(a_rq));
     if det == zero || Float::is_nan(det) {
         return None;
     }
@@ -241,23 +286,33 @@ fn threshold_pivot<T: Scalar + ComplexFloat>(
     }
 }
 
-/// Swaps positions `i` and `j` symmetrically: rows (all columns, so `L`'s stored columns move
-/// with them) and columns, and the order
-fn swap<T: Copy>(a: &mut [T], m: usize, order: &mut [usize], i: usize, j: usize) {
+/// Swaps positions `i` and `j` symmetrically in the lower triangle, as LAPACK's `xHETRF` does:
+/// the rows in the columns before both (so `L`'s stored columns move with them), the
+/// diagonals, the stretch between them through the diagonal (conjugated, as it crosses it), the
+/// entry joining them (conjugated), and the columns below both; and the order
+fn swap<T: ComplexFloat>(a: &mut [T], m: usize, order: &mut [usize], i: usize, j: usize) {
     if i == j {
         return;
     }
-    for col in 0..m {
-        a.swap(i + col * m, j + col * m);
+    let (i, j) = (i.min(j), i.max(j));
+    for c in 0..i {
+        a.swap(i + c * m, j + c * m);
     }
-    for row in 0..m {
-        a.swap(row + i * m, row + j * m);
+    a.swap(i + i * m, j + j * m);
+    for c in i + 1..j {
+        let between = a[c + i * m];
+        a[c + i * m] = a[j + c * m].conj();
+        a[j + c * m] = between.conj();
+    }
+    a[j + i * m] = a[j + i * m].conj();
+    for r in j + 1..m {
+        a.swap(r + i * m, r + j * m);
     }
     order.swap(i, j);
 }
 
 /// Eliminates the 1×1 pivot `d` at position `p`: `L`'s column below it is `a_ip / d`, and the
-/// trailing square loses `a_ip conj(l_j)`, computed on the lower triangle and mirrored
+/// trailing square's lower triangle loses `a_ip conj(l_j)`
 fn eliminate_one<T: Scalar + ComplexFloat>(
     a: &mut [T],
     m: usize,
@@ -282,20 +337,16 @@ fn eliminate_one<T: Scalar + ComplexFloat>(
             a[at(i, j)] = a[at(i, j)] - w[ii] * conj_l;
         }
         a[at(j, j)] = from_real(a[at(j, j)].re());
-        for i in j + 1..m {
-            a[at(j, i)] = a[at(i, j)].conj();
-        }
     }
     for (ii, i) in (p + 1..m).enumerate() {
         a[at(i, p)] = l[ii];
-        a[at(p, i)] = T::zero();
     }
     a[at(p, p)] = d_t;
 }
 
 /// Eliminates the 2×2 pivot `[[d11, conj(d21)], [d21, d22]]` at positions `p` and `p + 1`:
-/// `L`'s two columns below it are `[a_ip, a_i,p+1] D⁻¹`, and the trailing square loses
-/// `a_ip conj(l_j,p) + a_i,p+1 conj(l_j,p+1)`, computed on the lower triangle and mirrored
+/// `L`'s two columns below it are `[a_ip, a_i,p+1] D⁻¹`, and the trailing square's lower
+/// triangle loses `a_ip conj(l_j,p) + a_i,p+1 conj(l_j,p+1)`
 fn eliminate_two<T: Scalar + ComplexFloat>(
     a: &mut [T],
     m: usize,
@@ -329,19 +380,13 @@ fn eliminate_two<T: Scalar + ComplexFloat>(
             a[at(i, j)] = a[at(i, j)] - x[ii] * c0 - y[ii] * c1;
         }
         a[at(j, j)] = from_real(a[at(j, j)].re());
-        for i in j + 1..m {
-            a[at(j, i)] = a[at(i, j)].conj();
-        }
     }
     for (ii, i) in (p + 2..m).enumerate() {
         a[at(i, p)] = l0[ii];
         a[at(i, p + 1)] = l1[ii];
-        a[at(p, i)] = T::zero();
-        a[at(p + 1, i)] = T::zero();
     }
     a[at(p, p)] = d11_t;
     a[at(p + 1, p)] = d21;
-    a[at(p, p + 1)] = d21.conj();
     a[at(p + 1, p + 1)] = d22_t;
 }
 
@@ -555,5 +600,168 @@ impl<T: Scalar + ComplexFloat> Substitute<T> for DenseLdlt<T> {
         for (&row, &value) in self.perm.iter().zip(scratch.iter()) {
             x[row] = value;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use num_complex::Complex;
+
+    use super::*;
+
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+
+        fn unit(&mut self) -> f64 {
+            (self.next() % 2_000_001) as f64 / 1_000_000.0 - 1.0
+        }
+    }
+
+    /// Element types the tests run on: real, and complex Hermitian
+    trait Value: Scalar + ComplexFloat + std::fmt::Debug {
+        fn random(rng: &mut Lcg) -> Self;
+        fn real(x: f64) -> Self;
+        fn bits(self) -> (u64, u64);
+    }
+
+    impl Value for f64 {
+        fn random(rng: &mut Lcg) -> Self {
+            rng.unit()
+        }
+        fn real(x: f64) -> Self {
+            x
+        }
+        fn bits(self) -> (u64, u64) {
+            (self.to_bits(), 0)
+        }
+    }
+
+    impl Value for Complex<f64> {
+        fn random(rng: &mut Lcg) -> Self {
+            Complex::new(rng.unit(), rng.unit())
+        }
+        fn real(x: f64) -> Self {
+            Complex::new(x, 0.0)
+        }
+        fn bits(self) -> (u64, u64) {
+            (self.re.to_bits(), self.im.to_bits())
+        }
+    }
+
+    /// A random Hermitian front, column-major, both triangles stored and exactly conjugate, as
+    /// the multifrontal driver assembles one. `zeros` of the diagonals are zero, forcing 2×2
+    /// pivots, and `tiny` columns are scaled down to fail the threshold test and be delayed.
+    fn front<T: Value>(m: usize, fill: u64, zeros: u64, tiny: u64, rng: &mut Lcg) -> Vec<T> {
+        let mut a = vec![T::zero(); m * m];
+        for j in 0..m {
+            let scale = if rng.next() % 100 < tiny { 1e-12 } else { 1.0 };
+            for i in j..m {
+                let value = if i == j {
+                    if rng.next() % 100 < zeros {
+                        T::zero()
+                    } else {
+                        T::real(rng.unit() * 4.0 * scale)
+                    }
+                } else if rng.next() % 100 < fill {
+                    T::random(rng) * T::real(scale)
+                } else {
+                    T::zero()
+                };
+                a[i + j * m] = value;
+                a[j + i * m] = value.conj();
+            }
+        }
+        a
+    }
+
+    type Outcome = Result<(Vec<(u64, u64)>, Vec<usize>, usize, String), String>;
+
+    fn outcome<T: Value>(a: &[T], result: Result<FrontFactor<T>, SparseError>) -> Outcome {
+        result
+            .map(|f| {
+                let bits = a.iter().map(|v| v.bits()).collect();
+                (bits, f.order, f.eliminated, format!("{:?}", f.blocks))
+            })
+            .map_err(|e| format!("{e:?}"))
+    }
+
+    /// Every front shape and kind, factored by the kernel and by `reference`, compared bit for
+    /// bit: the whole array, the order, the eliminated count and D's blocks, or the same error
+    fn compare<T: Value>(factor: impl Fn(&mut [T], usize, usize, f64, bool) -> Outcome) {
+        let mut rng = Lcg(17);
+        let (mut compared, mut two_by_two, mut delayed, mut failed) = (0, 0, 0, 0);
+        for &m in &[1, 2, 3, 5, 8, 13, 24, 40, 70, 150] {
+            for &(fill, zeros, tiny) in &[(100, 0, 0), (40, 30, 0), (60, 10, 20), (20, 50, 10)] {
+                for &threshold in &[1e-8, 1e-4, 0.5] {
+                    for partial in [false, true] {
+                        let a = front::<T>(m, fill, zeros, tiny, &mut rng);
+                        let k = if partial { (m * 2 / 3).max(1) } else { m };
+                        let complete = !partial;
+                        let mut expected = a.clone();
+                        let reference = reference::factor_front(
+                            &mut expected,
+                            m,
+                            k,
+                            NumCast::from(threshold).unwrap(),
+                            complete,
+                            &mut Vec::new(),
+                        );
+                        let expected = outcome(&expected, reference);
+                        match &expected {
+                            Ok((_, _, eliminated, blocks)) => {
+                                two_by_two += <usize as From<bool>>::from(blocks.contains("Two"));
+                                delayed += <usize as From<bool>>::from(*eliminated < k);
+                            }
+                            Err(_) => failed += 1,
+                        }
+                        let mut actual = a.clone();
+                        let got = factor(&mut actual, m, k, threshold, complete);
+                        assert_eq!(got, expected, "m {m}, fill {fill}, zeros {zeros}, tiny {tiny}, u {threshold}, partial {partial}");
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        // The cases reach every path: 2×2 pivots, delays, and fronts that fail
+        assert!(
+            compared > 0 && two_by_two > 0 && delayed > 0 && failed > 0,
+            "{compared} compared, {two_by_two} with 2×2 pivots, {delayed} delayed, {failed} failed"
+        );
+    }
+
+    fn kernel<T: Value>(
+        a: &mut [T],
+        m: usize,
+        k: usize,
+        threshold: f64,
+        complete: bool,
+    ) -> Outcome {
+        let result = factor_front(
+            a,
+            m,
+            k,
+            NumCast::from(threshold).unwrap(),
+            complete,
+            &mut Vec::new(),
+        );
+        outcome(a, result)
+    }
+
+    #[test]
+    fn real_fronts_factor_as_the_reference_kernel_does_bit_for_bit() {
+        compare::<f64>(kernel);
+    }
+
+    #[test]
+    fn complex_fronts_factor_as_the_reference_kernel_does_bit_for_bit() {
+        compare::<Complex<f64>>(kernel);
     }
 }

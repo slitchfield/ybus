@@ -666,7 +666,30 @@ with legacy results generated locally to explain differences.
                - **The KKT assembly** is 10–20× smaller everywhere, at 0.2–3.2% of each solve.
                - **Next:** target 4. The LDLᵀ's dense kernel is now 27.6% of case9241pegase's
                  AC predictor-corrector solve.
-          4. the kernel and the KKT ordering.
+          4. the kernel and the KKT ordering. Planned (2026-11-17) as two PRs: the dense kernel,
+             then the ordering.
+             - **The kernel, bit for bit:** found while planning, both of its changes keep the
+               same arithmetic. Each trailing entry's updates are a fixed sequence of
+               subtractions in pivot order, which a blocked kernel can keep while changing only
+               the loop order and the memory traffic.
+               - [x] **The lower triangle only, mirrored once.**
+                 - **Today's waste:** each pivot copied the whole trailing lower triangle into
+                   the upper, a strided write per entry, though only the threshold test and the
+                   swap read the upper.
+                 - **The change:** they now read `conj(a_ji)` from the lower triangle, which has
+                   the same magnitude. The swap is a Hermitian one on the lower triangle, as
+                   LAPACK's `xHETRF` does. `factor_front` writes the upper once, at the end, as
+                   it was left before, so the multifrontal driver and `DenseLdlt` are
+                   unchanged.
+                 - **Bit for bit:** against a test-only copy of the old kernel, on random
+                   Hermitian fronts, real and complex, of 1 to 150 rows. The comparison covers
+                   the whole array, the order and D's blocks. The cases include 2×2 pivots,
+                   delays and singular fronts, which the test requires it to reach. The
+                   72-case snapshot matches `main`'s.
+                 - **Planted bugs caught:** a swap that doesn't conjugate the joining entry, or
+                   the stretch between, and a mirror that loses a 2×2 block's upper entry.
+               - [ ] a blocked, left-looking panel
+               - [ ] the record
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
