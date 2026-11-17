@@ -604,7 +604,30 @@ with legacy results generated locally to explain differences.
                  of case9241pegase's predictor-corrector solve, from 39.3%.
                - **Next:** the KKT assembly, now 18.1% there, which `from_triplets` rebuilds at
                  every factorization. That's target 3.
-          3. allocation and KKT assembly;
+          3. allocation and KKT assembly, bit for bit. Decided with the maintainer
+             (2026-11-17): kept plans and assembly maps, and buffer-taking `Problem` methods. In
+             four commits:
+             - [x] **The Newton system planned in both solvers** (`ybus_ipm`'s `newton` and
+               `kkt` modules).
+               - **`WeightedGram`** keeps `W = H + Jhᵀ (D Jh)` planned: `Jhᵀ` as a traced
+                 gather, the product and the sum through #79's plans.
+               - **`KktSolver`** keeps the KKT matrix's assembly as `AssemblyMap`s: one in CSC
+                 for LU; for LDLᵀ, the lower triangle's, the mirror's gather and the full
+                 matrix's.
+               - **Both are keyed by their inputs' patterns,** and planned afresh when one
+                 differs, as the kept analysis is.
+               - **`factor` now takes `W` as a matrix** with the bounds' diagonal terms beside
+                 it, rather than triplets.
+               - **Bit for bit:** the 72-case snapshot matches `main`'s. Tests against the
+                 triplet assembly and against `try_add` and `matmul` cover reused plans and
+                 patterns that change, `H`'s alone and `Jh`'s alone.
+               - **Planted bugs caught:** an assembly that's never replanned, and plans that
+                 ignore `Jh`'s pattern or `H`'s. The first version of the `W` test drew new
+                 patterns every round, so it never reused a plan, and missed the second. It now
+                 runs in phases.
+             - [ ] buffer-taking `Problem` methods
+             - [ ] the rest of the loops' allocation
+             - [ ] the record
           4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style

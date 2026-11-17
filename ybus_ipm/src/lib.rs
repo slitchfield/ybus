@@ -74,6 +74,7 @@ pub mod interior_point_error;
 pub mod kkt;
 pub mod mehrotra;
 pub mod mips;
+mod newton;
 pub mod problem;
 pub mod solution;
 mod vector;

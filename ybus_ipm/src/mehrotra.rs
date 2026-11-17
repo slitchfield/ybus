@@ -88,6 +88,7 @@ use crate::interior_point_error::InteriorPointError;
 use ybus_sparse::compressed_matrix::Inertia;
 
 use crate::kkt::{KktFactorization, KktSolver};
+use crate::newton::WeightedGram;
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
 use crate::solution::{History, Multipliers, Solution, Status};
 use crate::vector::{dot, norm_inf};
@@ -668,6 +669,7 @@ pub fn mehrotra<P: Problem>(
     let mut failed = false;
     let mut i = 0;
     let mut kkt = KktSolver::new(opt.kkt_factorization);
+    let mut gram = WeightedGram::default();
     // The inertia correction's last shift, and how many refactorizations it took
     let mut last_delta_w = 0.0;
     let mut corrections = 0;
@@ -696,17 +698,23 @@ pub fn mehrotra<P: Problem>(
         let curved = nonlinear || hessian.values().iter().any(|&v| v != 0.0);
         let zinv: Vec<f64> = p.z.iter().map(|z| 1.0 / z).collect();
         let weights: Vec<f64> = p.mu.iter().zip(&zinv).map(|(m, zi)| m * zi).collect();
-        let jh_weighted = jh.scale_rows(&weights).expect("one weight per inequality");
-        let w = hessian
-            .try_add(&jh_t.matmul(&jh_weighted).expect("nx × niq times niq × nx"))
-            .expect("both nx × nx");
-        let mut triplets: Vec<(usize, usize, f64)> = w.iter().collect();
-        for (j, &k) in split.lo.iter().enumerate() {
-            triplets.push((k, k, p.pi_l[j] / p.s_l[j]));
-        }
-        for (j, &k) in split.up.iter().enumerate() {
-            triplets.push((k, k, p.pi_u[j] / p.s_u[j]));
-        }
+        // W = H + Jhᵀ (D Jh), with D Jh as jh.scale_rows(&weights), through the kept plans
+        let jh_weighted: Vec<f64> = (jh.values().iter())
+            .zip(gram.jh_rows(&hessian, jh))
+            .map(|(&v, &row)| weights[row] * v)
+            .collect();
+        let w = gram.compute(&hessian, jh, &jh_weighted);
+        // The bounds' terms on W's diagonal
+        let bounds: Vec<(usize, f64)> = (split.lo.iter().enumerate())
+            .map(|(j, &k)| (k, p.pi_l[j] / p.s_l[j]))
+            .chain(
+                split
+                    .up
+                    .iter()
+                    .enumerate()
+                    .map(|(j, &k)| (k, p.pi_u[j] / p.s_u[j])),
+            )
+            .collect();
         // With LDLᵀ, the inertia must be (nx, neq): W positive definite on Jg's null space, so
         //   that the step is a descent direction. Otherwise W is shifted by δ_w I, more each
         //   time, as Wächter and Biegler's Algorithm IC does (see the module docs)
@@ -716,7 +724,7 @@ pub fn mehrotra<P: Problem>(
         };
         let mut delta_w = 0.0;
         let factor = loop {
-            let Ok(factor) = kkt.factor(nx, triplets.clone(), jg, delta_w) else {
+            let Ok(factor) = kkt.factor(nx, &w, &bounds, jg, delta_w) else {
                 break None;
             };
             if !opt.inertia_correction || factor.inertia().is_none_or(|inertia| inertia == wanted) {

@@ -12,6 +12,7 @@ use ybus_sparse::compressed_matrix::{CsrMatrix, Ordering};
 
 use crate::interior_point_error::InteriorPointError;
 use crate::kkt::{KktFactorization, KktSolver};
+use crate::newton::WeightedGram;
 use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
 use crate::solution::{History, Multipliers, Solution, Status};
 use crate::vector::{dot, norm_inf};
@@ -420,6 +421,7 @@ pub fn mips<P: Problem>(
     let mut failed = false;
     let mut i = 0;
     let mut kkt = KktSolver::new(opt.kkt_factorization);
+    let mut gram = WeightedGram::default();
 
     while !converged && i < opt.max_it {
         i += 1;
@@ -440,13 +442,12 @@ pub fn mips<P: Problem>(
         let zinv: Vec<f64> = z.iter().map(|z| 1.0 / z).collect();
         // dh Z⁻¹ (rows of dhᵀ scaled), then by μ: M = Lxx + dh Z⁻¹ diag(μ) dhᵀ
         let jh_zinv = e.jh.scale_rows(&zinv).expect("one slack per inequality");
-        let jh_zinv_mu = jh_zinv
-            .scale_rows(&mu)
-            .expect("one multiplier per inequality");
-        let dh = e.jh.clone().transpose().to_csr();
-        let m = lxx
-            .try_add(&dh.matmul(&jh_zinv_mu).expect("nx × niq times niq × nx"))
-            .expect("both nx × nx");
+        //   (as jh_zinv.scale_rows(&mu), μᵢ times each entry), through the kept plans
+        let jh_zinv_mu: Vec<f64> = (jh_zinv.values().iter())
+            .zip(gram.jh_rows(&lxx, &e.jh))
+            .map(|(&v, &row)| mu[row] * v)
+            .collect();
+        let m = gram.compute(&lxx, &e.jh, &jh_zinv_mu);
         let weights: Vec<f64> = mu.iter().zip(&e.h).map(|(mu, h)| mu * h + gamma).collect();
         let n_vec: Vec<f64> = lx
             .iter()
@@ -459,7 +460,7 @@ pub fn mips<P: Problem>(
             .collect();
         let rhs: Vec<f64> = n_vec.iter().chain(&e.g).map(|v| -v).collect();
         let solved = kkt
-            .factor(nx, m.iter().collect(), &e.jg, 0.0)
+            .factor(nx, &m, &[], &e.jg, 0.0)
             .and_then(|factor| factor.solve(&rhs));
         let dxdlam = match solved {
             Ok(step) => step,
