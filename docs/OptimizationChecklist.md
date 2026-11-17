@@ -604,7 +604,7 @@ with legacy results generated locally to explain differences.
                  of case9241pegase's predictor-corrector solve, from 39.3%.
                - **Next:** the KKT assembly, now 18.1% there, which `from_triplets` rebuilds at
                  every factorization. That's target 3.
-          3. allocation and KKT assembly, bit for bit. Decided with the maintainer
+          3. [x] allocation and KKT assembly, bit for bit. Decided with the maintainer
              (2026-11-17): kept plans and assembly maps, and buffer-taking `Problem` methods. In
              four commits:
              - [x] **The Newton system planned in both solvers** (`ybus_ipm`'s `newton` and
@@ -656,7 +656,16 @@ with legacy results generated locally to explain differences.
                  old sizes. Only the capacity changes, never the arithmetic.
                - **Bit for bit:** the 72-case snapshot still matches `main`'s. A kept analysis
                  whose fill changes between factorizations factors as a fresh one does.
-             - [ ] the record
+             - [x] **The record**
+               ([`kkt-assembly-2026-11-17.md`](benchmarks/kkt-assembly-2026-11-17.md)):
+               - **Bit for bit:** the 72-case snapshot matches `main`'s, and none of the 1,825
+                 result columns differs in any of the four surveys (AC and DC, both solvers).
+               - **Speed, interleaved:**
+                 - the predictor-corrector method 1.20–1.34× on AC and 1.09–1.26× on DC
+                 - MIPS 1.03–1.10× on AC and 1.12–1.16× on DC
+               - **The KKT assembly** is 10–20× smaller everywhere, at 0.2–3.2% of each solve.
+               - **Next:** target 4. The LDLᵀ's dense kernel is now 27.6% of case9241pegase's
+                 AC predictor-corrector solve.
           4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style
