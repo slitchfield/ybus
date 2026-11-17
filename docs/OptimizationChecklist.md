@@ -604,7 +604,68 @@ with legacy results generated locally to explain differences.
                  of case9241pegase's predictor-corrector solve, from 39.3%.
                - **Next:** the KKT assembly, now 18.1% there, which `from_triplets` rebuilds at
                  every factorization. That's target 3.
-          3. allocation and KKT assembly;
+          3. [x] allocation and KKT assembly, bit for bit. Decided with the maintainer
+             (2026-11-17): kept plans and assembly maps, and buffer-taking `Problem` methods. In
+             four commits:
+             - [x] **The Newton system planned in both solvers** (`ybus_ipm`'s `newton` and
+               `kkt` modules).
+               - **`WeightedGram`** keeps `W = H + Jhᵀ (D Jh)` planned: `Jhᵀ` as a traced
+                 gather, the product and the sum through #79's plans.
+               - **`KktSolver`** keeps the KKT matrix's assembly as `AssemblyMap`s: one in CSC
+                 for LU; for LDLᵀ, the lower triangle's, the mirror's gather and the full
+                 matrix's.
+               - **Both are keyed by their inputs' patterns,** and planned afresh when one
+                 differs, as the kept analysis is.
+               - **`factor` now takes `W` as a matrix** with the bounds' diagonal terms beside
+                 it, rather than triplets.
+               - **Bit for bit:** the 72-case snapshot matches `main`'s. Tests against the
+                 triplet assembly and against `try_add` and `matmul` cover reused plans and
+                 patterns that change, `H`'s alone and `Jh`'s alone.
+               - **Planted bugs caught:** an assembly that's never replanned, and plans that
+                 ignore `Jh`'s pattern or `H`'s. The first version of the `W` test drew new
+                 patterns every round, so it never reused a plan, and missed the second. It now
+                 runs in phases.
+             - [x] **Buffer-taking `Problem` methods:** `objective_hessian_into`,
+               `constraints_into` and `lagrangian_hessian_into`.
+               - **Each defaults to the allocating method,** so implementors are unchanged.
+               - **The solvers keep their buffers:** the Hessian's across iterations; the
+                 constraints' in a `RefCell` beside each solver's evaluation, which takes
+                 `&self` in MIPS.
+               - **`AcOpfProblem` refills in place** when the buffer holds the planned pattern,
+                 compared as slices (`ybus_ipm::problem::same_pattern`). Its allocating methods
+                 now call these.
+               - **`QuadraticProblem`** copies `H`'s values rather than cloning it.
+               - **Not done here:** #79's plans still allocate their intermediate vectors. Those
+                 move into scratch in the next commit only if the allocation profile names them.
+               - **Bit for bit:** the 72-case snapshot still matches `main`'s.
+             - [x] **The rest of the loops' allocation, by profile.**
+               - **What the profile found:** samply on case9241pegase after the first two
+                 commits, attributing each "allocation and copying" sample to its nearest frame
+                 from our crates.
+                 - **The KKT assembly** was already down to 2.2% of the predictor-corrector
+                   solve, from 18.1%.
+                 - **#79's plans' intermediate vectors** came to about 0.1%, so they stay as they
+                   are.
+                 - **MIPS's allocation** was almost all `lu::gilbert_peierls` growing `L`'s and
+                   `U`'s arrays one push at a time: 5.9% of the solve.
+                 - **The LDLᵀ's** was spread over sites of 0.4% or less, left for the kernel's
+                   PR.
+               - **The change:** `SymbolicLu` keeps the last factorization's sizes of `L` and
+                 `U`, in atomics, so the analysis stays `Send`, `Sync` and `Clone`. Each
+                 factorization reserves them, and a repivoting refactorization reserves its own
+                 old sizes. Only the capacity changes, never the arithmetic.
+               - **Bit for bit:** the 72-case snapshot still matches `main`'s. A kept analysis
+                 whose fill changes between factorizations factors as a fresh one does.
+             - [x] **The record**
+               ([`kkt-assembly-2026-11-17.md`](benchmarks/kkt-assembly-2026-11-17.md)):
+               - **Bit for bit:** the 72-case snapshot matches `main`'s, and none of the 1,825
+                 result columns differs in any of the four surveys (AC and DC, both solvers).
+               - **Speed, interleaved:**
+                 - the predictor-corrector method 1.20–1.34× on AC and 1.09–1.26× on DC
+                 - MIPS 1.03–1.10× on AC and 1.12–1.16× on DC
+               - **The KKT assembly** is 10–20× smaller everywhere, at 0.2–3.2% of each solve.
+               - **Next:** target 4. The LDLᵀ's dense kernel is now 27.6% of case9241pegase's
+                 AC predictor-corrector solve.
           4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style

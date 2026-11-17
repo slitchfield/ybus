@@ -33,7 +33,9 @@
 use ybus_ipm::kkt::KktFactorization;
 use ybus_ipm::mehrotra::{mehrotra, MehrotraOptions};
 use ybus_ipm::mips::{mips, MipsOptions};
-use ybus_ipm::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Problem};
+use ybus_ipm::problem::{
+    same_pattern, Constraints, NonlinearConstraints, NonlinearMultipliers, Problem,
+};
 use ybus_ipm::solution::{kkt_residuals, KktResiduals, Solution, Status};
 use ybus_sparse::compressed_matrix::{AssemblyMap, CsrMatrix, SumPlan};
 use ybus_sparse::Complex;
@@ -417,6 +419,14 @@ impl Problem for AcOpfProblem {
     }
 
     fn constraints(&self, x: &[f64]) -> NonlinearConstraints {
+        let mut out = NonlinearConstraints::empty(self.nx());
+        self.constraints_into(x, &mut out);
+        out
+    }
+
+    /// The constraints written into `out`: the Jacobians' values refilled in place when `out`
+    /// already holds the planned patterns, as it does from the second call of a solve on
+    fn constraints_into(&self, x: &[f64], out: &mut NonlinearConstraints) {
         let (nb, ng) = (self.nb, self.ng);
         let (pg, qg) = (2 * nb, 2 * nb + ng);
         let v = self.voltages(x);
@@ -432,11 +442,13 @@ impl Problem for AcOpfProblem {
         for (k, &b) in self.gen_buses.iter().enumerate() {
             mismatch[b] -= C64::new(x[pg + k], x[qg + k]);
         }
-        let g = mismatch
-            .iter()
-            .map(|m| m.re)
-            .chain(mismatch.iter().map(|m| m.im))
-            .collect();
+        out.g.clear();
+        out.g.extend(
+            mismatch
+                .iter()
+                .map(|m| m.re)
+                .chain(mismatch.iter().map(|m| m.im)),
+        );
         // widen's assembly of the outputs' entries and the blocks ∂P/∂Va, ∂P/∂Vm, ∂Q/∂Va and
         //   ∂Q/∂Vm, each the real or imaginary part of a derivative
         let (dva, dvm) = (bus.ds_dva.values(), bus.ds_dvm.values());
@@ -446,29 +458,26 @@ impl Problem for AcOpfProblem {
             .chain(dva.iter().map(|s| s.im))
             .chain(dvm.iter().map(|s| s.im))
             .collect();
-        let mut dg = plans.dg.clone();
-        dg.refill(&plans.dg_map, &values).expect("planned");
+        refill(&mut out.dg, &plans.dg, &plans.dg_map, &values);
 
         // The squared apparent power limits and their Jacobian
-        let (h, dh) = match &plans.branches {
+        out.h.clear();
+        match &plans.branches {
             Some([(from, from_magnitudes), (to, to_magnitudes)]) => {
                 let (af, daf) = from_magnitudes.evaluate(&from.evaluate(&v));
                 let (at, dat) = to_magnitudes.evaluate(&to.evaluate(&v));
-                let h = af
-                    .iter()
-                    .chain(&at)
-                    .zip(self.flow_max.iter().chain(&self.flow_max))
-                    .map(|(a, max)| a - max)
-                    .collect();
+                out.h.extend(
+                    af.iter()
+                        .chain(&at)
+                        .zip(self.flow_max.iter().chain(&self.flow_max))
+                        .map(|(a, max)| a - max),
+                );
                 // widen's assembly: the from ends' rows, then the to ends'
                 let values: Vec<f64> = daf.values().iter().chain(dat.values()).copied().collect();
-                let mut dh = plans.dh.clone();
-                dh.refill(&plans.dh_map, &values).expect("planned");
-                (h, dh)
+                refill(&mut out.dh, &plans.dh, &plans.dh_map, &values);
             }
-            None => (vec![], plans.dh.clone()),
-        };
-        NonlinearConstraints { h, g, dh, dg }
+            None => refill(&mut out.dh, &plans.dh, &plans.dh_map, &[]),
+        }
     }
 
     fn lagrangian_hessian(
@@ -477,23 +486,68 @@ impl Problem for AcOpfProblem {
         multipliers: NonlinearMultipliers<'_>,
         cost_mult: f64,
     ) -> CsrMatrix<f64> {
+        let mut out = CsrMatrix::from_triplets(0, 0, vec![]).expect("an empty matrix");
+        self.lagrangian_hessian_into(x, multipliers, cost_mult, &mut out);
+        out
+    }
+
+    /// The Hessian written into `out`, its values refilled in place when `out` already holds
+    /// the planned pattern
+    fn lagrangian_hessian_into(
+        &self,
+        x: &[f64],
+        multipliers: NonlinearMultipliers<'_>,
+        cost_mult: f64,
+        out: &mut CsrMatrix<f64>,
+    ) {
         let v = self.voltages(x);
-        match self.planned_lagrangian_hessian(&v, &multipliers, cost_mult) {
-            Some(hessian) => hessian,
-            None => self.direct_lagrangian_hessian(&v, &multipliers, cost_mult),
+        if !self.planned_lagrangian_hessian(&v, &multipliers, cost_mult, out) {
+            *out = self.direct_lagrangian_hessian(&v, &multipliers, cost_mult);
         }
     }
 }
 
+/// `matrix`'s values reassembled by `map` from `values`, after it takes `template`'s pattern
+/// if it doesn't have it yet: a kept `widen`'s assembly into a caller's buffer
+fn refill(
+    matrix: &mut CsrMatrix<f64>,
+    template: &CsrMatrix<f64>,
+    map: &AssemblyMap,
+    values: &[f64],
+) {
+    if !same_pattern(matrix, template) {
+        *matrix = template.clone();
+    }
+    matrix.refill(map, values).expect("planned");
+}
+
 impl AcOpfProblem {
     /// The Lagrangian Hessian from the kept plans, bit for bit `direct_lagrangian_hessian`'s,
-    /// or `None` where a plan declines (a zero diagonal term the functions would drop)
+    /// written into `out`; false, with `out` untouched, where the plans decline (see
+    /// `HessianPlans`)
     fn planned_lagrangian_hessian(
         &self,
         v: &[C64],
         multipliers: &NonlinearMultipliers<'_>,
         cost_mult: f64,
-    ) -> Option<CsrMatrix<f64>> {
+        out: &mut CsrMatrix<f64>,
+    ) -> bool {
+        self.planned_lagrangian_hessian_values(v, multipliers, cost_mult)
+            .map(|values| {
+                let plans = self.hessian.as_ref().expect("made with the problem");
+                refill(out, &plans.widened, &plans.widen, &values);
+            })
+            .is_some()
+    }
+
+    /// The planned Hessian's values in `widen`'s triplet order, or `None` where the plans
+    /// decline
+    fn planned_lagrangian_hessian_values(
+        &self,
+        v: &[C64],
+        multipliers: &NonlinearMultipliers<'_>,
+        cost_mult: f64,
+    ) -> Option<Vec<f64>> {
         let plans = self.hessian.as_ref().expect("made with the problem");
         let (lam_p, lam_q) = multipliers.eq.split_at(self.nb);
         // The bus Hessian must match its plan's pattern. A branch end's may lack positions,
@@ -516,9 +570,7 @@ impl AcOpfProblem {
             .map(|(_, _, q)| cost_mult * q)
             .chain(voltage.values().iter().copied())
             .collect();
-        let mut hessian = plans.widened.clone();
-        hessian.refill(&plans.widen, &values).expect("planned");
-        Some(hessian)
+        Some(values)
     }
 
     /// The Lagrangian Hessian from the derivative functions, the reference the plans replay

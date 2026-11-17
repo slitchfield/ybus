@@ -42,6 +42,11 @@ releases.
 - The `Problem` trait for general nonlinear programs, and `QuadraticProblem` for quadratic and
   linear ones. Either solver factors its KKT systems by LU or by LDLᵀ. The predictor-corrector
   method corrects an indefinite Hessian using LDLᵀ's inertia.
+- Buffer-taking evaluations on `Problem` (`objective_hessian_into`, `constraints_into`,
+  `lagrangian_hessian_into`), which the solvers keep across iterations, so a problem whose
+  patterns don't change can refill values in place. Each defaults to its allocating method.
+- The solvers keep the Newton system's product and sum, and the KKT matrix's assembly, planned
+  for the solve while their patterns hold, with the same results bit for bit.
 
 #### `ybus_cuda` (experimental)
 

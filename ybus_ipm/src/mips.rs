@@ -12,7 +12,10 @@ use ybus_sparse::compressed_matrix::{CsrMatrix, Ordering};
 
 use crate::interior_point_error::InteriorPointError;
 use crate::kkt::{KktFactorization, KktSolver};
-use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
+use crate::newton::WeightedGram;
+use crate::problem::{
+    Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
+};
 use crate::solution::{History, Multipliers, Solution, Status};
 use crate::vector::{dot, norm_inf};
 
@@ -149,6 +152,8 @@ struct Setup<'a, P: Problem> {
     bi: Vec<f64>,
     neqnln: usize,
     niqnln: usize,
+    /// The nonlinear constraints' buffer, kept across evaluations (`Problem::constraints_into`)
+    constraints: std::cell::RefCell<NonlinearConstraints>,
 }
 
 impl<P: Problem> Setup<'_, P> {
@@ -168,10 +173,11 @@ impl<P: Problem> Setup<'_, P> {
         let (f, df) = self.problem.objective(x);
         let f = f * self.cost_mult;
         let df: Vec<f64> = df.iter().map(|d| d * self.cost_mult).collect();
-        let nonlinear = self
-            .problem
-            .has_nonlinear_constraints()
-            .then(|| self.problem.constraints(x));
+        let nonlinear = self.problem.has_nonlinear_constraints().then(|| {
+            self.problem
+                .constraints_into(x, &mut self.constraints.borrow_mut());
+            self.constraints.borrow()
+        });
         let mut h = nonlinear.as_ref().map_or(vec![], |c| c.h.clone());
         let mut g = nonlinear.as_ref().map_or(vec![], |c| c.g.clone());
         let ai_x = self.ai.mul_vec(x).expect("Ai has nx columns");
@@ -367,6 +373,7 @@ pub fn mips<P: Problem>(
         bi,
         neqnln,
         niqnln,
+        constraints: std::cell::RefCell::new(NonlinearConstraints::empty(nx)),
     };
     let (nlt, ngt, nbx) = (ilt.len(), igt.len(), ibx.len());
 
@@ -420,33 +427,40 @@ pub fn mips<P: Problem>(
     let mut failed = false;
     let mut i = 0;
     let mut kkt = KktSolver::new(opt.kkt_factorization);
+    let mut gram = WeightedGram::default();
+    let mut hessian_buffer = CsrMatrix::from_triplets(0, 0, vec![]).expect("an empty matrix");
 
     while !converged && i < opt.max_it {
         i += 1;
 
         // The step: the reduced KKT system
-        let lxx = if nonlinear {
-            problem.lagrangian_hessian(
+        // Into the buffer kept across iterations; scaling in place is `scale`'s product
+        if nonlinear {
+            problem.lagrangian_hessian_into(
                 &x,
                 NonlinearMultipliers {
                     eq: &lam[..setup.neqnln],
                     ineq: &mu[..setup.niqnln],
                 },
                 opt.cost_mult,
-            )
+                &mut hessian_buffer,
+            );
         } else {
-            problem.objective_hessian(&x).scale(opt.cost_mult)
-        };
+            problem.objective_hessian_into(&x, &mut hessian_buffer);
+            for value in hessian_buffer.values_mut() {
+                *value *= opt.cost_mult;
+            }
+        }
+        let lxx = &hessian_buffer;
         let zinv: Vec<f64> = z.iter().map(|z| 1.0 / z).collect();
         // dh Z⁻¹ (rows of dhᵀ scaled), then by μ: M = Lxx + dh Z⁻¹ diag(μ) dhᵀ
         let jh_zinv = e.jh.scale_rows(&zinv).expect("one slack per inequality");
-        let jh_zinv_mu = jh_zinv
-            .scale_rows(&mu)
-            .expect("one multiplier per inequality");
-        let dh = e.jh.clone().transpose().to_csr();
-        let m = lxx
-            .try_add(&dh.matmul(&jh_zinv_mu).expect("nx × niq times niq × nx"))
-            .expect("both nx × nx");
+        //   (as jh_zinv.scale_rows(&mu), μᵢ times each entry), through the kept plans
+        let jh_zinv_mu: Vec<f64> = (jh_zinv.values().iter())
+            .zip(gram.jh_rows(lxx, &e.jh))
+            .map(|(&v, &row)| mu[row] * v)
+            .collect();
+        let m = gram.compute(lxx, &e.jh, &jh_zinv_mu);
         let weights: Vec<f64> = mu.iter().zip(&e.h).map(|(mu, h)| mu * h + gamma).collect();
         let n_vec: Vec<f64> = lx
             .iter()
@@ -459,7 +473,7 @@ pub fn mips<P: Problem>(
             .collect();
         let rhs: Vec<f64> = n_vec.iter().chain(&e.g).map(|v| -v).collect();
         let solved = kkt
-            .factor(nx, m.iter().collect(), &e.jg, 0.0)
+            .factor(nx, &m, &[], &e.jg, 0.0)
             .and_then(|factor| factor.solve(&rhs));
         let dxdlam = match solved {
             Ok(step) => step,
