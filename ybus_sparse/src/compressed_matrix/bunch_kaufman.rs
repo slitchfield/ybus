@@ -100,6 +100,10 @@ pub(crate) struct FrontFactor<T> {
 /// candidate passes means the matrix is singular (see [`DenseLdlt`]), an error.
 /// Without it, the factorization stops when no candidate passes, and the rest are delayed.
 ///
+/// Only the lower triangle is updated as the factorization goes; the upper is written once, at
+/// the end, from it. Reading `conj(a_ji)` for `a_ij` above the diagonal gives the same values
+/// and magnitudes, so the result is bit for bit what updating both triangles gave.
+///
 /// `scratch` is working space, reused across calls so a pivot allocates nothing.
 ///
 /// Returns `SparseError::SingularMatrix` naming the front position where no pivot was found
@@ -163,11 +167,48 @@ pub(crate) fn factor_front<T: Scalar + ComplexFloat>(
             }
         }
     }
+    mirror(a, m, p, &blocks);
     Ok(FrontFactor {
         order,
         eliminated: p,
         blocks,
     })
+}
+
+/// Entry `(i, j)`'s stored half: itself in the lower triangle, or `(j, i)` above it, which is its
+/// conjugate, with the same magnitude
+fn stored<T: Copy>(a: &[T], m: usize, i: usize, j: usize) -> T {
+    if i >= j {
+        a[i + j * m]
+    } else {
+        a[j + i * m]
+    }
+}
+
+/// Writes the upper triangle as updating both triangles left it: zero above the diagonal in the
+/// first `eliminated` rows, except each 2×2 block's `conj(d21)`, and the conjugate of the lower
+/// triangle in the trailing square
+fn mirror<T: Scalar + ComplexFloat>(
+    a: &mut [T],
+    m: usize,
+    eliminated: usize,
+    blocks: &[DBlock<T>],
+) {
+    for j in 0..m {
+        for i in 0..j.min(eliminated) {
+            a[i + j * m] = T::zero();
+        }
+        for i in eliminated..j {
+            a[i + j * m] = a[j + i * m].conj();
+        }
+    }
+    let mut start = 0;
+    for block in blocks {
+        if block.size() == 2 {
+            a[start + (start + 1) * m] = a[start + 1 + start * m].conj();
+        }
+        start += block.size();
+    }
 }
 
 /// A chosen pivot, by current positions: 1×1 at `q`, or 2×2 on `q` and `r`
@@ -193,7 +234,7 @@ fn column_max<T: ComplexFloat>(
         if skip.contains(&i) {
             continue;
         }
-        let value = a[i + j * m].abs();
+        let value = stored(a, m, i, j).abs();
         if row.is_none() || value > best {
             best = value;
             row = Some(i);
@@ -225,8 +266,9 @@ fn threshold_pivot<T: Scalar + ComplexFloat>(
     let (gamma_q, _) = column_max(a, m, q, p, m, &[q, r]);
     let (gamma_r, _) = column_max(a, m, r, p, m, &[q, r]);
     let a_rr = a[at(r, r)].re();
-    let b = a[at(r, q)].abs();
-    let det = Float::abs(a_qq * a_rr - magnitude_squared(a[at(r, q)]));
+    let a_rq = stored(a, m, r, q);
+    let b = a_rq.abs();
+    let det = Float::abs(a_qq * a_rr - magnitude_squared(a_rq));
     if det == zero || Float::is_nan(det) {
         return None;
     }
@@ -241,23 +283,33 @@ fn threshold_pivot<T: Scalar + ComplexFloat>(
     }
 }
 
-/// Swaps positions `i` and `j` symmetrically: rows (all columns, so `L`'s stored columns move
-/// with them) and columns, and the order
-fn swap<T: Copy>(a: &mut [T], m: usize, order: &mut [usize], i: usize, j: usize) {
+/// Swaps positions `i` and `j` symmetrically in the lower triangle, as LAPACK's `xHETRF` does:
+/// the rows in the columns before both (so `L`'s stored columns move with them), the
+/// diagonals, the stretch between them through the diagonal (conjugated, as it crosses it), the
+/// entry joining them (conjugated), and the columns below both; and the order
+fn swap<T: ComplexFloat>(a: &mut [T], m: usize, order: &mut [usize], i: usize, j: usize) {
     if i == j {
         return;
     }
-    for col in 0..m {
-        a.swap(i + col * m, j + col * m);
+    let (i, j) = (i.min(j), i.max(j));
+    for c in 0..i {
+        a.swap(i + c * m, j + c * m);
     }
-    for row in 0..m {
-        a.swap(row + i * m, row + j * m);
+    a.swap(i + i * m, j + j * m);
+    for c in i + 1..j {
+        let between = a[c + i * m];
+        a[c + i * m] = a[j + c * m].conj();
+        a[j + c * m] = between.conj();
+    }
+    a[j + i * m] = a[j + i * m].conj();
+    for r in j + 1..m {
+        a.swap(r + i * m, r + j * m);
     }
     order.swap(i, j);
 }
 
 /// Eliminates the 1×1 pivot `d` at position `p`: `L`'s column below it is `a_ip / d`, and the
-/// trailing square loses `a_ip conj(l_j)`, computed on the lower triangle and mirrored
+/// trailing square's lower triangle loses `a_ip conj(l_j)`
 fn eliminate_one<T: Scalar + ComplexFloat>(
     a: &mut [T],
     m: usize,
@@ -282,20 +334,16 @@ fn eliminate_one<T: Scalar + ComplexFloat>(
             a[at(i, j)] = a[at(i, j)] - w[ii] * conj_l;
         }
         a[at(j, j)] = from_real(a[at(j, j)].re());
-        for i in j + 1..m {
-            a[at(j, i)] = a[at(i, j)].conj();
-        }
     }
     for (ii, i) in (p + 1..m).enumerate() {
         a[at(i, p)] = l[ii];
-        a[at(p, i)] = T::zero();
     }
     a[at(p, p)] = d_t;
 }
 
 /// Eliminates the 2×2 pivot `[[d11, conj(d21)], [d21, d22]]` at positions `p` and `p + 1`:
-/// `L`'s two columns below it are `[a_ip, a_i,p+1] D⁻¹`, and the trailing square loses
-/// `a_ip conj(l_j,p) + a_i,p+1 conj(l_j,p+1)`, computed on the lower triangle and mirrored
+/// `L`'s two columns below it are `[a_ip, a_i,p+1] D⁻¹`, and the trailing square's lower
+/// triangle loses `a_ip conj(l_j,p) + a_i,p+1 conj(l_j,p+1)`
 fn eliminate_two<T: Scalar + ComplexFloat>(
     a: &mut [T],
     m: usize,
@@ -329,19 +377,13 @@ fn eliminate_two<T: Scalar + ComplexFloat>(
             a[at(i, j)] = a[at(i, j)] - x[ii] * c0 - y[ii] * c1;
         }
         a[at(j, j)] = from_real(a[at(j, j)].re());
-        for i in j + 1..m {
-            a[at(j, i)] = a[at(i, j)].conj();
-        }
     }
     for (ii, i) in (p + 2..m).enumerate() {
         a[at(i, p)] = l0[ii];
         a[at(i, p + 1)] = l1[ii];
-        a[at(p, i)] = T::zero();
-        a[at(p + 1, i)] = T::zero();
     }
     a[at(p, p)] = d11_t;
     a[at(p + 1, p)] = d21;
-    a[at(p, p + 1)] = d21.conj();
     a[at(p + 1, p + 1)] = d22_t;
 }
 

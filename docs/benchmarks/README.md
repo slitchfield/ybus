@@ -28,6 +28,7 @@ change. Each record names the code, the machine and the method it used.
 | [`ac-reactive-limits-2026-11-01.md`](ac-reactive-limits-2026-11-01.md) | Newton's method on every case with generator reactive limits enforced, all at once and one at a time, against MATPOWER's legacy `runpf`, including the held generators. |
 | [`opf-evaluation-2026-11-16.md`](opf-evaluation-2026-11-16.md) | The AC OPF's evaluation through plans kept for the solve (phase O4, target 2), bit for bit the same on both solvers: the predictor-corrector method 1.38–1.48× faster on the large profiled cases, the evaluation itself 2.6–2.8×, and the zero-flow ties that made a fallback run on every iteration. |
 | [`kkt-assembly-2026-11-17.md`](kkt-assembly-2026-11-17.md) | The solvers' Newton system and KKT assembly kept planned, and buffer-taking `Problem` methods (phase O4, target 3), bit for bit on both solvers and models: the KKT assembly 10–20× smaller, the predictor-corrector method 1.20–1.34× faster on AC, MIPS 1.03–1.16×. |
+| [`ldlt-kernel-2026-11-17.md`](ldlt-kernel-2026-11-17.md) | The LDLᵀ's dense kernel updating only its lower triangle (phase O4, target 4), bit for bit: the kernel stage 1.23–2.00× faster, the AC predictor-corrector solves 1.11–1.26×; and a blocked update, also bit for bit, tried and dropped as slower at these front sizes. |
 
 ## Measuring
 
