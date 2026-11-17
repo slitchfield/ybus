@@ -688,8 +688,24 @@ with legacy results generated locally to explain differences.
                    72-case snapshot matches `main`'s.
                  - **Planted bugs caught:** a swap that doesn't conjugate the joining entry, or
                    the stretch between, and a mirror that loses a 2×2 block's upper entry.
-               - [ ] a blocked, left-looking panel
-               - [ ] the record
+               - [x] ~~A blocked, left-looking panel.~~ Tried and dropped (2026-11-17), bit for
+                 bit but slower.
+                 - **Only the contribution block can be deferred exactly:** in the fully summed
+                   part, swaps conjugate entries across the diagonal, and
+                   `conj(w_j)·l_i ≠ conj(w_j·conj(l_i))` bit for bit.
+                 - **Deferring it was 3–15% slower** than the lower-triangle kernel alone,
+                   whether swept by column, tiled by 8 columns, or cut off by block size. The
+                   fronts are small, and the eager update already streams contiguous columns.
+               - [x] **The record**
+                 ([`ldlt-kernel-2026-11-17.md`](benchmarks/ldlt-kernel-2026-11-17.md)):
+                 - **Bit for bit:** the fronts, the 72-case snapshot, and the predictor-corrector
+                   surveys, DC and AC.
+                 - **The kernel stage** is 1.23–2.00× faster.
+                 - **The solves:** AC 1.11–1.26× faster, and 1.24× in the survey's total (case_SyntheticUSA
+                   94.9 s → 75.2 s). DC 1.13× on case_ACTIVSg25k, and 1.19× in total.
+                 - **The temporary reference kernel is removed.** It's at `9734167`, to
+                   restore for any later change to the kernel.
+               - **Next:** the KKT-aware ordering, the second PR.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
