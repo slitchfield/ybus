@@ -525,7 +525,85 @@ with legacy results generated locally to explain differences.
                - **Decided with the maintainer (2026-11-08):** the DC OPF's
                  predictor-corrector default switches to LDLᵀ, which it now qualifies for under
                  #59's rule. MIPS and `MehrotraOptions::default()` keep LU.
-          2. the OPF's evaluation (bound 1.4–1.6× on AC);
+          2. [x] the OPF's evaluation (bound 1.4–1.6× on AC), through plans kept for the solve
+             that replay today's arithmetic bit for bit. Decided with the maintainer
+             (2026-11-16): bit for bit; the plans public in `ybus_sparse`; the Hessian, then the
+             constraints' Jacobians. In four commits:
+             - [x] **Product and sum plans in `ybus_sparse`:** `ProductPlan`
+               (`plan_product`) records each product term in `matmul`'s order, and `SumPlan`
+               (`plan_sum`) each entry's sources as `try_add` merges them.
+               - **Bit for bit** with `matmul` and `try_add`, pattern and values, on random real
+                 and complex matrices in both orientations, with `±0.0`, cancellations and
+                 magnitudes from 1e-8 to 1e16.
+               - **Planted bugs caught:** terms in reverse order, a copied entry turned into an
+                 add of zero (which turns `-0.0` into `+0.0`), and an output not zeroed first.
+                 Swapping `a + b` to `b + a` is not a bug: IEEE addition commutes bit for bit.
+             - [x] **The planned Lagrangian Hessian:** `WeightedHessianPlan` and
+               `SquaredMagnitudeHessianPlan` in `opf::derivatives`, kept by the AC OPF's
+               problem with two sum plans and `widen`'s assembly as an `AssemblyMap`.
+               - **The one pattern that depends on values:** `bilinear_hessian`'s diagonal
+                 terms go through `from_diagonal`, which drops zeros. Where `M + Mᵀ` stores the
+                 position, the plan copies its value for a zero term, as `try_add` does. Where
+                 only the term can, a zero term made the plan decline, and the Hessian was
+                 computed by the functions, as before. A bus no limited branch touches has no
+                 term at all. ~~Declines would be rare.~~ They weren't: see the -0.0 item
+                 below, which replaced the decline in the OPF.
+               - **Bit for bit:** against the functions on case14, case30, case118 and a 4-bus
+                 case, at random voltages with random, zero and signed-zero weights. The
+                 72-case OPF snapshot hashes identically to `main`'s on all four solver and
+                 model pairs.
+               - **Planted bugs caught:** the scalings reassociated, and a zero term added
+                 rather than copied, which only a unit test of the diagonal step reaches. A
+                 search of 200,000 small random Hessians found no input where it shows, since
+                 the products' sums start at `+0.0`.
+             - [x] **The planned constraint Jacobians:** `FlowsPlan` (`flows`' scalings and
+               merge) and `SquaredMagnitudesPlan` (`squared_magnitudes`' scaling, real part and
+               `hstack`). The constraints' two `widen`s are kept `AssemblyMap`s, and
+               `branch_flows` goes through the plans, so the Hessian's flows do too. There's
+               no zero-dropping step here, so these plans never decline.
+               - **Bit for bit:** against `flows` and `squared_magnitudes` on the same cases.
+                 The 72-case snapshot still hashes as `main`'s.
+               - **Planted bugs caught:** `Y`'s scaled term reassociated, by the tests, and two
+                 of `dg`'s blocks swapped, by the reference tests. Reassociating `C`'s term
+                 changes nothing: `C`'s entries are all 1, which multiplies exactly.
+             - [x] **Dropped terms held as `-0.0`, after the surveys found the fallback
+               running on every iteration of the large cases.**
+               - **Why:** near-zero-impedance ties (case2383wp's branch row 82 has `r = 0`,
+                 `x = 1e-4`) keep their two buses at exactly equal voltages, so the tie's flow
+                 is exactly `0` at every iteration. The flow Hessian's weights `2μ Re S` and
+                 `2μ Im S` are then `0`, and its diagonal term at the far bus is dropped. All
+                 32 evaluations of case2383wp's solve declined. Each computed the Hessian
+                 twice, so the cases above 2,000 buses ran 0.95–1.00×, while the small ones
+                 gained 1.13–1.28×.
+               - **Decided with the maintainer (2026-11-16):** hold a dropped term as `-0.0`.
+                 `x + (-0.0)` is `x` bit for bit for every `x`, `-0.0` included, so every later
+                 sum gives `try_add`'s copy of the other operand. That replaces the copy step
+                 for a covered position too.
+               - **The pattern:** the plans report the positions really absent, where both the
+                 real and the imaginary part dropped the term and nothing else stores it. The
+                 bus Hessian stores every diagonal position, since Ybus stores its diagonal,
+                 which the plans check when they're made. So the Lagrangian's pattern never
+                 changes, and it falls back only if that check fails, or for a NaN term.
+                 `WeightedHessianPlan::evaluate` and `SquaredMagnitudeHessianPlan::evaluate`
+                 still return `None` for a really absent position, and only then.
+               - **Bit for bit:** the 72-case snapshot still hashes as `main`'s. case2383wp on
+                 the predictor-corrector method now takes 512 ms, from 765 ms (1.49×).
+               - **Planted bugs caught:** a `+0.0` sentinel, a covered zero term added as is,
+                 and the absent positions taken as the union of the two parts' drops rather
+                 than their intersection.
+             - [x] **The record**
+               ([`opf-evaluation-2026-11-16.md`](benchmarks/opf-evaluation-2026-11-16.md)):
+               - **Bit for bit:** the 72-case snapshot matches `main`'s, and none of the 1,825
+                 result columns of either solver's AC survey differs.
+               - **Speed, interleaved on one machine:** the predictor-corrector method on LDLᵀ
+                 is 1.38–1.48× faster on case2383wp, case9241pegase and case_ACTIVSg25k, and
+                 1.28× on case300. MIPS on LU is 1.08–1.22× faster, its LU dominating.
+               - **The surveys' medians:** 1.26× (predictor-corrector, 1.28× in total) and 1.22×
+                 (MIPS).
+               - **The evaluation itself** is 2.6–2.8× faster on every profiled workload: 19.3%
+                 of case9241pegase's predictor-corrector solve, from 39.3%.
+               - **Next:** the KKT assembly, now 18.1% there, which `from_triplets` rebuilds at
+                 every factorization. That's target 3.
           3. allocation and KKT assembly;
           4. the kernel and the KKT ordering.
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays

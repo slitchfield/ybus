@@ -26,6 +26,7 @@ change. Each record names the code, the machine and the method it used.
 | [`ffi-boundary-2026-11-10.md`](ffi-boundary-2026-11-10.md) | The C interface's own cost (FFI phase F6): each solve through the exports against the same solve in Rust, on cases of 1,354 to 3,120 buses. Reading a solution's columns takes 0.8–8.7 µs, at most 0.03% of a solve; the whole solves' differences are this laptop's noise. |
 | [`opf-2026-11-04.md`](opf-2026-11-04.md) | The DC and AC optimal power flows on every case with costs, solved by MIPS (phase O1), against MATPOWER's MP-Core and legacy implementations: outcomes, iterations, agreement and time against MATPOWER. |
 | [`ac-reactive-limits-2026-11-01.md`](ac-reactive-limits-2026-11-01.md) | Newton's method on every case with generator reactive limits enforced, all at once and one at a time, against MATPOWER's legacy `runpf`, including the held generators. |
+| [`opf-evaluation-2026-11-16.md`](opf-evaluation-2026-11-16.md) | The AC OPF's evaluation through plans kept for the solve (phase O4, target 2), bit for bit the same on both solvers: the predictor-corrector method 1.38–1.48× faster on the large profiled cases, the evaluation itself 2.6–2.8×, and the zero-flow ties that made a fallback run on every iteration. |
 
 ## Measuring
 

@@ -35,14 +35,15 @@ use ybus_ipm::mehrotra::{mehrotra, MehrotraOptions};
 use ybus_ipm::mips::{mips, MipsOptions};
 use ybus_ipm::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Problem};
 use ybus_ipm::solution::{kkt_residuals, KktResiduals, Solution, Status};
-use ybus_sparse::compressed_matrix::CsrMatrix;
+use ybus_sparse::compressed_matrix::{AssemblyMap, CsrMatrix, SumPlan};
 use ybus_sparse::Complex;
 
 use crate::ac::{check_impedance, Admittances};
 use crate::case::Case;
 use crate::opf::cost::{OpfCosts, QuadraticCosts};
 use crate::opf::derivatives::{
-    flows, squared_magnitude_hessian, squared_magnitudes, weighted_hessian, Flows,
+    squared_magnitude_hessian, weighted_hessian, Flows, FlowsPlan, SquaredMagnitudeHessianPlan,
+    SquaredMagnitudesPlan, WeightedHessianPlan,
 };
 use crate::opf::{
     helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver,
@@ -180,6 +181,127 @@ struct AcOpfProblem {
     gen_buses: Vec<usize>,
     active: QuadraticCosts,
     reactive: Option<QuadraticCosts>,
+    /// The constraints' plans and the Lagrangian Hessian's, made once the rest of the problem
+    /// is (`ConstraintPlans::new`, `HessianPlans::new`)
+    constraint_plans: Option<ConstraintPlans>,
+    hessian: Option<HessianPlans>,
+}
+
+/// The plans of `AcOpfProblem::constraints`, which compute the constraints and their Jacobians
+/// bit for bit as the functions do
+struct ConstraintPlans {
+    bus: FlowsPlan,
+    /// The limited branches' from and to ends: their flows, and their squared magnitudes
+    branches: Option<[(FlowsPlan, SquaredMagnitudesPlan); 2]>,
+    /// `widen`'s assembly of the power balance's Jacobian: the outputs' entries, then the
+    /// voltages' four blocks
+    dg: CsrMatrix<f64>,
+    dg_map: AssemblyMap,
+    /// `widen`'s assembly of the flow limits' Jacobian: the from ends' rows, then the to ends'
+    dh: CsrMatrix<f64>,
+    dh_map: AssemblyMap,
+}
+
+impl ConstraintPlans {
+    fn new(problem: &AcOpfProblem) -> Self {
+        let nb = problem.nb;
+        let bus = FlowsPlan::new(&problem.identity, &problem.ybus);
+        // widen's triplets, in its order: the outputs', then each block's
+        let block = bus.evaluate(&vec![C64::new(1.0, 0.0); nb]).ds_dva.real();
+        let mut triplets: Vec<(usize, usize, f64)> = problem.outputs().collect();
+        for (row, col) in [(0, 0), (0, nb), (nb, 0), (nb, nb)] {
+            triplets.extend(block.iter().map(|(i, j, v)| (row + i, col + j, v)));
+        }
+        let (dg, dg_map) = CsrMatrix::from_triplets_mapped(2 * nb, problem.nx(), triplets)
+            .expect("indices in range");
+        let nl2 = problem.flow_max.len();
+        let branches = (nl2 > 0).then(|| {
+            [(&problem.cf, &problem.yf), (&problem.ct, &problem.yt)]
+                .map(|(c, y)| (FlowsPlan::new(c, y), SquaredMagnitudesPlan::new(c, y)))
+        });
+        let mut triplets = Vec::new();
+        if let Some(ends) = &branches {
+            for (row, (_, magnitudes)) in [0, nl2].into_iter().zip(ends) {
+                triplets.extend(magnitudes.pattern().iter().map(|(i, j, v)| (row + i, j, v)));
+            }
+        }
+        let (dh, dh_map) = CsrMatrix::from_triplets_mapped(2 * nl2, problem.nx(), triplets)
+            .expect("indices in range");
+        ConstraintPlans {
+            bus,
+            branches,
+            dg,
+            dg_map,
+            dh,
+            dh_map,
+        }
+    }
+}
+
+/// The plans of `AcOpfProblem::lagrangian_hessian`, which compute it bit for bit as the
+/// functions do, from patterns that depend only on the network and the costs
+struct HessianPlans {
+    bus: WeightedHessianPlan,
+    /// The limited branches' from and to ends, and the sums `bus + from` and `+ to`
+    branches: Option<BranchHessianPlans>,
+    /// `widen`'s assembly of the costs' entries and the voltage block, as a kept map
+    widened: CsrMatrix<f64>,
+    widen: AssemblyMap,
+    /// Whether the bus Hessian's pattern stores every position a branch end's Hessian can lack
+    /// (each bus's `(i, i)`, `(i, nb + i)` and `(nb + i, i)`), so that summing it in restores
+    /// the position as `try_add`'s union does. It does whenever Ybus stores its diagonal.
+    bus_covers_diagonals: bool,
+}
+
+struct BranchHessianPlans {
+    from: SquaredMagnitudeHessianPlan,
+    to: SquaredMagnitudeHessianPlan,
+    bus_from: SumPlan,
+    bus_from_to: SumPlan,
+}
+
+impl HessianPlans {
+    fn new(problem: &AcOpfProblem) -> Self {
+        let bus = WeightedHessianPlan::new(&problem.identity, &problem.ybus);
+        let nb = problem.nb;
+        let stores = |row, col| {
+            let pattern = bus.pattern();
+            let start = pattern.pointers()[row];
+            pattern.indices()[start..pattern.pointers()[row + 1]]
+                .binary_search(&col)
+                .is_ok()
+        };
+        let bus_covers_diagonals =
+            (0..nb).all(|i| stores(i, i) && stores(i, nb + i) && stores(nb + i, i));
+        let mut voltage = bus.pattern().clone();
+        let branches = (!problem.flow_max.is_empty()).then(|| {
+            let from = SquaredMagnitudeHessianPlan::new(&problem.cf, &problem.yf);
+            let to = SquaredMagnitudeHessianPlan::new(&problem.ct, &problem.yt);
+            let bus_from = voltage.plan_sum(from.pattern()).expect("both 2nb × 2nb");
+            voltage = bus_from.add(&voltage, from.pattern()).expect("planned");
+            let bus_from_to = voltage.plan_sum(to.pattern()).expect("both 2nb × 2nb");
+            voltage = bus_from_to.add(&voltage, to.pattern()).expect("planned");
+            BranchHessianPlans {
+                from,
+                to,
+                bus_from,
+                bus_from_to,
+            }
+        });
+        // widen's triplets, in its order: the costs' entries, then the voltage block's
+        let mut triplets = problem.cost_hessian();
+        triplets.extend(voltage.iter());
+        let (widened, widen) =
+            CsrMatrix::from_triplets_mapped(problem.nx(), problem.nx(), triplets)
+                .expect("indices in range");
+        HessianPlans {
+            bus,
+            branches,
+            widened,
+            widen,
+            bus_covers_diagonals,
+        }
+    }
 }
 
 impl AcOpfProblem {
@@ -194,8 +316,25 @@ impl AcOpfProblem {
 
     /// The limited branches' flows at the from and to ends, if any branch is limited.
     fn branch_flows(&self, v: &[C64]) -> Option<(Flows, Flows)> {
-        (!self.flow_max.is_empty())
-            .then(|| (flows(&self.cf, &self.yf, v), flows(&self.ct, &self.yt, v)))
+        let plans = self
+            .constraint_plans
+            .as_ref()
+            .expect("made with the problem");
+        plans
+            .branches
+            .as_ref()
+            .map(|[(from, _), (to, _)]| (from.evaluate(v), to.evaluate(v)))
+    }
+
+    /// The power balance's entries for the generators' outputs, `-1` at each generator's bus
+    /// row and output column, in `widen`'s order
+    fn outputs(&self) -> impl Iterator<Item = (usize, usize, f64)> + '_ {
+        let (nb, ng) = (self.nb, self.ng);
+        let (pg, qg) = (2 * nb, 2 * nb + ng);
+        self.gen_buses
+            .iter()
+            .enumerate()
+            .flat_map(move |(k, &b)| [(b, pg + k, -1.0), (nb + b, qg + k, -1.0)])
     }
 
     /// Places `block` (rows × 2nb, over `[Va, Vm]`) at row offset `row` of a matrix with `rows`
@@ -282,8 +421,13 @@ impl Problem for AcOpfProblem {
         let (pg, qg) = (2 * nb, 2 * nb + ng);
         let v = self.voltages(x);
 
+        let plans = self
+            .constraint_plans
+            .as_ref()
+            .expect("made with the problem");
+
         // The power balance and its Jacobian
-        let bus = flows(&self.identity, &self.ybus, &v);
+        let bus = plans.bus.evaluate(&v);
         let mut mismatch: Vec<C64> = bus.s.iter().zip(&self.load).map(|(s, d)| s + d).collect();
         for (k, &b) in self.gen_buses.iter().enumerate() {
             mismatch[b] -= C64::new(x[pg + k], x[qg + k]);
@@ -293,40 +437,36 @@ impl Problem for AcOpfProblem {
             .map(|m| m.re)
             .chain(mismatch.iter().map(|m| m.im))
             .collect();
-        let (dp_dva, dq_dva) = (bus.ds_dva.real(), bus.ds_dva.imag());
-        let (dp_dvm, dq_dvm) = (bus.ds_dvm.real(), bus.ds_dvm.imag());
-        let outputs = self
-            .gen_buses
-            .iter()
-            .enumerate()
-            .flat_map(|(k, &b)| [(b, pg + k, -1.0), (nb + b, qg + k, -1.0)]);
-        let dg = self.widen(
-            2 * nb,
-            &[
-                (&dp_dva, 0, 0),
-                (&dp_dvm, 0, nb),
-                (&dq_dva, nb, 0),
-                (&dq_dvm, nb, nb),
-            ],
-            outputs,
-        );
+        // widen's assembly of the outputs' entries and the blocks ∂P/∂Va, ∂P/∂Vm, ∂Q/∂Va and
+        //   ∂Q/∂Vm, each the real or imaginary part of a derivative
+        let (dva, dvm) = (bus.ds_dva.values(), bus.ds_dvm.values());
+        let values: Vec<f64> = (self.outputs().map(|(_, _, v)| v))
+            .chain(dva.iter().map(|s| s.re))
+            .chain(dvm.iter().map(|s| s.re))
+            .chain(dva.iter().map(|s| s.im))
+            .chain(dvm.iter().map(|s| s.im))
+            .collect();
+        let mut dg = plans.dg.clone();
+        dg.refill(&plans.dg_map, &values).expect("planned");
 
         // The squared apparent power limits and their Jacobian
-        let nl2 = self.flow_max.len();
-        let (h, dh) = match self.branch_flows(&v) {
-            Some((from, to)) => {
-                let (af, daf) = squared_magnitudes(&from);
-                let (at, dat) = squared_magnitudes(&to);
+        let (h, dh) = match &plans.branches {
+            Some([(from, from_magnitudes), (to, to_magnitudes)]) => {
+                let (af, daf) = from_magnitudes.evaluate(&from.evaluate(&v));
+                let (at, dat) = to_magnitudes.evaluate(&to.evaluate(&v));
                 let h = af
                     .iter()
                     .chain(&at)
                     .zip(self.flow_max.iter().chain(&self.flow_max))
                     .map(|(a, max)| a - max)
                     .collect();
-                let dh = self.widen(2 * nl2, &[(&daf, 0, 0), (&dat, nl2, 0)], []);
+                // widen's assembly: the from ends' rows, then the to ends'
+                let values: Vec<f64> = daf.values().iter().chain(dat.values()).copied().collect();
+                let mut dh = plans.dh.clone();
+                dh.refill(&plans.dh_map, &values).expect("planned");
                 (h, dh)
             }
-            None => (vec![], self.widen(0, &[], [])),
+            None => (vec![], plans.dh.clone()),
         };
         NonlinearConstraints { h, g, dh, dg }
     }
@@ -337,8 +477,59 @@ impl Problem for AcOpfProblem {
         multipliers: NonlinearMultipliers<'_>,
         cost_mult: f64,
     ) -> CsrMatrix<f64> {
-        let nb = self.nb;
         let v = self.voltages(x);
+        match self.planned_lagrangian_hessian(&v, &multipliers, cost_mult) {
+            Some(hessian) => hessian,
+            None => self.direct_lagrangian_hessian(&v, &multipliers, cost_mult),
+        }
+    }
+}
+
+impl AcOpfProblem {
+    /// The Lagrangian Hessian from the kept plans, bit for bit `direct_lagrangian_hessian`'s,
+    /// or `None` where a plan declines (a zero diagonal term the functions would drop)
+    fn planned_lagrangian_hessian(
+        &self,
+        v: &[C64],
+        multipliers: &NonlinearMultipliers<'_>,
+        cost_mult: f64,
+    ) -> Option<CsrMatrix<f64>> {
+        let plans = self.hessian.as_ref().expect("made with the problem");
+        let (lam_p, lam_q) = multipliers.eq.split_at(self.nb);
+        // The bus Hessian must match its plan's pattern. A branch end's may lack positions,
+        //   which hold -0.0: the bus Hessian stores them, so the sums give try_add's union,
+        //   with the bus Hessian's values copied there
+        let mut voltage = plans.bus.evaluate(v, lam_p, lam_q)?;
+        if let (Some(branches), Some((from, to))) = (&plans.branches, self.branch_flows(v)) {
+            let (mu_f, mu_t) = multipliers.ineq.split_at(self.flow_max.len());
+            let (hf, absent_f) = branches.from.evaluate_with_absent(v, &from, mu_f)?;
+            let (ht, absent_t) = branches.to.evaluate_with_absent(v, &to, mu_t)?;
+            if !plans.bus_covers_diagonals && !(absent_f.is_empty() && absent_t.is_empty()) {
+                return None;
+            }
+            voltage = branches.bus_from.add(&voltage, &hf).expect("planned");
+            voltage = branches.bus_from_to.add(&voltage, &ht).expect("planned");
+        }
+        let values: Vec<f64> = self
+            .cost_hessian()
+            .into_iter()
+            .map(|(_, _, q)| cost_mult * q)
+            .chain(voltage.values().iter().copied())
+            .collect();
+        let mut hessian = plans.widened.clone();
+        hessian.refill(&plans.widen, &values).expect("planned");
+        Some(hessian)
+    }
+
+    /// The Lagrangian Hessian from the derivative functions, the reference the plans replay
+    fn direct_lagrangian_hessian(
+        &self,
+        v: &[C64],
+        multipliers: &NonlinearMultipliers<'_>,
+        cost_mult: f64,
+    ) -> CsrMatrix<f64> {
+        let nb = self.nb;
+        let v = v.to_vec();
         let (lam_p, lam_q) = multipliers.eq.split_at(nb);
         let mut voltage = weighted_hessian(&self.identity, &self.ybus, &v, lam_p, lam_q);
         if let Some((from, to)) = self.branch_flows(&v) {
@@ -448,7 +639,7 @@ pub fn ac_opf_with_options(
     };
     let all_buses: Vec<usize> = (0..nb).collect();
     let select = |m: &CsrMatrix<C64>| m.select(&limited, &all_buses).expect("rows in range");
-    let problem = AcOpfProblem {
+    let mut problem = AcOpfProblem {
         nb,
         ng,
         ny,
@@ -470,7 +661,11 @@ pub fn ac_opf_with_options(
         active: costs.active.clone(),
         reactive: costs.reactive.clone(),
         ybus: admittances.ybus.clone(),
+        constraint_plans: None,
+        hessian: None,
     };
+    problem.constraint_plans = Some(ConstraintPlans::new(&problem));
+    problem.hessian = Some(HessianPlans::new(&problem));
 
     // nlpopf_solver's starting point: every angle at the first reference bus's, and each
     //   magnitude midway between its limits, clipped to [0.5, 1.5]

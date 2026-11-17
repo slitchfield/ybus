@@ -1,11 +1,16 @@
 //! The AC derivatives of `ybus_powerflow::opf::derivatives` against central finite differences, for
 //! symmetry, and against the power flow's Newton Jacobian, on a small case with a transformer
-//! (tap and phase shift), line charging and bus shunts.
+//! (tap and phase shift), line charging and bus shunts. Then the Hessians' plans against the
+//! functions they replay, bit for bit, on that case and on MATPOWER's case14, case30 and
+//! case118.
+
+mod common;
 
 use ybus_powerflow::ac::AcModel;
 use ybus_powerflow::case::Case;
 use ybus_powerflow::opf::derivatives::{
-    flows, squared_magnitude_hessian, squared_magnitudes, weighted_hessian,
+    flows, squared_magnitude_hessian, squared_magnitudes, weighted_hessian, FlowsPlan,
+    SquaredMagnitudeHessianPlan, SquaredMagnitudesPlan, WeightedHessianPlan,
 };
 use ybus_sparse::compressed_matrix::CsrMatrix;
 use ybus_sparse::Complex;
@@ -232,4 +237,257 @@ fn second_derivatives_match_finite_differences_of_the_first() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The plans against the functions, bit for bit
+// ---------------------------------------------------------------------------------------------
+
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+
+    /// Uniform in [-1, 1)
+    fn unit(&mut self) -> f64 {
+        (self.next() % 2_000_001) as f64 / 1_000_000.0 - 1.0
+    }
+}
+
+/// A case's three pairs `(C, Y)`: the buses `(I, Ybus)`, and every in-service branch's from and
+/// to ends `(Cf, Yf)` and `(Ct, Yt)`
+struct Network {
+    name: String,
+    nb: usize,
+    pairs: Vec<(&'static str, CsrMatrix<C64>, CsrMatrix<C64>)>,
+}
+
+fn network(name: &str, case: &Case) -> Network {
+    let model = AcModel::new(case).unwrap();
+    let nb = model.bus_rows().len();
+    let internal = |label: usize| {
+        model
+            .bus_rows()
+            .iter()
+            .position(|&row| case.bus[row].bus_label == label)
+            .unwrap()
+    };
+    let incidence = |end: &dyn Fn(usize) -> usize| {
+        CsrMatrix::<C64>::from_triplets(
+            model.branch_rows().len(),
+            nb,
+            model
+                .branch_rows()
+                .iter()
+                .enumerate()
+                .map(|(k, &row)| (k, internal(end(row)), C64::new(1.0, 0.0))),
+        )
+        .unwrap()
+    };
+    let cf = incidence(&|row| case.branch[row].from_label);
+    let ct = incidence(&|row| case.branch[row].to_label);
+    Network {
+        name: name.to_string(),
+        nb,
+        pairs: vec![
+            ("bus", CsrMatrix::identity(nb), model.ybus().clone()),
+            ("from", cf, model.yf().clone()),
+            ("to", ct, model.yt().clone()),
+        ],
+    }
+}
+
+/// The inline case, and MATPOWER's case14, case30 and case118 where they've been fetched
+fn networks() -> Vec<Network> {
+    let mut networks = vec![network("inline", &Case::parse(CASE).unwrap())];
+    for name in ["case14", "case30", "case118"] {
+        if let Some(path) = common::matpower_case(name) {
+            networks.push(network(name, &Case::from_path(&path).unwrap()));
+        }
+    }
+    networks
+}
+
+/// Voltages near 1 p.u. at random angles
+fn random_voltages(nb: usize, rng: &mut Lcg) -> Vec<C64> {
+    (0..nb)
+        .map(|_| C64::from_polar(1.0 + 0.1 * rng.unit(), 0.5 * rng.unit()))
+        .collect()
+}
+
+/// The same pattern, and the same values bit for bit
+fn assert_identical(planned: &CsrMatrix<f64>, direct: &CsrMatrix<f64>, what: &str) {
+    assert_eq!(planned.pointers(), direct.pointers(), "{what}: pointers");
+    assert_eq!(planned.indices(), direct.indices(), "{what}: indices");
+    let bits = |m: &CsrMatrix<f64>| m.values().iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(planned), bits(direct), "{what}: values");
+}
+
+/// The weight vectors tried: random, zero (as MIPS starts its equality multipliers), and
+/// random with some zeros
+fn weight_sets(rows: usize, rng: &mut Lcg) -> Vec<(Vec<f64>, Vec<f64>)> {
+    let random = |rng: &mut Lcg| (0..rows).map(|_| rng.unit()).collect::<Vec<f64>>();
+    let some_zero = |rng: &mut Lcg| {
+        (0..rows)
+            .map(|_| {
+                if rng.next().is_multiple_of(3) {
+                    0.0
+                } else {
+                    rng.unit()
+                }
+            })
+            .collect::<Vec<f64>>()
+    };
+    // Signed zeros, so that a value the functions copy and a plan adds 0 to would differ in
+    //   its sign: -0.0 + 0.0 is +0.0
+    let signed_zero = |rng: &mut Lcg| {
+        (0..rows)
+            .map(|_| match rng.next() % 3 {
+                0 => 0.0,
+                1 => -0.0,
+                _ => rng.unit(),
+            })
+            .collect::<Vec<f64>>()
+    };
+    vec![
+        (random(rng), random(rng)),
+        (vec![0.0; rows], vec![0.0; rows]),
+        (some_zero(rng), some_zero(rng)),
+        (vec![-0.0; rows], vec![-0.0; rows]),
+        (vec![-0.0; rows], vec![0.0; rows]),
+        (signed_zero(rng), signed_zero(rng)),
+    ]
+}
+
+#[test]
+fn weighted_hessian_plans_match_the_function_bit_for_bit() {
+    let mut rng = Lcg(7);
+    let (mut compared, mut declined) = (0, 0);
+    for network in networks() {
+        for (end, c, y) in &network.pairs {
+            let plan = WeightedHessianPlan::new(c, y);
+            for _ in 0..4 {
+                let v = random_voltages(network.nb, &mut rng);
+                for (p, q) in weight_sets(c.shape().0, &mut rng) {
+                    let direct = weighted_hessian(c, y, &v, &p, &q);
+                    let what = format!("{} {end}", network.name);
+                    match plan.evaluate(&v, &p, &q) {
+                        Some(planned) => {
+                            assert_identical(&planned, &direct, &what);
+                            compared += 1;
+                        }
+                        // A plan declines only where the function's pattern lacks a position
+                        //   the plan's has: a diagonal term zero in both the real and the
+                        //   imaginary part, with nothing else at its position
+                        None => {
+                            assert!(direct.num_stored() < plan.pattern().num_stored(), "{what}");
+                            declined += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(compared > 0);
+    // Zero weights on a branch end leave a to-end bus's diagonal term zero and dropped
+    assert!(declined > 0, "zero weights on the branch ends are declined");
+}
+
+#[test]
+fn squared_magnitude_hessian_plans_match_the_function_bit_for_bit() {
+    let mut rng = Lcg(11);
+    let mut compared = 0;
+    for network in networks() {
+        for (end, c, y) in network.pairs.iter().skip(1) {
+            let plan = SquaredMagnitudeHessianPlan::new(c, y);
+            for _ in 0..4 {
+                let v = random_voltages(network.nb, &mut rng);
+                let flows = flows(c, y, &v);
+                // Positive multipliers, as the interior point keeps them
+                let mu: Vec<f64> = (0..c.shape().0).map(|_| 1.0 + rng.unit()).collect();
+                let direct = squared_magnitude_hessian(c, y, &v, &flows, &mu);
+                let planned = plan
+                    .evaluate(&v, &flows, &mu)
+                    .expect("positive multipliers are planned");
+                assert_identical(&planned, &direct, &format!("{} {end}", network.name));
+                compared += 1;
+            }
+        }
+    }
+    assert!(compared > 0);
+}
+
+#[test]
+fn a_plan_declines_only_a_dropped_diagonal() {
+    // One branch, limited at its from end: bus 1 is only a to end, so the to-end diagonal term
+    //   is the only entry at (1, 1), and a zero weight drops it
+    let c = CsrMatrix::<C64>::from_triplets(1, 2, vec![(0, 0, C64::new(1.0, 0.0))]).unwrap();
+    let y = CsrMatrix::<C64>::from_triplets(
+        1,
+        2,
+        vec![(0, 0, C64::new(1.0, -10.0)), (0, 1, C64::new(-1.0, 10.0))],
+    )
+    .unwrap();
+    let v = [C64::new(1.0, 0.0), C64::from_polar(0.98, -0.1)];
+    let plan = WeightedHessianPlan::new(&c, &y);
+    assert!(plan.evaluate(&v, &[0.0], &[0.0]).is_none());
+    let direct = weighted_hessian(&c, &y, &v, &[0.0], &[0.0]);
+    assert!(direct.num_stored() < plan.pattern().num_stored());
+    // A nonzero weight stores it, and the plan matches
+    let planned = plan.evaluate(&v, &[0.5], &[-0.25]).unwrap();
+    assert_identical(
+        &planned,
+        &weighted_hessian(&c, &y, &v, &[0.5], &[-0.25]),
+        "one branch",
+    );
+}
+
+#[test]
+fn flows_and_squared_magnitude_plans_match_the_functions_bit_for_bit() {
+    let mut rng = Lcg(13);
+    let complex_bits = |m: &CsrMatrix<C64>| -> Vec<(u64, u64)> {
+        m.values()
+            .iter()
+            .map(|v| (v.re.to_bits(), v.im.to_bits()))
+            .collect()
+    };
+    let mut compared = 0;
+    for network in networks() {
+        for (end, c, y) in &network.pairs {
+            let what = format!("{} {end}", network.name);
+            let (flows_plan, magnitudes_plan) =
+                (FlowsPlan::new(c, y), SquaredMagnitudesPlan::new(c, y));
+            for _ in 0..4 {
+                let v = random_voltages(network.nb, &mut rng);
+                let (planned, direct) = (flows_plan.evaluate(&v), flows(c, y, &v));
+                let s_bits = |f: &ybus_powerflow::opf::derivatives::Flows| -> Vec<(u64, u64)> {
+                    f.s.iter()
+                        .map(|s| (s.re.to_bits(), s.im.to_bits()))
+                        .collect()
+                };
+                assert_eq!(s_bits(&planned), s_bits(&direct), "{what}: S");
+                for (p, d) in [
+                    (&planned.ds_dva, &direct.ds_dva),
+                    (&planned.ds_dvm, &direct.ds_dvm),
+                ] {
+                    assert_eq!(p.pointers(), d.pointers(), "{what}");
+                    assert_eq!(p.indices(), d.indices(), "{what}");
+                    assert_eq!(complex_bits(p), complex_bits(d), "{what}");
+                }
+                let (squared, jacobian) = magnitudes_plan.evaluate(&direct);
+                let (direct_squared, direct_jacobian) = squared_magnitudes(&direct);
+                let bits = |x: &[f64]| x.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&squared), bits(&direct_squared), "{what}: |S|²");
+                assert_identical(&jacobian, &direct_jacobian, &what);
+                compared += 1;
+            }
+        }
+    }
+    assert!(compared > 0);
 }

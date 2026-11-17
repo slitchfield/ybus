@@ -24,6 +24,9 @@ releases.
   `CscMatrix`) for the numerical work, generic over the element type, `f64` by default.
 - Arithmetic, sparse products, norms and selections, and refilling values into a fixed pattern
   through an assembly map.
+- Product and sum plans (`ProductPlan`, `SumPlan`): a product or sum planned once for fixed
+  patterns, then recomputed from new values bit for bit as `matmul` and `try_add` compute it,
+  with no hashing, sorting or allocation.
 - Factorizations: sparse LU with threshold partial pivoting, Cholesky, and LDLᵀ with
   Bunch–Kaufman pivoting, with orderings (AMD, COLAMD, reverse Cuthill–McKee), condition estimates,
   and solves with many right-hand sides.
@@ -56,7 +59,9 @@ releases.
 - The AC power flow, by Newton's method or the fast-decoupled XB and BX methods, optionally
   enforcing generators' reactive limits.
 - The DC and AC optimal power flows, solved with `ybus_ipm`'s MIPS or predictor-corrector
-  method.
+  method. The AC OPF keeps plans of its derivatives' sparse products and sums for the solve
+  (`opf::derivatives::WeightedHessianPlan`, `SquaredMagnitudeHessianPlan`, `FlowsPlan`,
+  `SquaredMagnitudesPlan`), with the same results bit for bit.
 - Islands and bridges of a network.
 - Each solver is tested against results computed by MATPOWER.
 - Optional features: `rayon` for parallel outages and sensitivities, and `cuda`
