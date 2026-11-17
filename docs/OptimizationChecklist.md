@@ -625,7 +625,19 @@ with legacy results generated locally to explain differences.
                  ignore `Jh`'s pattern or `H`'s. The first version of the `W` test drew new
                  patterns every round, so it never reused a plan, and missed the second. It now
                  runs in phases.
-             - [ ] buffer-taking `Problem` methods
+             - [x] **Buffer-taking `Problem` methods:** `objective_hessian_into`,
+               `constraints_into` and `lagrangian_hessian_into`.
+               - **Each defaults to the allocating method,** so implementors are unchanged.
+               - **The solvers keep their buffers:** the Hessian's across iterations; the
+                 constraints' in a `RefCell` beside each solver's evaluation, which takes
+                 `&self` in MIPS.
+               - **`AcOpfProblem` refills in place** when the buffer holds the planned pattern,
+                 compared as slices (`ybus_ipm::problem::same_pattern`). Its allocating methods
+                 now call these.
+               - **`QuadraticProblem`** copies `H`'s values rather than cloning it.
+               - **Not done here:** #79's plans still allocate their intermediate vectors. Those
+                 move into scratch in the next commit only if the allocation profile names them.
+               - **Bit for bit:** the 72-case snapshot still matches `main`'s.
              - [ ] the rest of the loops' allocation
              - [ ] the record
           4. the kernel and the KKT ordering.

@@ -45,6 +45,15 @@ pub trait Problem {
     /// whole Lagrangian's Hessian from [`Problem::lagrangian_hessian`] instead.
     fn objective_hessian(&self, x: &[f64]) -> CsrMatrix<f64>;
 
+    /// [`Problem::objective_hessian`] written into `out`, which the solvers keep across
+    /// iterations: on entry it holds what the previous call left (or an empty matrix), so an
+    /// implementation whose pattern hasn't changed can refill its values in place instead of
+    /// allocating. On return `out` must equal what `objective_hessian(x)` gives, pattern and
+    /// values. The default assigns `objective_hessian(x)`.
+    fn objective_hessian_into(&self, x: &[f64], out: &mut CsrMatrix<f64>) {
+        *out = self.objective_hessian(x);
+    }
+
     /// Whether the problem has nonlinear constraints, so that [`Problem::constraints`] and
     /// [`Problem::lagrangian_hessian`] are called. False by default.
     fn has_nonlinear_constraints(&self) -> bool {
@@ -55,6 +64,13 @@ pub trait Problem {
     fn constraints(&self, x: &[f64]) -> NonlinearConstraints {
         let _ = x;
         unreachable!("a problem with nonlinear constraints implements constraints")
+    }
+
+    /// [`Problem::constraints`] written into `out`, kept across calls as
+    /// [`Problem::objective_hessian_into`]'s is: on return it must equal what `constraints(x)`
+    /// gives. The default assigns `constraints(x)`.
+    fn constraints_into(&self, x: &[f64], out: &mut NonlinearConstraints) {
+        *out = self.constraints(x);
     }
 
     /// The Lagrangian's Hessian `cost_mult · ∇²f(x) + Σ λᵢ ∇²gᵢ(x) + Σ μᵢ ∇²hᵢ(x)` at `x`,
@@ -68,6 +84,39 @@ pub trait Problem {
         let _ = (x, multipliers, cost_mult);
         unreachable!("a problem with nonlinear constraints implements lagrangian_hessian")
     }
+
+    /// [`Problem::lagrangian_hessian`] written into `out`, kept across calls as
+    /// [`Problem::objective_hessian_into`]'s is: on return it must equal what
+    /// `lagrangian_hessian(x, multipliers, cost_mult)` gives. The default assigns that.
+    fn lagrangian_hessian_into(
+        &self,
+        x: &[f64],
+        multipliers: NonlinearMultipliers<'_>,
+        cost_mult: f64,
+        out: &mut CsrMatrix<f64>,
+    ) {
+        *out = self.lagrangian_hessian(x, multipliers, cost_mult);
+    }
+}
+
+impl NonlinearConstraints {
+    /// No constraints over `nx` variables: an empty buffer for
+    /// [`Problem::constraints_into`].
+    pub fn empty(nx: usize) -> Self {
+        let empty = || CsrMatrix::from_triplets(0, nx, vec![]).expect("an empty 0 × nx matrix");
+        NonlinearConstraints {
+            h: vec![],
+            g: vec![],
+            dh: empty(),
+            dg: empty(),
+        }
+    }
+}
+
+/// Whether `a` and `b` have the same pattern (shape and stored positions), compared without
+/// allocating: when an `_into` method may refill its buffer's values in place.
+pub fn same_pattern(a: &CsrMatrix<f64>, b: &CsrMatrix<f64>) -> bool {
+    a.shape() == b.shape() && a.pointers() == b.pointers() && a.indices() == b.indices()
 }
 
 /// The linear constraints `l ≤ A x ≤ u` and the bounds `xmin ≤ x ≤ xmax`, any of which may be
@@ -120,6 +169,51 @@ impl Problem for QuadraticProblem {
         match &self.h {
             Some(h) => h.clone(),
             None => CsrMatrix::from_triplets(n, n, vec![]).expect("an empty n × n matrix"),
+        }
+    }
+
+    /// `H`'s values copied into `out` when it already has `H`'s pattern, without allocating
+    fn objective_hessian_into(&self, x: &[f64], out: &mut CsrMatrix<f64>) {
+        match &self.h {
+            Some(h) if same_pattern(h, out) => out.values_mut().copy_from_slice(h.values()),
+            None if out.shape() == (self.c.len(), self.c.len()) && out.num_stored() == 0 => {}
+            _ => *out = self.objective_hessian(x),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn objective_hessian_into_equals_objective_hessian_from_any_buffer() {
+        let h =
+            CsrMatrix::from_triplets(2, 2, vec![(0, 0, 2.0), (0, 1, -1.0), (1, 0, -1.0)]).unwrap();
+        let qp = QuadraticProblem {
+            h: Some(h.clone()),
+            c: vec![1.0, 0.0],
+        };
+        let lp = QuadraticProblem {
+            h: None,
+            c: vec![1.0, 0.0],
+        };
+        for problem in [&qp, &lp] {
+            // An empty buffer, a buffer of another pattern, then the buffer the last call left
+            //   with stale values
+            let mut out = CsrMatrix::from_triplets(0, 0, vec![]).unwrap();
+            for buffer in [
+                CsrMatrix::from_triplets(0, 0, vec![]).unwrap(),
+                CsrMatrix::from_triplets(2, 2, vec![(1, 1, 9.0)]).unwrap(),
+            ] {
+                out = buffer;
+                problem.objective_hessian_into(&[0.0, 0.0], &mut out);
+                assert_eq!(out, problem.objective_hessian(&[0.0, 0.0]));
+                out.values_mut().iter_mut().for_each(|v| *v = 7.0);
+                problem.objective_hessian_into(&[0.0, 0.0], &mut out);
+                assert_eq!(out, problem.objective_hessian(&[0.0, 0.0]));
+            }
+            let _ = out;
         }
     }
 }

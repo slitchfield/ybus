@@ -89,7 +89,9 @@ use ybus_sparse::compressed_matrix::Inertia;
 
 use crate::kkt::{KktFactorization, KktSolver};
 use crate::newton::WeightedGram;
-use crate::problem::{Constraints, NonlinearMultipliers, Problem, QuadraticProblem};
+use crate::problem::{
+    Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
+};
 use crate::solution::{History, Multipliers, Solution, Status};
 use crate::vector::{dot, norm_inf};
 
@@ -532,6 +534,8 @@ pub fn mehrotra<P: Problem>(
                 .collect(),
         )
     };
+    // The nonlinear constraints' buffer, kept across evaluations (Problem::constraints_into)
+    let constraints = std::cell::RefCell::new(NonlinearConstraints::empty(nx));
     let evaluate = |x: &[f64]| -> Evaluation {
         let (f, df) = problem.objective(x);
         let df = df.iter().map(|d| d * opt.cost_mult).collect();
@@ -551,7 +555,11 @@ pub fn mehrotra<P: Problem>(
             .zip(&split.be)
             .map(|(ax, b)| ax - b)
             .collect::<Vec<f64>>();
-        match nonlinear.then(|| problem.constraints(x)) {
+        let nonlinear_constraints = nonlinear.then(|| {
+            problem.constraints_into(x, &mut constraints.borrow_mut());
+            constraints.borrow()
+        });
+        match nonlinear_constraints {
             None => Evaluation {
                 f: f * opt.cost_mult,
                 df,
@@ -670,6 +678,7 @@ pub fn mehrotra<P: Problem>(
     let mut i = 0;
     let mut kkt = KktSolver::new(opt.kkt_factorization);
     let mut gram = WeightedGram::default();
+    let mut hessian_buffer = CsrMatrix::from_triplets(0, 0, vec![]).expect("an empty matrix");
     // The inertia correction's last shift, and how many refactorizations it took
     let mut last_delta_w = 0.0;
     let mut corrections = 0;
@@ -679,18 +688,24 @@ pub fn mehrotra<P: Problem>(
 
         // The reduced KKT matrix, [W Jgᵀ; Jg 0] with W = ∇²L + Jhᵀ Z⁻¹ M Jh + Σ_l + Σ_u
         let (jh, jg, jh_t) = (e.jh(&split), e.jg(&split), e.jh_t(&ai_t));
-        let hessian = if nonlinear {
-            problem.lagrangian_hessian(
+        // Into the buffer kept across iterations; scaling in place is `scale`'s product
+        if nonlinear {
+            problem.lagrangian_hessian_into(
                 &x,
                 NonlinearMultipliers {
                     eq: &lam[..neqnln],
                     ineq: &p.mu[..niqnln],
                 },
                 opt.cost_mult,
-            )
+                &mut hessian_buffer,
+            );
         } else {
-            problem.objective_hessian(&x).scale(opt.cost_mult)
-        };
+            problem.objective_hessian_into(&x, &mut hessian_buffer);
+            for value in hessian_buffer.values_mut() {
+                *value *= opt.cost_mult;
+            }
+        }
+        let hessian = &hessian_buffer;
         // With curvature, the dual residual ∇f(x) + … couples x to the multipliers, so the
         //   primal and dual steps share one length (Nocedal and Wright, §16.6), and so do they
         //   with nonlinear constraints, whose Jacobians couple them too; a linear program keeps
@@ -700,10 +715,10 @@ pub fn mehrotra<P: Problem>(
         let weights: Vec<f64> = p.mu.iter().zip(&zinv).map(|(m, zi)| m * zi).collect();
         // W = H + Jhᵀ (D Jh), with D Jh as jh.scale_rows(&weights), through the kept plans
         let jh_weighted: Vec<f64> = (jh.values().iter())
-            .zip(gram.jh_rows(&hessian, jh))
+            .zip(gram.jh_rows(hessian, jh))
             .map(|(&v, &row)| weights[row] * v)
             .collect();
-        let w = gram.compute(&hessian, jh, &jh_weighted);
+        let w = gram.compute(hessian, jh, &jh_weighted);
         // The bounds' terms on W's diagonal
         let bounds: Vec<(usize, f64)> = (split.lo.iter().enumerate())
             .map(|(j, &k)| (k, p.pi_l[j] / p.s_l[j]))
