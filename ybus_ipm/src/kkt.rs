@@ -68,6 +68,22 @@ pub(crate) struct KktSolver {
     refinement_steps: Rc<Cell<usize>>,
     /// The KKT matrix's assembly, kept while its inputs' patterns hold
     assembly: Option<Assembly>,
+    /// Totals over every factorization so far (see `KktStatistics`)
+    statistics: KktStatistics,
+}
+
+/// The KKT factorizations' statistics over a solve, as totals over every factorization: the
+/// inertia correction's refactorizations included, so a mean is a total over `factorizations`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KktStatistics {
+    /// The factorizations that succeeded
+    pub factorizations: usize,
+    /// The pivots delayed from a front to its parent ([`Ldlt::delayed`]): 0 with LU
+    pub delays: usize,
+    /// `D`'s 2×2 blocks ([`Ldlt::two_by_two`]): 0 with LU
+    pub two_by_two: usize,
+    /// The factors' stored entries: `L`'s for LDLᵀ ([`Ldlt::l_entries`]), `L`'s and `U`'s for LU
+    pub factor_entries: usize,
 }
 
 /// The KKT matrix's assembly for one set of input patterns: `from_triplets`' sums replayed
@@ -157,6 +173,7 @@ impl KktSolver {
             analyses: 0,
             refinement_steps: Rc::new(Cell::new(0)),
             assembly: None,
+            statistics: KktStatistics::default(),
         }
     }
 
@@ -182,6 +199,16 @@ impl KktSolver {
             Assembled::Lu(kkt) => FactorKind::Lu(Box::new(self.factor_lu(&kkt)?)),
             Assembled::Ldlt(matrix) => self.factor_ldlt(matrix)?,
         };
+        let stats = &mut self.statistics;
+        stats.factorizations += 1;
+        match &kind {
+            FactorKind::Lu(lu) => stats.factor_entries += lu.l().num_stored() + lu.u().num_stored(),
+            FactorKind::Ldlt { ldlt, .. } => {
+                stats.delays += ldlt.delayed();
+                stats.two_by_two += ldlt.two_by_two();
+                stats.factor_entries += ldlt.l_entries();
+            }
+        }
         Ok(KktFactor {
             kind,
             refinement_steps: Rc::clone(&self.refinement_steps),
@@ -348,6 +375,11 @@ impl KktSolver {
     /// The analyses made so far.
     pub(crate) fn analyses(&self) -> usize {
         self.analyses
+    }
+
+    /// The factorizations' statistics so far.
+    pub(crate) fn statistics(&self) -> KktStatistics {
+        self.statistics
     }
 
     /// The refinement steps taken so far, over every solve (0 with LU).

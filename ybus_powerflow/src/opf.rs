@@ -28,7 +28,7 @@ use std::f64::consts::PI;
 // The solvers' types this module's API names, so that choosing and reading a solver needs no
 //   direct dependency on ybus_ipm
 pub use ybus_ipm::interior_point_error::InteriorPointError;
-pub use ybus_ipm::kkt::KktFactorization;
+pub use ybus_ipm::kkt::{KktFactorization, KktStatistics};
 pub use ybus_ipm::mehrotra::{MehrotraIteration, MehrotraOptions};
 pub use ybus_ipm::mips::{MipsIteration, MipsOptions};
 pub use ybus_ipm::solution::{History, KktResiduals, Multipliers, Solution, Status};

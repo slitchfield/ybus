@@ -45,6 +45,8 @@ releases.
 - The `Problem` trait for general nonlinear programs, and `QuadraticProblem` for quadratic and
   linear ones. Either solver factors its KKT systems by LU or by LDLᵀ. The predictor-corrector
   method corrects an indefinite Hessian using LDLᵀ's inertia.
+- The KKT factorizations' statistics on `Solution` (`kkt: KktStatistics`): factorizations,
+  delayed pivots, 2×2 pivots and factor entries, totalled over a solve.
 - Buffer-taking evaluations on `Problem` (`objective_hessian_into`, `constraints_into`,
   `lagrangian_hessian_into`), which the solvers keep across iterations, so a problem whose
   patterns don't change can refill values in place. Each defaults to its allocating method.

@@ -713,7 +713,13 @@ with legacy results generated locally to explain differences.
                  and `analyze_ldlt_with_permutation` in `ybus_sparse`, as LU's
                  `analyze_lu_with_permutation` already was. Given AMD's own permutation, each
                  gives AMD's analysis.
-               - [ ] the KKT factorizations' statistics
+               - [x] **The KKT factorizations' statistics:** `KktStatistics` on `Solution`
+                 (`solution.kkt`), with the factorizations, delayed pivots, 2×2 pivots and
+                 factor entries totalled over a solve, the inertia correction's
+                 refactorizations included. `opf_survey` gains the four columns. These are
+                 committed rather than a temporary instrument, decided with the maintainer, so
+                 any later ordering change surveys the same way. The 72-case snapshot is
+                 unchanged.
                - [ ] the matched ordering
                - [ ] the rule, before the survey
                - [ ] the survey, the study and the defaults

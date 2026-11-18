@@ -30,7 +30,7 @@ use reference::{AcOpfReference, DcOpfReference};
 use ybus_powerflow::case::Case;
 use ybus_powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use ybus_powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
-use ybus_powerflow::opf::{KktFactorization, OpfSolver};
+use ybus_powerflow::opf::{KktFactorization, KktStatistics, OpfSolver};
 use ybus_powerflow::opf::{KktResiduals, Status};
 
 /// The columns.
@@ -51,7 +51,9 @@ use ybus_powerflow::opf::{KktResiduals, Status};
 ///   empty for an error; then `analyses`, how many times the solver analyzed the KKT matrix
 ///   (1 when its pattern held for the whole solve).
 /// - **The KKT factorization** (last): `lu`, `ldlt` or `ldlt-uncorrected`, the refinement steps over every solve,
-///   and the inertia corrections (the predictor-corrector method with LDLᵀ only).
+///   and the inertia corrections (the predictor-corrector method with LDLᵀ only); then the
+///   factorizations' statistics (`KktStatistics`), totals over the solve: the factorizations,
+///   delayed pivots, 2×2 pivots and factor entries.
 const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_runs,outcome,\
                       iterations,matpower_success,matpower_iterations,singular,matpower_ms,\
                       objective_rel,lam_p_rel,lam_q_rel,primal_abs,multiplier_abs,\
@@ -60,7 +62,8 @@ const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_r
                       legacy_multiplier_abs,cores_objective_rel,cores_lam_p_rel,cores_lam_q_rel,\
                       cores_primal_abs,cores_multiplier_abs,solver,kkt_stationarity,\
                       kkt_feasibility,kkt_complementarity,kkt_dual_feasibility,\
-                      analyses,kkt_factorization,refinement_steps,inertia_corrections";
+                      analyses,kkt_factorization,refinement_steps,inertia_corrections,\
+                      kkt_factorizations,kkt_delays,kkt_two_by_two,kkt_factor_entries";
 
 /// How long to keep repeating a step for its median time
 const BUDGET: Duration = Duration::from_secs(1);
@@ -174,6 +177,8 @@ struct Fields {
     /// The refinement steps and inertia corrections (none for a reference)
     refinement_steps: Option<usize>,
     inertia_corrections: Option<usize>,
+    /// The KKT factorizations' statistics (none for a reference)
+    kkt: Option<KktStatistics>,
     iterations: usize,
     lam_p: Vec<f64>,
     /// `LAM_Q`, for AC only
@@ -192,6 +197,7 @@ impl Fields {
             analyses: Some(s.solver.analyses),
             refinement_steps: Some(s.solver.refinement_steps),
             inertia_corrections: Some(s.solver.inertia_corrections),
+            kkt: Some(s.solver.kkt),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: None,
@@ -216,6 +222,7 @@ impl Fields {
             analyses: None,
             refinement_steps: None,
             inertia_corrections: None,
+            kkt: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: None,
@@ -240,6 +247,7 @@ impl Fields {
             analyses: Some(s.solver.analyses),
             refinement_steps: Some(s.solver.refinement_steps),
             inertia_corrections: Some(s.solver.inertia_corrections),
+            kkt: Some(s.solver.kkt),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: Some(s.lam_q.clone()),
@@ -277,6 +285,7 @@ impl Fields {
             analyses: None,
             refinement_steps: None,
             inertia_corrections: None,
+            kkt: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: Some(r.lam_q.clone()),
@@ -489,9 +498,17 @@ fn survey(
         ),
         Err(_) => (String::new(), String::new()),
     };
+    let statistics = match ours.as_ref().ok().and_then(|fields| fields.kkt) {
+        Some(k) => format!(
+            "{},{},{},{}",
+            k.factorizations, k.delays, k.two_by_two, k.factor_entries
+        ),
+        None => ",,,".to_string(),
+    };
     Ok(format!(
         "{name},{},{},{},{model_name},{:.3},{:.3},{runs},{outcome},{iterations},{core},{legacy},\
-         {solver_name},{kkt},{analyses},{kkt_name},{refinement_steps},{inertia_corrections}",
+         {solver_name},{kkt},{analyses},{kkt_name},{refinement_steps},{inertia_corrections},\
+         {statistics}",
         case.bus.len(),
         case.branch.len(),
         case.generator.len(),

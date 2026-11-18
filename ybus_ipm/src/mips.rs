@@ -649,6 +649,7 @@ pub fn mips<P: Problem>(
         history: History::Mips(history),
         analyses: kkt.analyses(),
         refinement_steps: kkt.refinement_steps(),
+        kkt: kkt.statistics(),
         inertia_corrections: 0,
     })
 }

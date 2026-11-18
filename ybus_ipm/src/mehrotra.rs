@@ -1015,6 +1015,7 @@ pub fn mehrotra<P: Problem>(
         history: History::Mehrotra(history),
         analyses: kkt.analyses(),
         refinement_steps: kkt.refinement_steps(),
+        kkt: kkt.statistics(),
         inertia_corrections: corrections,
     })
 }
