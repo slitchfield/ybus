@@ -1,7 +1,7 @@
 // Warm starts of the kept OPF models (OpfStart, solve_from): a cold start is solve's path bit for
-//   bit; a warm step from one load level's solution to the next meets O3's bar against the cold
-//   solve of the next, and a primal step runs; and a previous solution from another model is
-//   refused.
+//   bit; a warm step from one load level's solution to the next meets the warm-start survey's
+//   bar (O3's without LAM_Q) against the cold solve of the next, and a primal step runs; and a
+//   previous solution from another model is refused.
 
 mod common;
 
@@ -34,13 +34,12 @@ fn case(name: &str) -> Option<Case> {
     common::matpower_case(name).map(|path| Case::from_path(&path).unwrap())
 }
 
-/// A solve's results for the bar: converged, the objective, the prices, the residuals, and the
+/// A solve's results for the bar: converged, the objective, LAM_P, the residuals, and the
 ///   iterations and status, reported
 struct Outcome<'a> {
     converged: bool,
     objective: f64,
     lam_p: &'a [f64],
-    lam_q: Option<&'a [f64]>,
     residuals: KktResiduals,
     iterations: usize,
     status: Status,
@@ -51,7 +50,6 @@ fn ac(s: &AcOpfSolution) -> Outcome<'_> {
         converged: s.converged(),
         objective: s.objective,
         lam_p: &s.lam_p,
-        lam_q: Some(&s.lam_q),
         residuals: s.residuals,
         iterations: s.iterations,
         status: s.status,
@@ -63,14 +61,13 @@ fn dc(s: &DcOpfSolution) -> Outcome<'_> {
         converged: s.converged(),
         objective: s.objective,
         lam_p: &s.lam_p,
-        lam_q: None,
         residuals: s.residuals,
         iterations: s.iterations,
         status: s.status,
     }
 }
 
-/// What O3's bar finds wrong with `step` against the cold solve `cold` of the same case: a
+/// What the survey's bar (O3's without LAM_Q) finds wrong with `step` against the cold solve `cold` of the same case: a
 ///   different outcome, and, where the cold solve converged, its values and residuals
 fn misses(step: &Outcome, cold: &Outcome) -> Vec<String> {
     let mut found = vec![];
@@ -87,14 +84,11 @@ fn misses(step: &Outcome, cold: &Outcome) -> Vec<String> {
     if objective > OBJECTIVE || objective.is_nan() {
         found.push(format!("objective {objective:e}"));
     }
-    let mut prices = vec![("LAM_P", relative_difference(step.lam_p, cold.lam_p))];
-    if let (Some(a), Some(b)) = (step.lam_q, cold.lam_q) {
-        prices.push(("LAM_Q", relative_difference(a, b)));
-    }
-    for (name, d) in prices {
-        if d > PRICE || d.is_nan() {
-            found.push(format!("{name} {d:e}"));
-        }
+    // LAM_P only: LAM_Q is the survey's to report, not bar, since two cold solvers already
+    //   differ in it by up to 9.4e-3 (docs/OptimizationChecklist.md, the warm-start rule)
+    let lam_p = relative_difference(step.lam_p, cold.lam_p);
+    if lam_p > PRICE || lam_p.is_nan() {
+        found.push(format!("LAM_P {lam_p:e}"));
     }
     let (a, b) = (step.residuals, cold.residuals);
     for (name, a, b) in [

@@ -14,7 +14,8 @@
 #   YBUS_SEQUENCE_MODELS     dc, ac or both (default: dc ac)
 #   YBUS_SEQUENCE_SOLVERS    mips, mehrotra or both (default: mips mehrotra)
 #   YBUS_SEQUENCE_SEQUENCES  sweep, walk or both (default: sweep walk)
-#   YBUS_SEQUENCE_SHIFTS     the warm shifts (default: the solvers' own)
+#   YBUS_SEQUENCE_SHIFTS     the warm shifts, separated by commas, one warm chain each, in one
+#                            run with the cold and primal chains (default: the solvers' own)
 #   YBUS_SEQUENCE_SKIP       runs to leave out, as case:model:solver words separated by spaces
 #                            (for example case_ACTIVSg25k:ac:mips)
 #   YBUS_BENCH_TIMEOUT       the time limit per run, in seconds (default 3600)
@@ -28,7 +29,9 @@ read -r -a CASES <<< "${YBUS_SEQUENCE_CASES:-case9 case30 case118}"
 read -r -a MODELS <<< "${YBUS_SEQUENCE_MODELS:-dc ac}"
 read -r -a SOLVERS <<< "${YBUS_SEQUENCE_SOLVERS:-mips mehrotra}"
 read -r -a SEQUENCES <<< "${YBUS_SEQUENCE_SEQUENCES:-sweep walk}"
-read -r -a SHIFTS <<< "${YBUS_SEQUENCE_SHIFTS:-default}"
+SHIFTS="${YBUS_SEQUENCE_SHIFTS:-}"
+shift_args=()
+[[ -n "${SHIFTS}" ]] && shift_args=(--warm-shifts "${SHIFTS}")
 SKIP=" ${YBUS_SEQUENCE_SKIP:-} "
 TIMEOUT="${YBUS_BENCH_TIMEOUT:-3600}"
 MEMORY_GIB="${YBUS_BENCH_MEMORY:-10}"
@@ -38,9 +41,9 @@ cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_power
 SEQUENCE="${ROOT}/target/release/examples/opf_sequence"
 
 HEADER="$("${SEQUENCE}" --header)"
-# A failed run's line: its key (case, model, solver, sequence, shift), then an empty field for
-#   every other column
-EMPTY="$(cut -d, -f6- <<< "${HEADER}")"
+# A failed run's line: its key (case, model, solver, sequence), then an empty field for every
+#   other column
+EMPTY="$(cut -d, -f5- <<< "${HEADER}")"
 EMPTY=",${EMPTY//[^,]/}"
 LOG="$(mktemp -d)"
 trap 'rm -rf "${LOG}"' EXIT
@@ -51,31 +54,27 @@ for name in "${CASES[@]}"; do
         for solver in "${SOLVERS[@]}"; do
             [[ "${SKIP}" == *" ${name}:${model}:${solver} "* ]] && continue
             for sequence in "${SEQUENCES[@]}"; do
-                for shift in "${SHIFTS[@]}"; do
-                    shift_args=()
-                    [[ "${shift}" != default ]] && shift_args=(--warm-shift "${shift}")
-                    # exec replaces the shell, so the limits apply to the example itself
-                    if timeout "${TIMEOUT}" \
-                        bash -c 'ulimit -v "$1" && exec "${@:2}"' _ \
-                        "$((MEMORY_GIB * 1024 * 1024))" "${SEQUENCE}" --model "${model}" \
-                        --solver "${solver}" --sequence "${sequence}" "${shift_args[@]}" \
-                        "${NORMALIZED}/${name}.m" > "${LOG}/out" 2> "${LOG}/err"; then
-                        sed 's/$/,ok/' "${LOG}/out" | tee -a "${OUT}"
+                # exec replaces the shell, so the limits apply to the example itself
+                if timeout "${TIMEOUT}" \
+                    bash -c 'ulimit -v "$1" && exec "${@:2}"' _ \
+                    "$((MEMORY_GIB * 1024 * 1024))" "${SEQUENCE}" --model "${model}" \
+                    --solver "${solver}" --sequence "${sequence}" "${shift_args[@]}" \
+                    "${NORMALIZED}/${name}.m" > "${LOG}/out" 2> "${LOG}/err"; then
+                    sed 's/$/,ok/' "${LOG}/out" | tee -a "${OUT}"
+                else
+                    code=$?
+                    if [[ ${code} -eq 124 ]]; then
+                        status="over the ${TIMEOUT} s limit"
+                    elif grep -q "memory allocation of" "${LOG}/err"; then
+                        status="over the ${MEMORY_GIB} GiB limit"
                     else
-                        code=$?
-                        if [[ ${code} -eq 124 ]]; then
-                            status="over the ${TIMEOUT} s limit"
-                        elif grep -q "memory allocation of" "${LOG}/err"; then
-                            status="over the ${MEMORY_GIB} GiB limit"
-                        else
-                            status="error: $(head -n 1 "${LOG}/err" | tr ',' ';')"
-                        fi
-                        # The steps finished before the failure, then the failure
-                        sed 's/$/,ok/' "${LOG}/out" | tee -a "${OUT}"
-                        echo "${name},${model},${solver},${sequence},${shift}${EMPTY},${status}" |
-                            tee -a "${OUT}"
+                        status="error: $(head -n 1 "${LOG}/err" | tr ',' ';')"
                     fi
-                done
+                    # The steps finished before the failure, then the failure
+                    sed 's/$/,ok/' "${LOG}/out" | tee -a "${OUT}"
+                    echo "${name},${model},${solver},${sequence}${EMPTY},${status}" |
+                        tee -a "${OUT}"
+                fi
             done
         done
     done

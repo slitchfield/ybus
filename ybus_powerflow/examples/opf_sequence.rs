@@ -1,30 +1,35 @@
-//! Solves a deterministic sequence of load levels on one case with a kept OPF model, three ways
-//! per step, for the warm-start survey that `scripts/benchmark-opf-sequence.sh` runs: `cold`
+//! Solves a deterministic sequence of load levels on one case with a kept OPF model, several
+//! ways per step, for the warm-start survey that `scripts/benchmark-opf-sequence.sh` runs: `cold`
 //! (MATPOWER's starting point), `primal` (the previous step's point, cold multipliers) and `warm`
-//! (its point and multipliers, shifted by `warm_shift`), with `solve_from`'s `OpfStart`.
+//! at each warm shift (its point and multipliers, shifted by `warm_shift`), with `solve_from`'s
+//! `OpfStart`.
 //!
 //! Usage: `opf_sequence --model dc|ac --solver mips|mehrotra --sequence sweep|walk
-//! [--warm-shift <δ>] <case.m>`, or `opf_sequence --header`. Each solver runs at MATPOWER's OPF
-//! settings (`DcOpfOptions`, `AcOpfOptions`, and their `mehrotra()`), with its own KKT default,
-//! and `--warm-shift` sets its `warm_shift` (default: the solver's).
+//! [--warm-shifts <δ>[,<δ>…]] <case.m>`, or `opf_sequence --header`. Each solver runs at
+//! MATPOWER's OPF settings (`DcOpfOptions`, `AcOpfOptions`, and their `mehrotra()`), with its
+//! own KKT default. `--warm-shifts` lists the warm shifts, one warm chain each (default: the
+//! solver's own `warm_shift`). The cold and primal chains don't depend on the shift, so one run
+//! covers every shift with one of each.
 //!
 //! **The sequences** scale every bus's load, active and reactive, from the case's:
 //! - `sweep`: by 0.90, 0.91, …, 1.10, 21 steps
 //! - `walk`: 25 steps from the case's own load, each bus's then moved by an independent uniform
-//!   step in ±2% of its current value per step, from a SplitMix64 stream with a fixed seed, as a
-//!   day's hours
+//!   step in ±2% of its current value per step, from a SplitMix64 stream with a fixed seed
 //!
-//! **The chains.** Step 0 is solved cold, and starts all three chains. From step 1 each mode
-//! starts from its own chain's previous solution, so a warm chain's drift shows. A chain whose
-//! previous solve didn't converge starts its step cold, and the row says so (`start`).
+//! **The chains.** Step 0 is solved cold, and starts every chain. From step 1 each chain starts
+//! from its own previous solution, so a warm chain's drift shows. A chain whose previous solve
+//! didn't converge starts its step cold, and the row says so (`start`).
 //!
-//! **Prints** one CSV line per step and mode, with the columns in `HEADER`: the step's outcome,
+//! **Prints** one CSV line per step and chain, with the columns in `HEADER`: the step's outcome,
 //! iterations and solve time (one run: a chain can't repeat a step), its objective and KKT
 //! statistics, and for `primal` and `warm` the differences from the same step's cold solve and
-//! O3's bar against it (`acceptable`). The bar: the same outcome, and where the cold solve
-//! converged, the objective within 1e-6 (relative, to at least 1), the prices `LAM_P` and, for
-//! AC, `LAM_Q` within 1e-3 (relative, to at least 1), and each KKT residual within 100× the
-//! cold solve's or below 1e-6.
+//! the warm-start survey's bar against it (`acceptable`): the same outcome, and where the cold
+//! solve converged, O3's bar without `LAM_Q`. That's the objective within 1e-6 (relative, to at
+//! least 1), `LAM_P` within 1e-3 (relative, to at least 1), and each KKT residual within 100×
+//! the cold solve's or below 1e-6. `LAM_Q`'s difference is reported (`lam_q_rel`) but not
+//! barred: two cold solvers already differ in it by up to 9.4e-3 (MIPS and the
+//! predictor-corrector method on case9241pegase), so a difference near 1e-3 is within what the
+//! AC tolerance determines (`docs/OptimizationChecklist.md`, the warm-start rule).
 
 use std::env;
 use std::path::Path;
@@ -41,7 +46,7 @@ const HEADER: &str = "case,model,solver,sequence,warm_shift,step,load_factor,mod
                       kkt_stationarity,kkt_feasibility,kkt_complementarity,kkt_dual_feasibility,\
                       kkt_factorizations,kkt_delays,kkt_factor_entries,acceptable";
 
-/// O3's bar
+/// O3's bar, but for `LAM_Q`
 const OBJECTIVE: f64 = 1e-6;
 const PRICE: f64 = 1e-3;
 const RESIDUAL_FACTOR: f64 = 100.0;
@@ -52,19 +57,19 @@ const WALK_SEED: u64 = 0x0005_EED0_FDA7;
 const WALK_STEP: f64 = 0.02;
 const WALK_STEPS: usize = 25;
 
-const MODES: [Mode; 3] = [Mode::Cold, Mode::Primal, Mode::Warm];
-
 #[derive(Clone, Copy, PartialEq)]
 enum Model {
     Dc,
     Ac,
 }
 
+/// A chain: how each of its steps starts
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
     Cold,
     Primal,
-    Warm,
+    /// Warm, at this shift
+    Warm(f64),
 }
 
 impl Mode {
@@ -72,7 +77,7 @@ impl Mode {
         match self {
             Mode::Cold => "cold",
             Mode::Primal => "primal",
-            Mode::Warm => "warm",
+            Mode::Warm(_) => "warm",
         }
     }
 }
@@ -101,15 +106,17 @@ fn main() -> ExitCode {
         }
         _ => return usage(),
     };
-    let (shift, rest) = match rest {
-        [flag, shift, rest @ ..] if flag == "--warm-shift" => match shift.parse::<f64>() {
-            Ok(shift) => (Some(shift), rest),
-            Err(_) => return usage(),
-        },
+    let (shifts, rest) = match rest {
+        [flag, shifts, rest @ ..] if flag == "--warm-shifts" => {
+            match shifts.split(',').map(str::parse::<f64>).collect() {
+                Ok(shifts) => (Some(shifts), rest),
+                Err(_) => return usage(),
+            }
+        }
         rest => (None, rest),
     };
     let [case] = rest else { return usage() };
-    match run(Path::new(case), model, mehrotra, sequence, shift) {
+    match run(Path::new(case), model, mehrotra, sequence, shifts) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{case}: {err}");
@@ -121,7 +128,7 @@ fn main() -> ExitCode {
 fn usage() -> ExitCode {
     eprintln!(
         "usage: opf_sequence --model dc|ac --solver mips|mehrotra --sequence sweep|walk \
-         [--warm-shift <δ>] <case.m> | --header"
+         [--warm-shifts <δ>[,<δ>…]] <case.m> | --header"
     );
     ExitCode::from(2)
 }
@@ -241,19 +248,16 @@ fn relative_difference(actual: &[f64], expected: &[f64]) -> f64 {
         })
 }
 
-/// The differences of `step` from `cold` (objective, LAM_P, LAM_Q, as CSV fields) and O3's bar
+/// The differences of `step` from `cold` (objective, LAM_P, LAM_Q, as CSV fields), and the
+///   survey's bar: O3's without LAM_Q
 fn compare(step: &Fields, cold: &Fields) -> (String, bool) {
     let objective = (step.objective - cold.objective).abs() / cold.objective.abs().max(1.0);
     let lam_p = relative_difference(&step.lam_p, &cold.lam_p);
     let lam_q = match (&step.lam_q, &cold.lam_q) {
-        (Some(a), Some(b)) => Some(relative_difference(a, b)),
-        _ => None,
+        (Some(a), Some(b)) => format!("{:e}", relative_difference(a, b)),
+        _ => String::new(),
     };
-    let fields = format!(
-        "{objective:e},{lam_p:e},{}",
-        lam_q.map(|d| format!("{d:e}")).unwrap_or_default()
-    );
-    let within = |d: f64, bar: f64| d <= bar;
+    let fields = format!("{objective:e},{lam_p:e},{lam_q}");
     let (a, b) = (step.residuals, cold.residuals);
     let residuals = [
         (a.stationarity, b.stationarity),
@@ -264,11 +268,7 @@ fn compare(step: &Fields, cold: &Fields) -> (String, bool) {
     .iter()
     .all(|&(a, b)| a <= RESIDUAL_FACTOR * b || a <= RESIDUAL_FLOOR);
     let acceptable = step.converged() == cold.converged()
-        && (!cold.converged()
-            || (within(objective, OBJECTIVE)
-                && within(lam_p, PRICE)
-                && lam_q.is_none_or(|d| within(d, PRICE))
-                && residuals));
+        && (!cold.converged() || (objective <= OBJECTIVE && lam_p <= PRICE && residuals));
     (fields, acceptable)
 }
 
@@ -286,32 +286,67 @@ enum Kept {
     Ac(Box<AcOpfModel>, AcOpfOptions),
 }
 
-impl Kept {
-    fn solve(&self, case: &Case, start: OpfStart<'_>) -> Result<Fields, String> {
-        match self {
-            Kept::Dc(model, options) => model
-                .solve_from(case, options, start)
-                .map(Fields::dc)
-                .map_err(|err| err.to_string()),
-            Kept::Ac(model, options) => model
-                .solve_from(case, options, start)
-                .map(Fields::ac)
-                .map_err(|err| err.to_string()),
+/// `solver` with its `warm_shift` set to `shift`
+fn shifted(solver: OpfSolver, shift: f64) -> OpfSolver {
+    match solver {
+        OpfSolver::Mips(mut options) => {
+            options.warm_shift = shift;
+            OpfSolver::Mips(options)
         }
+        OpfSolver::Mehrotra(mut options) => {
+            options.warm_shift = shift;
+            OpfSolver::Mehrotra(options)
+        }
+        _ => unreachable!("a solver this example knows"),
     }
 }
 
-fn with_shift(solver: OpfSolver, shift: Option<f64>) -> (OpfSolver, f64) {
+/// `solver`'s own `warm_shift`
+fn own_shift(solver: OpfSolver) -> f64 {
     match solver {
-        OpfSolver::Mips(mut options) => {
-            options.warm_shift = shift.unwrap_or(options.warm_shift);
-            (OpfSolver::Mips(options), options.warm_shift)
-        }
-        OpfSolver::Mehrotra(mut options) => {
-            options.warm_shift = shift.unwrap_or(options.warm_shift);
-            (OpfSolver::Mehrotra(options), options.warm_shift)
-        }
+        OpfSolver::Mips(options) => options.warm_shift,
+        OpfSolver::Mehrotra(options) => options.warm_shift,
         _ => unreachable!("a solver this example knows"),
+    }
+}
+
+impl Kept {
+    fn solver(&self) -> OpfSolver {
+        match self {
+            Kept::Dc(_, options) => options.solver,
+            Kept::Ac(_, options) => options.solver,
+        }
+    }
+
+    /// Solves `case` from `start`, a warm start at `shift`
+    fn solve(
+        &self,
+        case: &Case,
+        start: OpfStart<'_>,
+        shift: Option<f64>,
+    ) -> Result<Fields, String> {
+        match self {
+            Kept::Dc(model, options) => {
+                let mut options = *options;
+                if let Some(shift) = shift {
+                    options.solver = shifted(options.solver, shift);
+                }
+                model
+                    .solve_from(case, &options, start)
+                    .map(Fields::dc)
+                    .map_err(|err| err.to_string())
+            }
+            Kept::Ac(model, options) => {
+                let mut options = *options;
+                if let Some(shift) = shift {
+                    options.solver = shifted(options.solver, shift);
+                }
+                model
+                    .solve_from(case, &options, start)
+                    .map(Fields::ac)
+                    .map_err(|err| err.to_string())
+            }
+        }
     }
 }
 
@@ -320,63 +355,68 @@ fn run(
     model: Model,
     mehrotra: bool,
     sequence: &str,
-    shift: Option<f64>,
+    shifts: Option<Vec<f64>>,
 ) -> Result<(), String> {
     let name = path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .ok_or("the case path has no file name")?;
     let case = Case::from_path(path).map_err(|err| err.to_string())?;
-    let (kept, shift) = match model {
+    let kept = match model {
         Model::Dc => {
-            let mut options = if mehrotra {
+            let options = if mehrotra {
                 DcOpfOptions::mehrotra()
             } else {
                 DcOpfOptions::default()
             };
-            let (solver, shift) = with_shift(options.solver, shift);
-            options.solver = solver;
             let model = DcOpfModel::new(&case).map_err(|err| err.to_string())?;
-            (Kept::Dc(Box::new(model), options), shift)
+            Kept::Dc(Box::new(model), options)
         }
         Model::Ac => {
-            let mut options = if mehrotra {
+            let options = if mehrotra {
                 AcOpfOptions::mehrotra()
             } else {
                 AcOpfOptions::default()
             };
-            let (solver, shift) = with_shift(options.solver, shift);
-            options.solver = solver;
             let model = AcOpfModel::new(&case).map_err(|err| err.to_string())?;
-            (Kept::Ac(Box::new(model), options), shift)
+            Kept::Ac(Box::new(model), options)
         }
     };
+    let shifts = shifts.unwrap_or_else(|| vec![own_shift(kept.solver())]);
+    let mut chains = vec![Mode::Cold, Mode::Primal];
+    chains.extend(shifts.iter().map(|&shift| Mode::Warm(shift)));
     let prefix = format!(
-        "{name},{},{},{sequence},{shift:e}",
+        "{name},{},{},{sequence}",
         if model == Model::Dc { "dc" } else { "ac" },
         if mehrotra { "mehrotra" } else { "mips" },
     );
     // Each chain's previous solution, if it converged
-    let mut previous: [Option<Solution>; 3] = [None, None, None];
+    let mut previous: Vec<Option<Solution>> = vec![None; chains.len()];
     for (step, (factors, mean)) in steps(sequence, case.bus.len()).iter().enumerate() {
         let changed = loaded(&case, factors);
-        let modes: &[Mode] = if step == 0 { &MODES[..1] } else { &MODES };
-        let mut results: Vec<(Mode, &str, f64, Result<Fields, String>)> = vec![];
-        for &mode in modes {
-            let chain = &previous[mode as usize];
+        let modes = if step == 0 { &chains[..1] } else { &chains[..] };
+        let mut results: Vec<(&str, f64, Result<Fields, String>)> = vec![];
+        for (&mode, chain) in modes.iter().zip(&previous) {
             let (start, from) = match (mode, chain) {
                 (Mode::Primal, Some(p)) => (OpfStart::Primal(p), "previous"),
-                (Mode::Warm, Some(p)) => (OpfStart::Warm(p), "previous"),
+                (Mode::Warm(_), Some(p)) => (OpfStart::Warm(p), "previous"),
                 _ => (OpfStart::Cold, "cold"),
             };
+            let shift = match mode {
+                Mode::Warm(shift) => Some(shift),
+                _ => None,
+            };
             let begin = Instant::now();
-            let result = kept.solve(&changed, start);
+            let result = kept.solve(&changed, start, shift);
             let ms = begin.elapsed().as_secs_f64() * 1e3;
-            results.push((mode, from, ms, result));
+            results.push((from, ms, result));
         }
-        let cold = results[0].3.as_ref().ok();
-        let mut lines = vec![];
-        for (mode, from, ms, result) in &results {
+        let cold = results[0].2.as_ref().ok();
+        for (&mode, (from, ms, result)) in modes.iter().zip(&results) {
+            let shift = match mode {
+                Mode::Warm(shift) => format!("{shift:e}"),
+                _ => String::new(),
+            };
             let line = match result {
                 Ok(fields) => {
                     let (differences, acceptable) = match (mode, cold) {
@@ -388,8 +428,8 @@ fn run(
                     };
                     let r = fields.residuals;
                     format!(
-                        "{prefix},{step},{mean:.6},{},{from},{},{},{ms:.3},{:e},{differences},\
-                         {:e},{:e},{:e},{:e},{},{},{},{acceptable}",
+                        "{prefix},{shift},{step},{mean:.6},{},{from},{},{},{ms:.3},{:e},\
+                         {differences},{:e},{:e},{:e},{:e},{},{},{},{acceptable}",
                         mode.name(),
                         outcome(fields.status),
                         fields.iterations,
@@ -404,32 +444,23 @@ fn run(
                     )
                 }
                 Err(err) => format!(
-                    "{prefix},{step},{mean:.6},{},{from},error: {},,{ms:.3},,,,,,,,,,,,",
+                    "{prefix},{shift},{step},{mean:.6},{},{from},error: {},,{ms:.3},,,,,,,,,,,,",
                     mode.name(),
                     err.replace(',', ";")
                 ),
             };
-            lines.push(line);
-        }
-        for line in lines {
             println!("{line}");
         }
-        // The chains move on: cold's to nothing (it always starts cold), the others to their
-        //   step's solution if it converged
-        let solutions: Vec<(Mode, Option<Solution>)> = results
+        // The chains move on, each to its step's solution if it converged; step 0's cold
+        //   solve starts every chain
+        let solutions: Vec<Option<Solution>> = results
             .into_iter()
-            .map(|(mode, _, _, result)| {
-                let solution = result.ok().filter(Fields::converged).map(|f| f.solver);
-                (mode, solution)
-            })
+            .map(|(_, _, result)| result.ok().filter(Fields::converged).map(|f| f.solver))
             .collect();
-        for (mode, solution) in solutions {
-            if step == 0 {
-                // Step 0's cold solve starts every chain
-                previous = [None, solution.clone(), solution];
-                break;
-            }
-            previous[mode as usize] = solution;
+        if step == 0 {
+            previous = vec![solutions[0].clone(); chains.len()];
+        } else {
+            previous = solutions;
         }
     }
     Ok(())
