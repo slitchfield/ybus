@@ -83,6 +83,8 @@ releases.
 - OPF models (`opf::ac::AcOpfModel`, `opf::dc::DcOpfModel`): a network's OPF built once and
   solved for many cases on it, such as a load sweep, keeping the network, its matrices and the
   AC problem's plans. Bit for bit what the one-shot functions give, which now use them.
+  `solve_from` starts a solve from a previous solution of the model (`opf::OpfStart`: cold,
+  primal-only or warm), for sequences of cases.
 - Islands and bridges of a network.
 - Each solver is tested against results computed by MATPOWER.
 - Optional features: `rayon` for parallel outages and sensitivities, and `cuda`

@@ -32,12 +32,54 @@ pub use ybus_ipm::kkt::{KktFactorization, KktOrdering, KktStatistics};
 pub use ybus_ipm::mehrotra::{MehrotraIteration, MehrotraOptions};
 pub use ybus_ipm::mips::{MipsIteration, MipsOptions};
 pub use ybus_ipm::solution::{History, KktResiduals, Multipliers, Solution, Status};
+use ybus_ipm::start::{Start, WarmStart};
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use crate::case::{BusType, Case};
 use crate::opf::cost::{CostVariable, OpfCosts};
 use crate::powerflow_error::PowerflowError;
 use crate::topology::Network;
+
+/// Where a kept model's solve starts ([`ac::AcOpfModel::solve_from`],
+/// [`dc::DcOpfModel::solve_from`]), for a sequence of related cases on one network.
+///
+/// A previous solution is the `solver` field of an [`ac::AcOpfSolution`] or
+/// [`dc::DcOpfSolution`], from the same model and from options with the same `cost_mult` (its
+/// multipliers are reported unscaled, and scaled back by the new solve's). A solution that
+/// doesn't fit the model's problem is refused, as `PowerflowError::Solver` with the solver's
+/// `Dimension` error. See [`ybus_ipm::start`] for what a warm start carries and why it shifts.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub enum OpfStart<'a> {
+    /// MATPOWER's starting point, as [`ac::AcOpfModel::solve`] and [`dc::DcOpfModel::solve`]
+    /// start: exactly their path
+    Cold,
+    /// A previous solution's point alone, the multipliers and slacks started as a cold start's
+    Primal(&'a Solution),
+    /// A previous solution's point and multipliers, shifted off the boundary by the solver's
+    /// `warm_shift`
+    Warm(&'a Solution),
+}
+
+impl<'a> OpfStart<'a> {
+    /// The solver's start: from `x0`, MATPOWER's point, for a cold start, and from `warm`, which
+    /// [`OpfStart::warm_start`] built, for a warm one
+    pub(crate) fn solver_start(self, x0: &'a [f64], warm: &'a Option<WarmStart>) -> Start<'a> {
+        match (self, warm) {
+            (OpfStart::Primal(previous), _) => Start::Cold(&previous.x),
+            (OpfStart::Warm(_), Some(warm)) => Start::Warm(warm),
+            _ => Start::Cold(x0),
+        }
+    }
+
+    /// A warm start's point and multipliers, copied from its previous solution
+    pub(crate) fn warm_start(self) -> Option<WarmStart> {
+        match self {
+            OpfStart::Warm(previous) => Some(WarmStart::from_solution(previous)),
+            _ => None,
+        }
+    }
+}
 
 /// Which interior-point solver an optimal power flow runs, with its options.
 #[derive(Clone, Copy, Debug, PartialEq)]
