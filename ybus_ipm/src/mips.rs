@@ -17,6 +17,7 @@ use crate::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
 };
 use crate::solution::{History, Multipliers, Solution, Status};
+use crate::start::Start;
 use crate::vector::{dot, norm_inf};
 
 /// The fill-reducing ordering for the KKT system's LU factorization: COLAMD.
@@ -64,6 +65,10 @@ pub struct MipsOptions {
     pub sigma: f64,
     /// The slack variables' starting value (`z0`)
     pub z0: f64,
+    /// A warm start's shift ([`Start::Warm`]): every slack and inequality multiplier starts at
+    /// least this far from zero, in the problem's own units. Unused by a cold start. The default,
+    /// 1e-4, is provisional until the OPF sequences' survey measures it.
+    pub warm_shift: f64,
     /// The smallest acceptable primal or dual step length (`alpha_min`)
     pub alpha_min: f64,
     /// The bounds on step control's ratio of actual to predicted change (`rho_min`, `rho_max`)
@@ -98,6 +103,7 @@ impl Default for MipsOptions {
             xi: 0.99995,
             sigma: 0.1,
             z0: 1.0,
+            warm_shift: 1e-4,
             alpha_min: 1e-8,
             rho_min: 0.95,
             rho_max: 1.05,
@@ -267,6 +273,33 @@ pub fn mips<P: Problem>(
     x0: &[f64],
     options: &MipsOptions,
 ) -> Result<Solution, InteriorPointError> {
+    mips_from(problem, constraints, Start::Cold(x0), options)
+}
+
+/// [`mips`] from `start`: a cold start from a point, exactly [`mips`]'s, or a warm start from a
+/// previous solution's point and multipliers (see [`crate::start`]).
+///
+/// A warm start keeps the point and the equality multipliers, recomputes the slacks from the
+/// point, and raises every slack and inequality multiplier to at least `warm_shift`; `γ` starts
+/// at its update's value there, `σ zᵀμ / niq`. Returns [`mips`]'s errors, `InvalidOption` for a
+/// negative or non-finite `warm_shift`, and `Dimension` for a warm start whose point or
+/// multipliers don't fit the problem.
+#[allow(clippy::manual_range_contains)]
+pub fn mips_from<P: Problem>(
+    problem: &P,
+    constraints: &Constraints,
+    start: Start<'_>,
+    options: &MipsOptions,
+) -> Result<Solution, InteriorPointError> {
+    let x0: &[f64] = match start {
+        Start::Cold(x0) => x0,
+        Start::Warm(warm) => {
+            if !(options.warm_shift >= 0.0 && options.warm_shift.is_finite()) {
+                return Err(InteriorPointError::InvalidOption { name: "warm_shift" });
+            }
+            &warm.x
+        }
+    };
     let opt = options;
     if opt.xi >= 1.0 || opt.xi < 0.5 {
         return Err(InteriorPointError::InvalidOption { name: "xi" });
@@ -379,7 +412,6 @@ pub fn mips<P: Problem>(
         niqnln,
         constraints: std::cell::RefCell::new(NonlinearConstraints::empty(nx)),
     };
-    let (nlt, ngt, nbx) = (ilt.len(), igt.len(), ibx.len());
 
     // The starting point
     let mut x = x0.to_vec();
@@ -398,6 +430,19 @@ pub fn mips<P: Problem>(
     for (mu, &z) in mu.iter_mut().zip(&z) {
         if gamma / z > opt.z0 {
             *mu = gamma / z;
+        }
+    }
+    if let Start::Warm(warm) = start {
+        (lam, z, mu) = warm_mips(
+            &warm.multipliers,
+            &e.h,
+            (&ieq, &ilt, &igt, &ibx),
+            (nx, na),
+            (setup.neqnln, setup.niqnln),
+            opt.warm_shift,
+        )?;
+        if niq > 0 {
+            gamma = opt.sigma * dot(&z, &mu) / niq as f64;
         }
     }
     let mut f0 = e.f;
@@ -615,35 +660,13 @@ pub fn mips<P: Problem>(
     }
 
     // The linear constraints' multipliers, back on the rows of [I; A]
-    let lam_lin = &lam[setup.neqnln..];
-    let mu_lin = &mu[setup.niqnln..];
-    let mut mu_l = vec![0.0; nx + na];
-    let mut mu_u = vec![0.0; nx + na];
-    for (k, &r) in ieq.iter().enumerate() {
-        if lam_lin[k] < 0.0 {
-            mu_l[r] = -lam_lin[k];
-        } else if lam_lin[k] > 0.0 {
-            mu_u[r] = lam_lin[k];
-        }
-    }
-    for (k, &r) in igt.iter().enumerate() {
-        mu_l[r] = mu_lin[nlt + k];
-    }
-    for (k, &r) in ibx.iter().enumerate() {
-        mu_l[r] = mu_lin[nlt + ngt + nbx + k];
-        mu_u[r] = mu_lin[nlt + ngt + k];
-    }
-    for (k, &r) in ilt.iter().enumerate() {
-        mu_u[r] = mu_lin[k];
-    }
-    let multipliers = Multipliers {
-        eq_nonlin: lam[..setup.neqnln].to_vec(),
-        ineq_nonlin: mu[..setup.niqnln].to_vec(),
-        mu_l: mu_l[nx..].to_vec(),
-        mu_u: mu_u[nx..].to_vec(),
-        lower: mu_l[..nx].to_vec(),
-        upper: mu_u[..nx].to_vec(),
-    };
+    let multipliers = report(
+        &lam,
+        &mu,
+        (&ieq, &ilt, &igt, &ibx),
+        (nx, na),
+        (setup.neqnln, setup.niqnln),
+    );
     Ok(Solution {
         x,
         f,
@@ -669,6 +692,17 @@ pub fn qps_mips(
     x0: Option<&[f64]>,
     options: &MipsOptions,
 ) -> Result<Solution, InteriorPointError> {
+    let zeros = vec![0.0; qp.c.len()];
+    qps_mips_from(qp, constraints, Start::Cold(x0.unwrap_or(&zeros)), options)
+}
+
+/// [`qps_mips`] from `start` (see [`mips_from`]), with [`qps_mips`]'s errors.
+pub fn qps_mips_from(
+    qp: &QuadraticProblem,
+    constraints: &Constraints,
+    start: Start<'_>,
+    options: &MipsOptions,
+) -> Result<Solution, InteriorPointError> {
     let nx = qp.c.len();
     if qp.h.is_none()
         && constraints.a.as_ref().is_none_or(|a| a.shape().0 == 0)
@@ -682,6 +716,171 @@ pub fn qps_mips(
             return Err(InteriorPointError::Dimension { what: "H" });
         }
     }
-    let zeros = vec![0.0; nx];
-    mips(qp, constraints, x0.unwrap_or(&zeros), options)
+    mips_from(qp, constraints, start, options)
+}
+
+/// The multipliers in MIPS's reported layout, from its internal `λ` and `μ`: each linear row's
+/// back on the rows of `AA = [I; A]` (a row `r < nx` is variable `r`'s bounds), an equality's
+/// sign deciding its side. `warm_mips` is its inverse.
+fn report(
+    lam: &[f64],
+    mu: &[f64],
+    (ieq, ilt, igt, ibx): (&[usize], &[usize], &[usize], &[usize]),
+    (nx, na): (usize, usize),
+    (neqnln, niqnln): (usize, usize),
+) -> Multipliers {
+    let lam_lin = &lam[neqnln..];
+    let (nlt, ngt, nbx) = (ilt.len(), igt.len(), ibx.len());
+    let mu_lin = &mu[niqnln..];
+    let mut mu_l = vec![0.0; nx + na];
+    let mut mu_u = vec![0.0; nx + na];
+    for (k, &r) in ieq.iter().enumerate() {
+        if lam_lin[k] < 0.0 {
+            mu_l[r] = -lam_lin[k];
+        } else if lam_lin[k] > 0.0 {
+            mu_u[r] = lam_lin[k];
+        }
+    }
+    for (k, &r) in igt.iter().enumerate() {
+        mu_l[r] = mu_lin[nlt + k];
+    }
+    for (k, &r) in ibx.iter().enumerate() {
+        mu_l[r] = mu_lin[nlt + ngt + nbx + k];
+        mu_u[r] = mu_lin[nlt + ngt + k];
+    }
+    for (k, &r) in ilt.iter().enumerate() {
+        mu_u[r] = mu_lin[k];
+    }
+    Multipliers {
+        eq_nonlin: lam[..neqnln].to_vec(),
+        ineq_nonlin: mu[..niqnln].to_vec(),
+        mu_l: mu_l[nx..].to_vec(),
+        mu_u: mu_u[nx..].to_vec(),
+        lower: mu_l[..nx].to_vec(),
+        upper: mu_u[..nx].to_vec(),
+    }
+}
+
+/// A warm start's `(λ, z, μ)`
+type WarmIterate = (Vec<f64>, Vec<f64>, Vec<f64>);
+
+/// A warm start's `(λ, z, μ)` in MIPS's internal layout, from `multipliers` in its reported
+/// layout and the inequalities' values `h` at the point: the inverse of the report `mips_from`
+/// builds at its end, with the slacks `−h` and every slack and inequality multiplier raised to
+/// at least `shift`. `AA = [I; A]`'s rows `ieq`, `ilt`, `igt` and `ibx` are the split's; a row
+/// `r < nx` is variable `r`'s bounds (`lower`, `upper`), and row `nx + k` is `A`'s row `k`
+/// (`mu_l`, `mu_u`).
+fn warm_mips(
+    multipliers: &Multipliers,
+    h: &[f64],
+    (ieq, ilt, igt, ibx): (&[usize], &[usize], &[usize], &[usize]),
+    (nx, na): (usize, usize),
+    (neqnln, niqnln): (usize, usize),
+    shift: f64,
+) -> Result<WarmIterate, InteriorPointError> {
+    let m = multipliers;
+    if m.eq_nonlin.len() != neqnln
+        || m.ineq_nonlin.len() != niqnln
+        || m.mu_l.len() != na
+        || m.mu_u.len() != na
+        || m.lower.len() != nx
+        || m.upper.len() != nx
+    {
+        return Err(InteriorPointError::Dimension {
+            what: "the warm start's multipliers",
+        });
+    }
+    // Row r of AA's multipliers for its lower and upper sides
+    let lower = |r: usize| if r < nx { m.lower[r] } else { m.mu_l[r - nx] };
+    let upper = |r: usize| if r < nx { m.upper[r] } else { m.mu_u[r - nx] };
+    // λ: the nonlinear equalities', then each equality row's, its upper side's less its lower's
+    //   (the report gives one side the multiplier's magnitude and the other 0)
+    let mut lam = m.eq_nonlin.clone();
+    lam.extend(ieq.iter().map(|&r| upper(r) - lower(r)));
+    // μ: the nonlinear inequalities', then the rows as Ai stacks them: ilt, −igt, ibx, −ibx
+    let mut mu = m.ineq_nonlin.clone();
+    mu.extend(ilt.iter().map(|&r| upper(r)));
+    mu.extend(igt.iter().map(|&r| lower(r)));
+    mu.extend(ibx.iter().map(|&r| upper(r)));
+    mu.extend(ibx.iter().map(|&r| lower(r)));
+    debug_assert_eq!(mu.len(), h.len());
+    for value in &mut mu {
+        *value = value.max(shift);
+    }
+    let z = h.iter().map(|&h| (-h).max(shift)).collect();
+    Ok((lam, z, mu))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Multipliers with a distinct value in every slot a split reports, and 0 elsewhere: an
+    ///   equality row's on one side only, as the report gives it
+    fn distinct(
+        (ieq, ilt, igt, ibx): (&[usize], &[usize], &[usize], &[usize]),
+        (nx, na): (usize, usize),
+        (neqnln, niqnln): (usize, usize),
+    ) -> Multipliers {
+        let mut next = 0.5;
+        let mut value = || {
+            next += 1.25;
+            next
+        };
+        let (mut lower, mut upper) = (vec![0.0; nx + na], vec![0.0; nx + na]);
+        for (k, &r) in ieq.iter().enumerate() {
+            if k % 2 == 0 {
+                lower[r] = value();
+            } else {
+                upper[r] = value();
+            }
+        }
+        for &r in ilt {
+            upper[r] = value();
+        }
+        for &r in igt {
+            lower[r] = value();
+        }
+        for &r in ibx {
+            (lower[r], upper[r]) = (value(), value());
+        }
+        Multipliers {
+            eq_nonlin: (0..neqnln).map(|_| value() - 7.0).collect(),
+            ineq_nonlin: (0..niqnln).map(|_| value()).collect(),
+            mu_l: lower[nx..].to_vec(),
+            mu_u: upper[nx..].to_vec(),
+            lower: lower[..nx].to_vec(),
+            upper: upper[..nx].to_vec(),
+        }
+    }
+
+    #[test]
+    fn the_warm_mapping_is_the_reports_inverse() {
+        // AA = [I; A] with 4 variables and 5 rows of A, every kind of row on both, and one row
+        //   unbounded both ways (8)
+        let sets: (&[usize], &[usize], &[usize], &[usize]) = (&[3, 4], &[0, 5], &[1, 6], &[2, 7]);
+        let (dims, nonlinear) = ((4, 5), (2, 3));
+        let m = distinct(sets, dims, nonlinear);
+        let niq = nonlinear.1 + sets.1.len() + sets.2.len() + 2 * sets.3.len();
+        let h = vec![-1.0; niq];
+        let (lam, z, mu) = warm_mips(&m, &h, sets, dims, nonlinear, 0.0).unwrap();
+        assert_eq!(z, vec![1.0; niq]);
+        assert_eq!(report(&lam, &mu, sets, dims, nonlinear), m);
+    }
+
+    #[test]
+    fn the_warm_start_moves_every_pair_off_the_boundary() {
+        // Active rows (h = 0) with zero multipliers, and an inactive one
+        let sets: (&[usize], &[usize], &[usize], &[usize]) = (&[], &[0], &[1], &[]);
+        let m = Multipliers {
+            mu_l: vec![],
+            mu_u: vec![],
+            lower: vec![0.0, 0.0],
+            upper: vec![0.0, 0.0],
+            ..Multipliers::default()
+        };
+        let (_, z, mu) = warm_mips(&m, &[0.0, -3.0], sets, (2, 0), (0, 0), 1e-3).unwrap();
+        assert_eq!(z, vec![1e-3, 3.0]);
+        assert_eq!(mu, vec![1e-3, 1e-3]);
+    }
 }
