@@ -30,7 +30,7 @@ use reference::{AcOpfReference, DcOpfReference};
 use ybus_powerflow::case::Case;
 use ybus_powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use ybus_powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
-use ybus_powerflow::opf::{KktFactorization, KktStatistics, OpfSolver};
+use ybus_powerflow::opf::{KktFactorization, KktOrdering, KktStatistics, OpfSolver};
 use ybus_powerflow::opf::{KktResiduals, Status};
 
 /// The columns.
@@ -53,7 +53,8 @@ use ybus_powerflow::opf::{KktResiduals, Status};
 /// - **The KKT factorization** (last): `lu`, `ldlt` or `ldlt-uncorrected`, the refinement steps over every solve,
 ///   and the inertia corrections (the predictor-corrector method with LDLᵀ only); then the
 ///   factorizations' statistics (`KktStatistics`), totals over the solve: the factorizations,
-///   delayed pivots, 2×2 pivots and factor entries.
+///   delayed pivots, 2×2 pivots and factor entries; and LDLᵀ's ordering, `amd` or `matched`
+///   (`--kkt-ordering`, AMD by default; LU ignores it).
 const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_runs,outcome,\
                       iterations,matpower_success,matpower_iterations,singular,matpower_ms,\
                       objective_rel,lam_p_rel,lam_q_rel,primal_abs,multiplier_abs,\
@@ -63,7 +64,7 @@ const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_r
                       cores_primal_abs,cores_multiplier_abs,solver,kkt_stationarity,\
                       kkt_feasibility,kkt_complementarity,kkt_dual_feasibility,\
                       analyses,kkt_factorization,refinement_steps,inertia_corrections,\
-                      kkt_factorizations,kkt_delays,kkt_two_by_two,kkt_factor_entries";
+                      kkt_factorizations,kkt_delays,kkt_two_by_two,kkt_factor_entries,kkt_ordering";
 
 /// How long to keep repeating a step for its median time
 const BUDGET: Duration = Duration::from_secs(1);
@@ -141,12 +142,20 @@ fn main() -> ExitCode {
         },
         rest => (Kkt::Lu, rest),
     };
+    let (ordering, rest) = match rest {
+        [flag, ordering, rest @ ..] if flag == "--kkt-ordering" => match ordering.as_str() {
+            "amd" => (KktOrdering::Amd, rest),
+            "matched" => (KktOrdering::Matched, rest),
+            _ => return usage(),
+        },
+        rest => (KktOrdering::Amd, rest),
+    };
     let (case, references) = match rest {
         [case] => (case, None),
         [case, references] => (case, Some(Path::new(references))),
         _ => return usage(),
     };
-    match survey(Path::new(case), references, model, solver, kkt) {
+    match survey(Path::new(case), references, model, solver, kkt, ordering) {
         Ok(line) => {
             println!("{line}");
             ExitCode::SUCCESS
@@ -161,7 +170,7 @@ fn main() -> ExitCode {
 fn usage() -> ExitCode {
     eprintln!(
         "usage: opf_survey --model dc|ac [--solver mips|mehrotra] [--kkt lu|ldlt|ldlt-uncorrected] \
-         <case.m> [<reference-dir>] | --header"
+         [--kkt-ordering amd|matched] <case.m> [<reference-dir>] | --header"
     );
     ExitCode::from(2)
 }
@@ -361,6 +370,7 @@ fn survey(
     model: Model,
     solver: Solver,
     factorization: Kkt,
+    ordering: KktOrdering,
 ) -> Result<String, String> {
     let name = path
         .file_stem()
@@ -374,7 +384,9 @@ fn survey(
                 Solver::Mips => DcOpfOptions::default(),
                 Solver::Mehrotra => DcOpfOptions::mehrotra(),
             };
-            options.solver = factorization.configure(options.solver);
+            options.solver = factorization
+                .configure(options.solver)
+                .with_kkt_ordering(ordering);
             let (t, n, s) = time(|| dc_opf_with_options(&case, &options));
             (t, n, s.map(|s| Fields::dc(&s)))
         }
@@ -383,7 +395,9 @@ fn survey(
                 Solver::Mips => AcOpfOptions::default(),
                 Solver::Mehrotra => AcOpfOptions::mehrotra(),
             };
-            options.solver = factorization.configure(options.solver);
+            options.solver = factorization
+                .configure(options.solver)
+                .with_kkt_ordering(ordering);
             let (t, n, s) = time(|| ac_opf_with_options(&case, &options));
             (t, n, s.map(|s| Fields::ac(&s)))
         }
@@ -490,6 +504,10 @@ fn survey(
         .and_then(|fields| fields.analyses)
         .map_or(String::new(), |n| n.to_string());
     let kkt_name = factorization.name();
+    let ordering_name = match ordering {
+        KktOrdering::Matched => "matched",
+        _ => "amd",
+    };
     let count = |n: Option<usize>| n.map_or(String::new(), |n| n.to_string());
     let (refinement_steps, inertia_corrections) = match ours.as_ref() {
         Ok(fields) => (
@@ -508,7 +526,7 @@ fn survey(
     Ok(format!(
         "{name},{},{},{},{model_name},{:.3},{:.3},{runs},{outcome},{iterations},{core},{legacy},\
          {solver_name},{kkt},{analyses},{kkt_name},{refinement_steps},{inertia_corrections},\
-         {statistics}",
+         {statistics},{ordering_name}",
         case.bus.len(),
         case.branch.len(),
         case.generator.len(),

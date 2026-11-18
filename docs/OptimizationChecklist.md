@@ -720,7 +720,24 @@ with legacy results generated locally to explain differences.
                  committed rather than a temporary instrument, decided with the maintainer, so
                  any later ordering change surveys the same way. The 72-case snapshot is
                  unchanged.
-               - [ ] the matched ordering
+               - [x] **The matched ordering:** `KktOrdering { Amd, Matched }` on both solvers'
+                 options (`kkt_ordering`, AMD by default; LU ignores it),
+                 `OpfSolver::with_kkt_ordering`, `opf_survey --kkt-ordering` and
+                 `YBUS_BENCH_KKT_ORDERING`.
+                 - **The method:**
+                   - each constraint row is matched to a variable, greedily by `|Jg|` and then by
+                     augmenting paths, so the matching is maximum
+                   - each pair is merged into one node, and the merged graph ordered by AMD
+                   - each pair is placed as its variable, then its constraint
+                 - **On case118, against AMD,** with the same iterations and objective:
+                   - **DC:** 44 → 20 delays, 13,516 → 13,255 factor entries
+                   - **AC:** 303 → 115 delays, 787 → 112 2×2 pivots, 90,629 → 83,894 factor
+                     entries
+                 - **With AMD the default,** the 72-case snapshot is unchanged.
+                 - **Planted bugs caught:**
+                   - a pair placed constraint first
+                   - a greedy pass that reuses a variable
+                   - the ordering given to LU, caught by the MATPOWER reference test
                - [ ] the rule, before the survey
                - [ ] the survey, the study and the defaults
                - [ ] the record, closing O4
@@ -859,7 +876,7 @@ with legacy results generated locally to explain differences.
 
 ## References
 
-Each was checked online (Crossref) on 2026-11-03.
+Each was checked online (Crossref) on 2026-11-03, and the last on 2026-11-17.
 
 - H. Wang, C. E. Murillo-Sánchez, R. D. Zimmerman and R. J. Thomas, "On computational issues of
   market-based optimal power flow," *IEEE Trans. Power Syst.* 22(3):1185–1193, 2007.
@@ -893,3 +910,7 @@ Each was checked online (Crossref) on 2026-11-03.
   using voltage rectangular coordinates," *IEEE Trans. Power Syst.* 13(4):1211–1218, 1998.
   [doi:10.1109/59.736231](https://doi.org/10.1109/59.736231) (checked on Crossref on
   2026-11-07)
+- I. S. Duff and S. Pralet, "Strategies for scaling and pivoting for sparse symmetric indefinite
+  problems," *SIAM J. Matrix Anal. Appl.* 27(2):313–340, 2005.
+  [doi:10.1137/04061043X](https://doi.org/10.1137/04061043X). The matched ordering of the KKT
+  matrix (`ybus_ipm::kkt::KktOrdering::Matched`).

@@ -28,7 +28,7 @@ use std::f64::consts::PI;
 // The solvers' types this module's API names, so that choosing and reading a solver needs no
 //   direct dependency on ybus_ipm
 pub use ybus_ipm::interior_point_error::InteriorPointError;
-pub use ybus_ipm::kkt::{KktFactorization, KktStatistics};
+pub use ybus_ipm::kkt::{KktFactorization, KktOrdering, KktStatistics};
 pub use ybus_ipm::mehrotra::{MehrotraIteration, MehrotraOptions};
 pub use ybus_ipm::mips::{MipsIteration, MipsOptions};
 pub use ybus_ipm::solution::{History, KktResiduals, Multipliers, Solution, Status};
@@ -62,6 +62,21 @@ impl OpfSolver {
             }
             OpfSolver::Mehrotra(mut options) => {
                 options.kkt_factorization = kkt;
+                OpfSolver::Mehrotra(options)
+            }
+        }
+    }
+
+    /// The same solver, with the pivoted LDLᵀ ordering its KKT matrix by `ordering`: AMD by
+    /// default, or matched ([`KktOrdering`]). LU ignores it.
+    pub fn with_kkt_ordering(self, ordering: KktOrdering) -> OpfSolver {
+        match self {
+            OpfSolver::Mips(mut options) => {
+                options.kkt_ordering = ordering;
+                OpfSolver::Mips(options)
+            }
+            OpfSolver::Mehrotra(mut options) => {
+                options.kkt_ordering = ordering;
                 OpfSolver::Mehrotra(options)
             }
         }

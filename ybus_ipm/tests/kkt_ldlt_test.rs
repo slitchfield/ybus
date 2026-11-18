@@ -7,7 +7,7 @@
 mod common;
 
 use common::{qp4_constraints, qp4_hessian, Banana, Hs71, Nonlinear2, Nonlinear3, Quadratic3};
-use ybus_ipm::kkt::KktFactorization;
+use ybus_ipm::kkt::{KktFactorization, KktOrdering};
 use ybus_ipm::mehrotra::{mehrotra, qps_mehrotra, MehrotraIteration, MehrotraOptions};
 use ybus_ipm::mips::{mips, MipsOptions};
 use ybus_ipm::problem::{Constraints, Problem, QuadraticProblem};
@@ -42,12 +42,31 @@ fn mehrotra_options(kkt: KktFactorization) -> MehrotraOptions {
     options
 }
 
-/// Both solvers on `problem` from `x0`, with LU and with LDLᵀ: LDLᵀ must end as LU does, and,
-/// where they converge, agree on the objective with small KKT residuals
+/// LDLᵀ with the matched ordering ([`KktOrdering::Matched`]), for either solver
+fn matched_mips() -> MipsOptions {
+    let mut options = mips_options(KktFactorization::Ldlt);
+    options.kkt_ordering = KktOrdering::Matched;
+    options
+}
+
+fn matched_mehrotra() -> MehrotraOptions {
+    let mut options = mehrotra_options(KktFactorization::Ldlt);
+    options.kkt_ordering = KktOrdering::Matched;
+    options
+}
+
+/// Both solvers on `problem` from `x0`, with LU, with LDLᵀ, and with LDLᵀ on the matched
+/// ordering: each LDLᵀ must end as LU does, and, where they converge, agree on the objective
+/// with small KKT residuals
 fn compare<P: Problem>(name: &str, problem: &P, x0: &[f64], constraints: &Constraints) {
-    let run = |solver: &str, kkt: KktFactorization| -> Outcome {
+    let run = |solver: &str, kkt: KktFactorization, matched: bool| -> Outcome {
         if solver == "MIPS" {
-            let s = mips(problem, constraints, x0, &mips_options(kkt)).unwrap();
+            let options = if matched {
+                matched_mips()
+            } else {
+                mips_options(kkt)
+            };
+            let s = mips(problem, constraints, x0, &options).unwrap();
             Outcome {
                 status: s.status,
                 iterations: s.iterations,
@@ -57,7 +76,12 @@ fn compare<P: Problem>(name: &str, problem: &P, x0: &[f64], constraints: &Constr
                 refinement_steps: s.refinement_steps,
             }
         } else {
-            let s = mehrotra(problem, constraints, x0, &mehrotra_options(kkt)).unwrap();
+            let options = if matched {
+                matched_mehrotra()
+            } else {
+                mehrotra_options(kkt)
+            };
+            let s = mehrotra(problem, constraints, x0, &options).unwrap();
             Outcome {
                 status: s.status,
                 iterations: s.iterations,
@@ -69,28 +93,34 @@ fn compare<P: Problem>(name: &str, problem: &P, x0: &[f64], constraints: &Constr
         }
     };
     for solver in ["MIPS", "predictor-corrector"] {
-        let lu = run(solver, KktFactorization::Lu);
-        let ldlt = run(solver, KktFactorization::Ldlt);
-        assert_eq!(ldlt.status, lu.status, "{name}, {solver}: status");
-        assert_eq!(lu.refinement_steps, 0, "{name}, {solver}: LU isn't refined");
-        let objective = (ldlt.f - lu.f).abs() / lu.f.abs().max(ldlt.f.abs()).max(1.0);
-        let residual = kkt_residuals(problem, constraints, &ldlt.x, &ldlt.multipliers)
-            .unwrap()
-            .max();
-        eprintln!(
+        let lu = run(solver, KktFactorization::Lu, false);
+        for (ordering, ldlt) in [
+            ("AMD", run(solver, KktFactorization::Ldlt, false)),
+            ("matched", run(solver, KktFactorization::Ldlt, true)),
+        ] {
+            let solver = format!("{solver}, {ordering}");
+            let solver = solver.as_str();
+            assert_eq!(ldlt.status, lu.status, "{name}, {solver}: status");
+            assert_eq!(lu.refinement_steps, 0, "{name}, {solver}: LU isn't refined");
+            let objective = (ldlt.f - lu.f).abs() / lu.f.abs().max(ldlt.f.abs()).max(1.0);
+            let residual = kkt_residuals(problem, constraints, &ldlt.x, &ldlt.multipliers)
+                .unwrap()
+                .max();
+            eprintln!(
             "{name}, {solver}: {:?} in {} iterations (LU {}), objective {objective:.1e} from LU's, \
              residual {residual:.1e}, {} refinement steps",
             ldlt.status, ldlt.iterations, lu.iterations, ldlt.refinement_steps
         );
-        if lu.status == Status::Converged {
-            assert!(
-                objective <= OBJECTIVE,
-                "{name}, {solver}: objective {objective:e}"
-            );
-            assert!(
-                residual <= RESIDUAL,
-                "{name}, {solver}: residual {residual:e}"
-            );
+            if lu.status == Status::Converged {
+                assert!(
+                    objective <= OBJECTIVE,
+                    "{name}, {solver}: objective {objective:e}"
+                );
+                assert!(
+                    residual <= RESIDUAL,
+                    "{name}, {solver}: residual {residual:e}"
+                );
+            }
         }
     }
 }

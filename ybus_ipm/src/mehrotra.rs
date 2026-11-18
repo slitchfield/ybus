@@ -87,7 +87,7 @@ use ybus_sparse::compressed_matrix::CsrMatrix;
 use crate::interior_point_error::InteriorPointError;
 use ybus_sparse::compressed_matrix::Inertia;
 
-use crate::kkt::{KktFactorization, KktSolver};
+use crate::kkt::{KktFactorization, KktOrdering, KktSolver};
 use crate::newton::WeightedGram;
 use crate::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
@@ -129,6 +129,9 @@ pub struct MehrotraOptions {
     pub max_stepsize: f64,
     /// How the KKT system is factored: LU by default, or LDLᵀ (see [`crate::kkt`])
     pub kkt_factorization: KktFactorization,
+    /// How the pivoted LDLᵀ orders the KKT matrix: AMD by default, or matched (see
+    /// [`KktOrdering`]); LU ignores it
+    pub kkt_ordering: KktOrdering,
     /// Whether to correct the KKT matrix's inertia when it's factored by LDLᵀ (see the module
     /// docs): off by default, since on the OPF survey it changed no outcome for the better and
     /// cost iterations (`docs/benchmarks/ldlt-opf-2026-11-08.md`); with LU there's no inertia,
@@ -153,6 +156,7 @@ impl Default for MehrotraOptions {
             mu_threshold: 1e-5,
             max_stepsize: 1e10,
             kkt_factorization: KktFactorization::Lu,
+            kkt_ordering: KktOrdering::Amd,
             inertia_correction: false,
         }
     }
@@ -676,7 +680,7 @@ pub fn mehrotra<P: Problem>(
     let mut converged = tolerances_met(feascond, gradcond, compcond, costcond);
     let mut failed = false;
     let mut i = 0;
-    let mut kkt = KktSolver::new(opt.kkt_factorization);
+    let mut kkt = KktSolver::new(opt.kkt_factorization, opt.kkt_ordering);
     let mut gram = WeightedGram::default();
     let mut hessian_buffer = CsrMatrix::from_triplets(0, 0, vec![]).expect("an empty matrix");
     // The inertia correction's last shift, and how many refactorizations it took
