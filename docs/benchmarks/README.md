@@ -61,6 +61,10 @@ change. Each record names the code, the machine and the method it used.
 - **The optimal power flow:** `scripts/benchmark-opf.sh [<output.csv>]` runs the `opf_survey`
   example on each case with costs, the model chosen by `YBUS_BENCH_MODEL` (`dc` or `ac`), and
   compares it with MATPOWER's MP-Core and legacy results, generating any that are missing.
+- **Warm-started OPF sequences:** `scripts/benchmark-opf-sequence.sh [<output.csv>]` runs the
+  `opf_sequence` example over cases, models, solvers, sequences (a load sweep and a seeded
+  random walk) and warm shifts, from the `YBUS_SEQUENCE_*` variables. Each step is solved cold,
+  primal-only and warm, and the last two are compared with the cold step by O3's bar.
 - **Orderings:** `scripts/benchmark-ordering.sh [<output.csv>]` factors each case's Jacobian and
   B′ under AMD and COLAMD with the `ordering_survey` example.
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example
