@@ -974,7 +974,38 @@ Each solve now starts cold, rebuilding its problem and starting from the same po
     for what they enable: warm starts, and sequences through one value with pattern changes
     refused.
 - [ ] Warm starts in the solvers (PR B)
-- [ ] Warm OPF sequences on one network (PR C)
+- [ ] **Warm OPF sequences on one network** (PR C): `solve_from` with `OpfStart` on both
+  models, the `opf_sequence` survey, and `warm_shift`'s default from it.
+  - **The rule, written 2026-11-18 before the survey,** as #59's and #82's were:
+    - **The sequences:** each case's loads swept ×0.90 to ×1.10 (21 steps), and a seeded random
+      walk of 25 steps, each bus ±2% a step. Every step is solved cold, primal-only and warm
+      at each shift, each chain from its own previous solution.
+    - **The shifts:** 1, 1e-1, 1e-2, 1e-4 and 1e-6, widened from the planned 1e-2, 1e-4 and
+      1e-6 (decided 2026-11-18). On case2383wp's DC OPF, the predictor-corrector method warm
+      from ×1.00 to ×1.02 converges from 1, 1e-1 and 1e-2 in 17, 15 and 22 iterations (31 cold),
+      and fails from 1e-4 and 1e-6 on the step-size limit. Its multipliers reach 1e5.
+    - **A warm step is acceptable** if it has the cold step's outcome and, where the cold step
+      converged, meets O3's bar against it without `LAM_Q`:
+      - the objective within 1e-6
+      - `LAM_P` within 1e-3
+      - each KKT residual within 100× the cold step's or below 1e-6
+    - **Why `LAM_Q` is reported but not barred** (decided 2026-11-18): two cold solvers already
+      differ in it. MIPS and the predictor-corrector method, each against MATPOWER, differ by
+      3.5e-4 on case118, 7.3e-3 on case300 and 9.4e-3 on case9241pegase. On case118's AC,
+      the warm and primal steps' only misses were `LAM_Q`'s, at 1.0e-3 to 1.8e-3.
+    - **On AC, a warm step reaching a different local optimum** is counted and listed per case,
+      but doesn't disqualify a shift. It means both steps converged with every residual within
+      the bar, but the objective beyond 1e-6 (its prices differ with it). The problem is
+      nonconvex, the warm start is opt-in, and neither optimum is wrong.
+    - **`warm_shift`'s default** is the shift with the fewest median iterations over all warm
+      steps, among those with no unacceptable step on DC. On AC, the steps where the cold step
+      converged count too, apart from the different local optima. Both solvers get the same
+      default. Ties go to the larger shift, which is safer. If no shift qualifies, the default
+      stays provisional and the record says why.
+    - **The cases:** tier 1 runs every shift on case9, case30, case118, case300, case2383wp,
+      case3120sp and case9241pegase, DC and AC, both solvers, both sequences. Tier 2 runs the
+      chosen shift on case13659pegase (AC), case_ACTIVSg10k (DC, AC) and case_ACTIVSg25k (DC,
+      and AC on the predictor-corrector method only).
 - [ ] Warm starts across outages (PR D)
 
 ## References
