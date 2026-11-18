@@ -738,7 +738,21 @@ with legacy results generated locally to explain differences.
                    - a pair placed constraint first
                    - a greedy pass that reuses a variable
                    - the ordering given to LU, caught by the MATPOWER reference test
-               - [ ] the rule, before the survey
+               - [x] **The rule, written before the survey** (2026-11-17, decided with the
+                 maintainer as #59's). For each model, DC and AC, the matched ordering becomes
+                 the predictor-corrector default (`DcOpfOptions::mehrotra()`,
+                 `AcOpfOptions::mehrotra()`) if, on all 73 cases with costs, against the same
+                 method with AMD:
+                 1. **O3's bar holds wherever it holds with AMD:**
+                    - convergence wherever MIPS converges
+                    - the objective within 1e-6 (relative) of MIPS's and MATPOWER's
+                    - KKT residuals within the tolerances
+                    - prices matching where they're unique
+                 2. **The outcomes are the same,** case by case.
+                 3. **The median `opf_ms` is faster.**
+
+                 Iterations are reported, not required. A model whose survey fails any condition
+                 keeps AMD, and the record says which condition failed.
                - [ ] the survey, the study and the defaults
                - [ ] the record, closing O4
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
