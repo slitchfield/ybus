@@ -23,7 +23,7 @@ use ybus_powerflow::case::Case;
 use ybus_powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use ybus_powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
 use ybus_powerflow::opf::KktResiduals;
-use ybus_powerflow::opf::{KktFactorization, OpfSolver};
+use ybus_powerflow::opf::{KktFactorization, KktOrdering, OpfSolver};
 
 /// The objective's bar, relative to its magnitude (at least 1)
 const OBJECTIVE: f64 = 1e-6;
@@ -235,12 +235,57 @@ fn the_defaults_run_mips() {
     //   docs/benchmarks/ldlt-amalgamation-2026-11-08.md
     assert_eq!(dc.kkt_factorization, KktFactorization::Ldlt);
     assert!(!dc.inertia_correction);
+    // DC orders it by the matched ordering, AC by AMD, as the rule written before the survey
+    //   decided (docs/benchmarks/kkt-ordering-2026-11-17.md)
+    assert_eq!(dc.kkt_ordering, KktOrdering::Matched);
     let OpfSolver::Mehrotra(ac) = AcOpfOptions::mehrotra().solver else {
         panic!("AcOpfOptions::mehrotra chooses the predictor-corrector method");
     };
     assert_eq!((ac.feastol, ac.cost_mult), (5e-6, 1e-4));
     assert_eq!(ac.kkt_factorization, KktFactorization::Ldlt);
     assert!(!ac.inertia_correction);
+    assert_eq!(ac.kkt_ordering, KktOrdering::Amd);
+}
+
+#[test]
+fn the_matched_ordering_delays_fewer_pivots_with_the_same_outcome() {
+    // On case118's DC and AC OPF by the predictor-corrector method on LDLᵀ: the matched
+    //   ordering (KktOrdering::Matched) delays fewer pivots than AMD, with the same outcome and
+    //   the objective within O3's bar
+    let Some(path) = common::matpower_case("case118") else {
+        return;
+    };
+    let case = Case::from_path(&path).unwrap();
+    let matched = |solver: OpfSolver| solver.with_kkt_ordering(KktOrdering::Matched);
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0);
+
+    let mut amd_options = DcOpfOptions::mehrotra();
+    amd_options.solver = amd_options.solver.with_kkt_ordering(KktOrdering::Amd);
+    let amd = dc_opf_with_options(&case, &amd_options).unwrap();
+    let mut options = DcOpfOptions::mehrotra();
+    options.solver = matched(options.solver);
+    let ordered = dc_opf_with_options(&case, &options).unwrap();
+    assert_eq!(ordered.status, amd.status);
+    assert!(close(ordered.objective, amd.objective));
+    assert!(
+        ordered.solver.kkt.delays < amd.solver.kkt.delays,
+        "DC: {:?} vs {:?}",
+        ordered.solver.kkt,
+        amd.solver.kkt
+    );
+
+    let amd = ac_opf_with_options(&case, &AcOpfOptions::mehrotra()).unwrap();
+    let mut options = AcOpfOptions::mehrotra();
+    options.solver = matched(options.solver);
+    let ordered = ac_opf_with_options(&case, &options).unwrap();
+    assert_eq!(ordered.status, amd.status);
+    assert!(close(ordered.objective, amd.objective));
+    assert!(
+        ordered.solver.kkt.delays < amd.solver.kkt.delays,
+        "AC: {:?} vs {:?}",
+        ordered.solver.kkt,
+        amd.solver.kkt
+    );
 }
 
 #[test]

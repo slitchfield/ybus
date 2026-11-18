@@ -29,6 +29,7 @@ change. Each record names the code, the machine and the method it used.
 | [`opf-evaluation-2026-11-16.md`](opf-evaluation-2026-11-16.md) | The AC OPF's evaluation through plans kept for the solve (phase O4, target 2), bit for bit the same on both solvers: the predictor-corrector method 1.38–1.48× faster on the large profiled cases, the evaluation itself 2.6–2.8×, and the zero-flow ties that made a fallback run on every iteration. |
 | [`kkt-assembly-2026-11-17.md`](kkt-assembly-2026-11-17.md) | The solvers' Newton system and KKT assembly kept planned, and buffer-taking `Problem` methods (phase O4, target 3), bit for bit on both solvers and models: the KKT assembly 10–20× smaller, the predictor-corrector method 1.20–1.34× faster on AC, MIPS 1.03–1.16×. |
 | [`ldlt-kernel-2026-11-17.md`](ldlt-kernel-2026-11-17.md) | The LDLᵀ's dense kernel updating only its lower triangle (phase O4, target 4), bit for bit: the kernel stage 1.23–2.00× faster, the AC predictor-corrector solves 1.11–1.26×; and a blocked update, also bit for bit, tried and dropped as slower at these front sizes. |
+| [`kkt-ordering-2026-11-17.md`](kkt-ordering-2026-11-17.md) | The matched KKT ordering for the pivoted LDLᵀ (phase O4, target 4), and the ordering study that closes O4: delays 7.4× (DC) and 22× (AC) fewer, fill 19–21% less; the DC predictor-corrector default switched by the rule written before the survey (1.14–1.30× faster), AC kept on AMD for one differing outcome. |
 
 ## Measuring
 

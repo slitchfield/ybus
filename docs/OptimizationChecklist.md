@@ -307,7 +307,8 @@ with legacy results generated locally to explain differences.
 - [ ] **The CPU.** Parallelism within one solve (refills, mismatches and flows with rayon), SIMD
       in the hot kernels, cache-friendlier layouts, and level-scheduled or supernodal triangular
       solves if the profiles point there. Each measured against the current records, with the
-      results unchanged or within an agreed bar.
+      results unchanged or within an agreed bar. **The untried parts moved to phase O5**
+      (2026-11-17): rayon within one solve, SIMD, layouts and the triangular solves.
       - [x] **N-1 outages without per-outage allocation** (target 1;
         [`dc-contingency-allocation-2026-11-04.md`](benchmarks/dc-contingency-allocation-2026-11-04.md)):
         - **Changes:** reachability from a bridge forest built once per model, instead of an
@@ -666,7 +667,7 @@ with legacy results generated locally to explain differences.
                - **The KKT assembly** is 10–20× smaller everywhere, at 0.2–3.2% of each solve.
                - **Next:** target 4. The LDLᵀ's dense kernel is now 27.6% of case9241pegase's
                  AC predictor-corrector solve.
-          4. the kernel and the KKT ordering. Planned (2026-11-17) as two PRs: the dense kernel,
+          4. [x] the kernel and the KKT ordering. Planned (2026-11-17) as two PRs: the dense kernel,
              then the ordering.
              - **The kernel, bit for bit:** found while planning, both of its changes keep the
                same arithmetic. Each trailing entry's updates are a fixed sequence of
@@ -706,10 +707,90 @@ with legacy results generated locally to explain differences.
                  - **The temporary reference kernel is removed.** It's at `9734167`, to
                    restore for any later change to the kernel.
                - **Next:** the KKT-aware ordering, the second PR.
-- [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
+             - **The KKT-aware ordering** (planned 2026-11-17): Duff and Pralet's matched
+               ordering as an option, made a default only by a rule written before its survey.
+               The survey also closes the ordering study. In six commits:
+               - [x] **Analyses with a given permutation:** `analyze_cholesky_with_permutation`
+                 and `analyze_ldlt_with_permutation` in `ybus_sparse`, as LU's
+                 `analyze_lu_with_permutation` already was. Given AMD's own permutation, each
+                 gives AMD's analysis.
+               - [x] **The KKT factorizations' statistics:** `KktStatistics` on `Solution`
+                 (`solution.kkt`), with the factorizations, delayed pivots, 2×2 pivots and
+                 factor entries totalled over a solve, the inertia correction's
+                 refactorizations included. `opf_survey` gains the four columns. These are
+                 committed rather than a temporary instrument, decided with the maintainer, so
+                 any later ordering change surveys the same way. The 72-case snapshot is
+                 unchanged.
+               - [x] **The matched ordering:** `KktOrdering { Amd, Matched }` on both solvers'
+                 options (`kkt_ordering`, AMD by default; LU ignores it),
+                 `OpfSolver::with_kkt_ordering`, `opf_survey --kkt-ordering` and
+                 `YBUS_BENCH_KKT_ORDERING`.
+                 - **The method:**
+                   - each constraint row is matched to a variable, greedily by `|Jg|` and then by
+                     augmenting paths, so the matching is maximum
+                   - each pair is merged into one node, and the merged graph ordered by AMD
+                   - each pair is placed as its variable, then its constraint
+                 - **On case118, against AMD,** with the same iterations and objective:
+                   - **DC:** 44 → 20 delays, 13,516 → 13,255 factor entries
+                   - **AC:** 303 → 115 delays, 787 → 112 2×2 pivots, 90,629 → 83,894 factor
+                     entries
+                 - **With AMD the default,** the 72-case snapshot is unchanged.
+                 - **Planted bugs caught:**
+                   - a pair placed constraint first
+                   - a greedy pass that reuses a variable
+                   - the ordering given to LU, caught by the MATPOWER reference test
+               - [x] **The rule, written before the survey** (2026-11-17, decided with the
+                 maintainer as #59's). For each model, DC and AC, the matched ordering becomes
+                 the predictor-corrector default (`DcOpfOptions::mehrotra()`,
+                 `AcOpfOptions::mehrotra()`) if, on all 73 cases with costs, against the same
+                 method with AMD:
+                 1. **O3's bar holds wherever it holds with AMD:**
+                    - convergence wherever MIPS converges
+                    - the objective within 1e-6 (relative) of MIPS's and MATPOWER's
+                    - KKT residuals within the tolerances
+                    - prices matching where they're unique
+                 2. **The outcomes are the same,** case by case.
+                 3. **The median `opf_ms` is faster.**
+
+                 Iterations are reported, not required. A model whose survey fails any condition
+                 keeps AMD, and the record says which condition failed.
+               - [x] **The survey, and the defaults the rule gives** (all 73 cases, DC and AC,
+                 the predictor-corrector method on LDLᵀ with AMD and with matched, and on LU,
+                 and MIPS on LU).
+                 - **DC: the rule holds, so `DcOpfOptions::mehrotra()` now orders by the matched
+                   ordering.**
+                   1. O3's bar is met on 58 of 58 where AMD meets it.
+                   2. The outcomes are the same on all 73.
+                   3. It's 1.14× faster in the median, and 1.27× in total.
+                 - **AC: the rule fails on its second condition, so `AcOpfOptions::mehrotra()`
+                   keeps AMD.** case13659pegase ends at the iteration limit with AMD (150) and in
+                   a numerical failure with matched (147). Neither converges, but the outcomes
+                   differ, and the rule asks them to be the same.
+                   - **The rule's other conditions held:** O3's bar on 30 of 30, and 1.09×
+                     faster in the median and 1.17× in total.
+                   - **Not revised after the fact.** A later rule, written before another survey,
+                     could treat two failures as the same outcome.
+                 - **The snapshot changes only in its DC predictor-corrector column,** on 67 of 72
+                   cases. MIPS and AC are untouched.
+               - [x] **The record**
+                 ([`kkt-ordering-2026-11-17.md`](benchmarks/kkt-ordering-2026-11-17.md)), which
+                 closes O4:
+                 - **Delays:** 7.4× fewer on DC and 22× fewer on AC, with 19–21% less fill.
+                 - **The DC default:** 1.14–1.30× faster.
+                 - **The study:** AMD and matched on LDLᵀ, and COLAMD on LU, over 64 DC and 49 AC
+                   cases.
+- [x] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
       augmented KKT systems.
+      - [x] **Reduced against augmented: closed by decision (2026-11-17).** The solvers keep
+        MIPS's reduced `[W Jgᵀ; Jg 0]`, with the inequalities folded into `W` and the right-hand
+        side, because:
+        - MIPS's parity with MATPOWER needs it
+        - the augmented system is larger, by the inequalities' rows
+        - it needs the same 2×2 pivoting
+
+        Not implemented.
       - [x] **The analysis kept while the pattern holds** (target 1;
         [`kkt-analysis-2026-11-07.md`](benchmarks/kkt-analysis-2026-11-07.md)):
         - **The change:** both solvers share `KktAnalysis`, which analyzes the KKT matrix once
@@ -828,20 +909,31 @@ with legacy results generated locally to explain differences.
               - the kernel's cost per front, which would let DC qualify;
               - a KKT-aware ordering for the structural delays;
               - a globalization for the predictor-corrector method.
-- [ ] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
+- [x] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
       compare against. MIPS's LU switched from AMD to COLAMD in O1's PR 2: with zero diagonals
       in the equality block, AMD's factors filled 14 million entries on `case_ACTIVSg10k`
       (24 s per factorization) against COLAMD's 640,000 (0.036 s). COLAMD lost one iteration-count
       match (case2736sp's DC OPF, 44 to MATPOWER's 45). The study would cover AMD, COLAMD,
       orderings that keep the KKT structure (constraints after the variables they touch), LDLᵀ
       and UMFPACK-like strategies, by fill, time and agreement with MATPOWER.
+      - **Done in target 4's ordering survey**
+        ([`kkt-ordering-2026-11-17.md`](benchmarks/kkt-ordering-2026-11-17.md)):
+        - **The matched ordering** beats AMD on LDLᵀ on every measure but AC's one differing
+          outcome.
+        - **COLAMD on LU** fills 2–3× more than either, and stays MIPS's, for MATPOWER parity.
+        - **UMFPACK-like strategies weren't pursued:** the multifrontal LDLᵀ already plays their
+          part.
 - [ ] **Parallel and GPU.** Batched OPF solves with rayon, and a GPU KKT factorization if phase
       O2's spike supports one; warm starts across related problems, such as outage sequences.
-      Recorded.
+      Recorded. **Moved to phase O5** (rayon, SIMD and GPU), with O2's untried "The CPU" ideas;
+      O5's plan comes next.
+
+**Phase O4 is complete** (PRs #53–#62 and #79–#81, and this one, 2026-11-17). Its open item,
+"Parallel and GPU", continues in O5.
 
 ## References
 
-Each was checked online (Crossref) on 2026-11-03.
+Each was checked online (Crossref) on 2026-11-03, and the last on 2026-11-17.
 
 - H. Wang, C. E. Murillo-Sánchez, R. D. Zimmerman and R. J. Thomas, "On computational issues of
   market-based optimal power flow," *IEEE Trans. Power Syst.* 22(3):1185–1193, 2007.
@@ -875,3 +967,7 @@ Each was checked online (Crossref) on 2026-11-03.
   using voltage rectangular coordinates," *IEEE Trans. Power Syst.* 13(4):1211–1218, 1998.
   [doi:10.1109/59.736231](https://doi.org/10.1109/59.736231) (checked on Crossref on
   2026-11-07)
+- I. S. Duff and S. Pralet, "Strategies for scaling and pivoting for sparse symmetric indefinite
+  problems," *SIAM J. Matrix Anal. Appl.* 27(2):313–340, 2005.
+  [doi:10.1137/04061043X](https://doi.org/10.1137/04061043X). The matched ordering of the KKT
+  matrix (`ybus_ipm::kkt::KktOrdering::Matched`).

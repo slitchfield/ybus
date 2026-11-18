@@ -4,6 +4,7 @@
 //! the elimination tree of `P A Pᵀ` and the exact pattern of its Cholesky factor `L`. The
 //! factorization then only computes values, so its cost and memory are known in advance.
 
+use super::access::check_permutation;
 use super::ordering::Adjacency;
 use num_complex::ComplexFloat;
 use num_traits::{Float, NumCast};
@@ -53,6 +54,25 @@ impl<T: Scalar> CsrMatrix<T> {
             });
         }
         let perm = self.ordering(ordering)?;
+        Ok(self.analyze_cholesky_permuted(perm))
+    }
+
+    /// [`analyze_cholesky`](Self::analyze_cholesky) with a permutation of the caller's instead
+    /// of one an [`Ordering`] computes, in the convention of `ordering()` and
+    /// `permute_symmetric`: row and column `k` of `P A Pᵀ` are row and column `perm[k]` of `A`.
+    /// For an ordering that needs more than the pattern, such as one that pairs a KKT matrix's
+    /// constraints with its variables.
+    ///
+    /// Returns `SparseError::NotSquare` for a non-square matrix, and
+    /// `SparseError::InvalidPermutation` unless `perm` is a permutation of its order.
+    pub fn analyze_cholesky_with_permutation(
+        &self,
+        perm: Vec<usize>,
+    ) -> Result<SymbolicCholesky, SparseError> {
+        if !self.is_square() {
+            return Err(SparseError::NotSquare { shape: self.shape });
+        }
+        check_permutation(&perm, self.shape.0)?;
         Ok(self.analyze_cholesky_permuted(perm))
     }
 

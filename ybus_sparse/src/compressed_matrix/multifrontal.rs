@@ -594,6 +594,23 @@ impl<T: Scalar> CsrMatrix<T> {
     pub fn analyze_ldlt(&self, ordering: Ordering) -> Result<SymbolicLdlt, SparseError> {
         Ok(SymbolicLdlt::new(self.analyze_cholesky(ordering)?))
     }
+
+    /// [`analyze_ldlt`](Self::analyze_ldlt) with a permutation of the caller's, as
+    /// [`analyze_cholesky_with_permutation`](Self::analyze_cholesky_with_permutation) takes it,
+    /// with the default amalgamation. The amalgamation's postorder renumbers the columns but
+    /// keeps every column after its descendants in the elimination tree, so an ordering that
+    /// places one position after another it's coupled to keeps that order.
+    ///
+    /// Returns `SparseError::NotSquare` for a non-square matrix, and
+    /// `SparseError::InvalidPermutation` unless `perm` is a permutation of its order.
+    pub fn analyze_ldlt_with_permutation(
+        &self,
+        perm: Vec<usize>,
+    ) -> Result<SymbolicLdlt, SparseError> {
+        Ok(SymbolicLdlt::new(
+            self.analyze_cholesky_with_permutation(perm)?,
+        ))
+    }
 }
 
 impl<T: Scalar + ComplexFloat> CsrMatrix<T> {

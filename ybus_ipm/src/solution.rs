@@ -3,6 +3,7 @@
 //! which solver found it.
 
 use crate::interior_point_error::InteriorPointError;
+use crate::kkt::KktStatistics;
 use crate::mehrotra::MehrotraIteration;
 use crate::mips::MipsIteration;
 use crate::problem::{Constraints, Problem};
@@ -62,6 +63,9 @@ pub struct Solution {
     /// How many times the KKT matrix was refactored with a larger `δ_w` to correct its inertia:
     /// only the predictor-corrector method corrects it, with LDLᵀ, so 0 otherwise
     pub inertia_corrections: usize,
+    /// The KKT factorizations' statistics: how many, and their delayed pivots, 2×2 pivots and
+    /// factor entries, totalled over the solve
+    pub kkt: KktStatistics,
 }
 
 impl Solution {

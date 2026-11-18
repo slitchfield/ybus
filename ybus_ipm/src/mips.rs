@@ -11,7 +11,7 @@
 use ybus_sparse::compressed_matrix::{CsrMatrix, Ordering};
 
 use crate::interior_point_error::InteriorPointError;
-use crate::kkt::{KktFactorization, KktSolver};
+use crate::kkt::{KktFactorization, KktOrdering, KktSolver};
 use crate::newton::WeightedGram;
 use crate::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
@@ -79,6 +79,9 @@ pub struct MipsOptions {
     /// port matches; LDLᵀ only swaps the factorization, with no inertia correction (see
     /// [`crate::kkt`])
     pub kkt_factorization: KktFactorization,
+    /// How the pivoted LDLᵀ orders the KKT matrix: AMD by default, or matched (see
+    /// [`KktOrdering`]); LU ignores it
+    pub kkt_ordering: KktOrdering,
 }
 
 impl Default for MipsOptions {
@@ -101,6 +104,7 @@ impl Default for MipsOptions {
             mu_threshold: 1e-5,
             max_stepsize: 1e10,
             kkt_factorization: KktFactorization::Lu,
+            kkt_ordering: KktOrdering::Amd,
         }
     }
 }
@@ -426,7 +430,7 @@ pub fn mips<P: Problem>(
     let mut converged = tolerances_met(feascond, gradcond, compcond, costcond);
     let mut failed = false;
     let mut i = 0;
-    let mut kkt = KktSolver::new(opt.kkt_factorization);
+    let mut kkt = KktSolver::new(opt.kkt_factorization, opt.kkt_ordering);
     let mut gram = WeightedGram::default();
     let mut hessian_buffer = CsrMatrix::from_triplets(0, 0, vec![]).expect("an empty matrix");
 
@@ -649,6 +653,7 @@ pub fn mips<P: Problem>(
         history: History::Mips(history),
         analyses: kkt.analyses(),
         refinement_steps: kkt.refinement_steps(),
+        kkt: kkt.statistics(),
         inertia_corrections: 0,
     })
 }

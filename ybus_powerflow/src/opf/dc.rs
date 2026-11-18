@@ -24,7 +24,7 @@
 
 use std::f64::consts::PI;
 
-use ybus_ipm::kkt::KktFactorization;
+use ybus_ipm::kkt::{KktFactorization, KktOrdering};
 use ybus_ipm::mehrotra::{qps_mehrotra, MehrotraOptions};
 use ybus_ipm::mips::{qps_mips, MipsOptions};
 use ybus_ipm::problem::{Constraints, QuadraticProblem};
@@ -66,10 +66,16 @@ impl DcOpfOptions {
     /// kept with its analysis and its fronts amalgamated, it met phase O3's bar wherever LU did on
     /// every MATPOWER case with costs, with the same outcomes and iterations, 1.15× faster in the
     /// median and 3.14× in total (`docs/benchmarks/ldlt-amalgamation-2026-11-08.md`).
+    ///
+    /// The LDLᵀ orders the KKT matrix by the matched ordering (`KktOrdering::Matched`), which
+    /// met the rule set before its survey: O3's bar wherever AMD met it, the same outcomes on
+    /// every case, and 1.14× faster in the median, 1.27× in total
+    /// (`docs/benchmarks/kkt-ordering-2026-11-17.md`).
     pub fn mehrotra() -> Self {
         let mut mehrotra = MehrotraOptions::default();
         mehrotra.feastol = 5e-6;
         mehrotra.kkt_factorization = KktFactorization::Ldlt;
+        mehrotra.kkt_ordering = KktOrdering::Matched;
         DcOpfOptions {
             solver: OpfSolver::Mehrotra(mehrotra),
         }
