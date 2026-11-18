@@ -966,6 +966,11 @@ Each solve now starts cold, rebuilding its problem and starting from the same po
     - a model solving a copy with loads scaled ×0.95 or ×1.04 matches the one-shot solve of the
       copy, on case9, case30, case118 and case2383wp, both solvers, AC and DC
   - **Planted bug caught:** a solve keeping the model's own loads.
+  - **What it saves on its own: little**
+    ([`opf-models-2026-11-18.md`](benchmarks/opf-models-2026-11-18.md)). On an 11-solve load
+    sweep the speedup is 0.98–1.04×, since a solve's own work dwarfs its setup. The models are
+    for what they enable: warm starts, and sequences through one value with pattern changes
+    refused.
 - [ ] Warm starts in the solvers (PR B)
 - [ ] Warm OPF sequences on one network (PR C)
 - [ ] Warm starts across outages (PR D)
