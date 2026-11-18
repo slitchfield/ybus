@@ -93,7 +93,7 @@ use crate::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
 };
 use crate::solution::{History, Multipliers, Solution, Status};
-use crate::start::Start;
+use crate::start::{self, Start};
 use crate::vector::{dot, norm_inf};
 
 /// The predictor-corrector method's options, with MIPS's termination defaults.
@@ -117,7 +117,8 @@ pub struct MehrotraOptions {
     /// The slacks' and multipliers' smallest starting value, as MIPS's `z0`
     pub z0: f64,
     /// A warm start's shift ([`Start::Warm`]): every slack and inequality multiplier, the
-    /// bounds' included, starts at least this far from zero, in the problem's own units. Unused
+    /// bounds' included, starts at least this far from zero, in the solver's scaled units
+    /// (the objective's times `cost_mult`). Unused
     /// by a cold start. The default, 1e-4, is provisional until the OPF sequences' survey
     /// measures it.
     pub warm_shift: f64,
@@ -645,7 +646,7 @@ pub fn mehrotra_from<P: Problem>(
     let mut lam = vec![0.0; neq];
     if let Some(warm) = warm_start {
         (lam, p) = warm_pairs(
-            &warm.multipliers,
+            &start::scaled(&warm.multipliers, opt.cost_mult),
             &e.h,
             &split,
             (neqnln, niqnln),

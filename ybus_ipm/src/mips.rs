@@ -17,7 +17,7 @@ use crate::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
 };
 use crate::solution::{History, Multipliers, Solution, Status};
-use crate::start::Start;
+use crate::start::{self, Start};
 use crate::vector::{dot, norm_inf};
 
 /// The fill-reducing ordering for the KKT system's LU factorization: COLAMD.
@@ -66,7 +66,8 @@ pub struct MipsOptions {
     /// The slack variables' starting value (`z0`)
     pub z0: f64,
     /// A warm start's shift ([`Start::Warm`]): every slack and inequality multiplier starts at
-    /// least this far from zero, in the problem's own units. Unused by a cold start. The default,
+    /// least this far from zero, in the solver's scaled units (the objective's times
+    /// `cost_mult`). Unused by a cold start. The default,
     /// 1e-4, is provisional until the OPF sequences' survey measures it.
     pub warm_shift: f64,
     /// The smallest acceptable primal or dual step length (`alpha_min`)
@@ -434,7 +435,7 @@ pub fn mips_from<P: Problem>(
     }
     if let Start::Warm(warm) = start {
         (lam, z, mu) = warm_mips(
-            &warm.multipliers,
+            &start::scaled(&warm.multipliers, opt.cost_mult),
             &e.h,
             (&ieq, &ilt, &igt, &ibx),
             (nx, na),
