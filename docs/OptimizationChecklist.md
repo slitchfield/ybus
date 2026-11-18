@@ -307,7 +307,8 @@ with legacy results generated locally to explain differences.
 - [ ] **The CPU.** Parallelism within one solve (refills, mismatches and flows with rayon), SIMD
       in the hot kernels, cache-friendlier layouts, and level-scheduled or supernodal triangular
       solves if the profiles point there. Each measured against the current records, with the
-      results unchanged or within an agreed bar.
+      results unchanged or within an agreed bar. **The untried parts moved to phase O5**
+      (2026-11-17): rayon within one solve, SIMD, layouts and the triangular solves.
       - [x] **N-1 outages without per-outage allocation** (target 1;
         [`dc-contingency-allocation-2026-11-04.md`](benchmarks/dc-contingency-allocation-2026-11-04.md)):
         - **Changes:** reachability from a bridge forest built once per model, instead of an
@@ -666,7 +667,7 @@ with legacy results generated locally to explain differences.
                - **The KKT assembly** is 10–20× smaller everywhere, at 0.2–3.2% of each solve.
                - **Next:** target 4. The LDLᵀ's dense kernel is now 27.6% of case9241pegase's
                  AC predictor-corrector solve.
-          4. the kernel and the KKT ordering. Planned (2026-11-17) as two PRs: the dense kernel,
+          4. [x] the kernel and the KKT ordering. Planned (2026-11-17) as two PRs: the dense kernel,
              then the ordering.
              - **The kernel, bit for bit:** found while planning, both of its changes keep the
                same arithmetic. Each trailing entry's updates are a fixed sequence of
@@ -771,11 +772,25 @@ with legacy results generated locally to explain differences.
                      could treat two failures as the same outcome.
                  - **The snapshot changes only in its DC predictor-corrector column,** on 67 of 72
                    cases. MIPS and AC are untouched.
-               - [ ] the record, closing O4
-- [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
+               - [x] **The record**
+                 ([`kkt-ordering-2026-11-17.md`](benchmarks/kkt-ordering-2026-11-17.md)), which
+                 closes O4:
+                 - **Delays:** 7.4× fewer on DC and 22× fewer on AC, with 19–21% less fill.
+                 - **The DC default:** 1.14–1.30× faster.
+                 - **The study:** AMD and matched on LDLᵀ, and COLAMD on LU, over 64 DC and 49 AC
+                   cases.
+- [x] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
       augmented KKT systems.
+      - [x] **Reduced against augmented: closed by decision (2026-11-17).** The solvers keep
+        MIPS's reduced `[W Jgᵀ; Jg 0]`, with the inequalities folded into `W` and the right-hand
+        side, because:
+        - MIPS's parity with MATPOWER needs it
+        - the augmented system is larger, by the inequalities' rows
+        - it needs the same 2×2 pivoting
+
+        Not implemented.
       - [x] **The analysis kept while the pattern holds** (target 1;
         [`kkt-analysis-2026-11-07.md`](benchmarks/kkt-analysis-2026-11-07.md)):
         - **The change:** both solvers share `KktAnalysis`, which analyzes the KKT matrix once
@@ -894,16 +909,27 @@ with legacy results generated locally to explain differences.
               - the kernel's cost per front, which would let DC qualify;
               - a KKT-aware ordering for the structural delays;
               - a globalization for the predictor-corrector method.
-- [ ] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
+- [x] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
       compare against. MIPS's LU switched from AMD to COLAMD in O1's PR 2: with zero diagonals
       in the equality block, AMD's factors filled 14 million entries on `case_ACTIVSg10k`
       (24 s per factorization) against COLAMD's 640,000 (0.036 s). COLAMD lost one iteration-count
       match (case2736sp's DC OPF, 44 to MATPOWER's 45). The study would cover AMD, COLAMD,
       orderings that keep the KKT structure (constraints after the variables they touch), LDLᵀ
       and UMFPACK-like strategies, by fill, time and agreement with MATPOWER.
+      - **Done in target 4's ordering survey**
+        ([`kkt-ordering-2026-11-17.md`](benchmarks/kkt-ordering-2026-11-17.md)):
+        - **The matched ordering** beats AMD on LDLᵀ on every measure but AC's one differing
+          outcome.
+        - **COLAMD on LU** fills 2–3× more than either, and stays MIPS's, for MATPOWER parity.
+        - **UMFPACK-like strategies weren't pursued:** the multifrontal LDLᵀ already plays their
+          part.
 - [ ] **Parallel and GPU.** Batched OPF solves with rayon, and a GPU KKT factorization if phase
       O2's spike supports one; warm starts across related problems, such as outage sequences.
-      Recorded.
+      Recorded. **Moved to phase O5** (rayon, SIMD and GPU), with O2's untried "The CPU" ideas;
+      O5's plan comes next.
+
+**Phase O4 is complete** (PRs #53–#62 and #79–#81, and this one, 2026-11-17). Its open item,
+"Parallel and GPU", continues in O5.
 
 ## References
 
