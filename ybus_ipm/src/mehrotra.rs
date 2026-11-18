@@ -93,6 +93,7 @@ use crate::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
 };
 use crate::solution::{History, Multipliers, Solution, Status};
+use crate::start::Start;
 use crate::vector::{dot, norm_inf};
 
 /// The predictor-corrector method's options, with MIPS's termination defaults.
@@ -115,6 +116,11 @@ pub struct MehrotraOptions {
     pub xi: f64,
     /// The slacks' and multipliers' smallest starting value, as MIPS's `z0`
     pub z0: f64,
+    /// A warm start's shift ([`Start::Warm`]): every slack and inequality multiplier, the
+    /// bounds' included, starts at least this far from zero, in the problem's own units. Unused
+    /// by a cold start. The default, 1e-4, is provisional until the OPF sequences' survey
+    /// measures it.
+    pub warm_shift: f64,
     /// How far inside a bound `x0` is moved, relative to the bound's magnitude (at least 1)
     pub bound_push: f64,
     /// The most a starting point is moved inside a variable's two bounds, as a fraction of the
@@ -150,6 +156,7 @@ impl Default for MehrotraOptions {
             cost_mult: 1.0,
             xi: 0.99995,
             z0: 1.0,
+            warm_shift: 1e-4,
             bound_push: 1e-2,
             bound_frac: 1e-2,
             alpha_min: 1e-8,
@@ -476,6 +483,33 @@ pub fn mehrotra<P: Problem>(
     x0: &[f64],
     options: &MehrotraOptions,
 ) -> Result<Solution, InteriorPointError> {
+    mehrotra_from(problem, constraints, Start::Cold(x0), options)
+}
+
+/// [`mehrotra`] from `start`: a cold start from a point, exactly [`mehrotra`]'s, or a warm start
+/// from a previous solution's point and multipliers (see [`crate::start`]).
+///
+/// A warm start moves the point only `warm_shift` inside its bounds, keeps the equality
+/// multipliers, recomputes the slacks from the point, and raises every slack and inequality
+/// multiplier, the bounds' included, to at least `warm_shift`. Returns [`mehrotra`]'s errors,
+/// `InvalidOption` for a negative or non-finite `warm_shift`, and `Dimension` for a warm start
+/// whose point or multipliers don't fit the problem.
+pub fn mehrotra_from<P: Problem>(
+    problem: &P,
+    constraints: &Constraints,
+    start: Start<'_>,
+    options: &MehrotraOptions,
+) -> Result<Solution, InteriorPointError> {
+    // The warm start, if any, named apart from the cold start's own `start` below
+    let (x0, warm_start): (&[f64], _) = match start {
+        Start::Cold(x0) => (x0, None),
+        Start::Warm(warm) => {
+            if !(options.warm_shift >= 0.0 && options.warm_shift.is_finite()) {
+                return Err(InteriorPointError::InvalidOption { name: "warm_shift" });
+            }
+            (&warm.x, Some(warm))
+        }
+    };
     let opt = options;
     if !(0.5..1.0).contains(&opt.xi) {
         return Err(InteriorPointError::InvalidOption { name: "xi" });
@@ -503,14 +537,20 @@ pub fn mehrotra<P: Problem>(
     // `Ai` is constant, so its transpose is made once
     let ai_t = split.ai.clone().transpose().to_csr();
 
-    // The starting point, strictly inside the bounds
+    // The starting point, strictly inside the bounds: a cold start `bound_push` relative to
+    //   each bound, a warm start only `warm_shift`, so that a previous solution's active bounds
+    //   move as little as its other complementary pairs
+    let push_from = |bound: f64| match warm_start {
+        None => opt.bound_push * bound.abs().max(1.0),
+        Some(_) => opt.warm_shift,
+    };
     let mut x = x0.to_vec();
     for (j, &k) in split.lo.iter().enumerate() {
-        let push = opt.bound_push * split.xmin[j].abs().max(1.0);
+        let push = push_from(split.xmin[j]);
         x[k] = x[k].max(split.xmin[j] + push);
     }
     for (j, &k) in split.up.iter().enumerate() {
-        let push = opt.bound_push * split.xmax[j].abs().max(1.0);
+        let push = push_from(split.xmax[j]);
         x[k] = x[k].min(split.xmax[j] - push);
     }
     for (j, &k) in split.lo.iter().enumerate() {
@@ -518,7 +558,7 @@ pub fn mehrotra<P: Problem>(
             // Both bounds: within bound_frac of the distance between them, at most
             let (lower, upper) = (split.xmin[j], split.xmax[i]);
             let inset = opt.bound_frac * (upper - lower);
-            let push = |bound: f64| (opt.bound_push * bound.abs().max(1.0)).min(inset);
+            let push = |bound: f64| push_from(bound).min(inset);
             x[k] = x0[k].max(lower + push(lower)).min(upper - push(upper));
         }
     }
@@ -603,6 +643,16 @@ pub fn mehrotra<P: Problem>(
         s_u,
     };
     let mut lam = vec![0.0; neq];
+    if let Some(warm) = warm_start {
+        (lam, p) = warm_pairs(
+            &warm.multipliers,
+            &e.h,
+            &split,
+            (neqnln, niqnln),
+            p,
+            opt.warm_shift,
+        )?;
+    }
     let pairs = p.count();
 
     // The Lagrangian's gradient, r_d = ∇f + Jgᵀλ + Jhᵀμ − π_l + π_u
@@ -963,8 +1013,73 @@ pub fn mehrotra<P: Problem>(
         unscale(&p.pi_u),
     );
 
-    // The multipliers in MIPS's convention: the nonlinear constraints', then per row of A, and
-    //   per variable
+    // The multipliers in MIPS's convention
+    let multipliers = report(&lam, &mu, &pi_l, &pi_u, &split, nx, (neqnln, niqnln));
+    Ok(Solution {
+        x,
+        f: e.f / opt.cost_mult,
+        status,
+        iterations: i,
+        multipliers,
+        history: History::Mehrotra(history),
+        analyses: kkt.analyses(),
+        refinement_steps: kkt.refinement_steps(),
+        kkt: kkt.statistics(),
+        inertia_corrections: corrections,
+    })
+}
+
+/// The predictor-corrector method for a quadratic or linear program: minimizes
+/// `½ xᵀ H x + cᵀ x` subject to `constraints`, from `x0` (zeros if absent), as
+/// [`qps_mips`](crate::mips::qps_mips) wraps MIPS.
+///
+/// Returns `InteriorPointError::UnboundedLinearProgram` for a linear program with no constraints
+/// or bounds, and the errors of [`mehrotra`].
+pub fn qps_mehrotra(
+    qp: &QuadraticProblem,
+    constraints: &Constraints,
+    x0: Option<&[f64]>,
+    options: &MehrotraOptions,
+) -> Result<Solution, InteriorPointError> {
+    let zeros = vec![0.0; qp.c.len()];
+    qps_mehrotra_from(qp, constraints, Start::Cold(x0.unwrap_or(&zeros)), options)
+}
+
+/// [`qps_mehrotra`] from `start` (see [`mehrotra_from`]), with [`qps_mehrotra`]'s errors.
+pub fn qps_mehrotra_from(
+    qp: &QuadraticProblem,
+    constraints: &Constraints,
+    start: Start<'_>,
+    options: &MehrotraOptions,
+) -> Result<Solution, InteriorPointError> {
+    let nx = qp.c.len();
+    if qp.h.is_none()
+        && constraints.a.as_ref().is_none_or(|a| a.shape().0 == 0)
+        && constraints.xmin.is_none()
+        && constraints.xmax.is_none()
+    {
+        return Err(InteriorPointError::UnboundedLinearProgram);
+    }
+    if let Some(h) = &qp.h {
+        if h.shape() != (nx, nx) {
+            return Err(InteriorPointError::Dimension { what: "H" });
+        }
+    }
+    mehrotra_from(qp, constraints, start, options)
+}
+
+/// The multipliers in MIPS's reported layout, from the method's internal `λ`, `μ`, `π_l` and
+/// `π_u`: the nonlinear constraints', then per row of A, and per variable, an equality's sign
+/// deciding its side. `warm_pairs` is its inverse.
+fn report(
+    lam: &[f64],
+    mu: &[f64],
+    pi_l: &[f64],
+    pi_u: &[f64],
+    split: &Split,
+    nx: usize,
+    (neqnln, niqnln): (usize, usize),
+) -> Multipliers {
     let (lam_lin, mu_lin) = (&lam[neqnln..], &mu[niqnln..]);
     let na = split.na;
     let mut mu_l = vec![0.0; na];
@@ -989,10 +1104,10 @@ pub fn mehrotra<P: Problem>(
     }
     let mut lower = vec![0.0; nx];
     let mut upper = vec![0.0; nx];
-    for (&k, &pi) in split.lo.iter().zip(&pi_l) {
+    for (&k, &pi) in split.lo.iter().zip(pi_l) {
         lower[k] = pi;
     }
-    for (&k, &pi) in split.up.iter().zip(&pi_u) {
+    for (&k, &pi) in split.up.iter().zip(pi_u) {
         upper[k] = pi;
     }
     for (j, &k) in split.fixed.iter().enumerate() {
@@ -1003,52 +1118,199 @@ pub fn mehrotra<P: Problem>(
             upper[k] = lam;
         }
     }
-    Ok(Solution {
-        x,
-        f: e.f / opt.cost_mult,
-        status,
-        iterations: i,
-        multipliers: Multipliers {
-            eq_nonlin: lam[..neqnln].to_vec(),
-            ineq_nonlin: mu[..niqnln].to_vec(),
+    Multipliers {
+        eq_nonlin: lam[..neqnln].to_vec(),
+        ineq_nonlin: mu[..niqnln].to_vec(),
+        mu_l,
+        mu_u,
+        lower,
+        upper,
+    }
+}
+
+/// A warm start's `λ` and pairs in the method's internal layout, from `multipliers` in MIPS's
+/// reported layout, the inequalities' values `h` at the (already pushed) point, and the cold
+/// start's pairs `cold`, whose bound slacks it keeps: the inverse of the report `mehrotra_from`
+/// builds at its end, with every slack and inequality multiplier, the bounds' included, raised
+/// to at least `shift`.
+///
+/// - `λ`: the nonlinear equalities', then each of A's equality rows (`ieq`) and each fixed
+///   variable, as its upper side's multiplier less its lower side's.
+/// - `μ`: the nonlinear inequalities', then A's rows as `Ai` stacks them: `ilt`, `−igt`, `ibx`,
+///   `−ibx`.
+/// - `π_l`, `π_u`: the bounded variables' `lower` and `upper`.
+fn warm_pairs(
+    multipliers: &Multipliers,
+    h: &[f64],
+    split: &Split,
+    (neqnln, niqnln): (usize, usize),
+    cold: Pairs,
+    shift: f64,
+) -> Result<(Vec<f64>, Pairs), InteriorPointError> {
+    let m = multipliers;
+    let nx = m.lower.len();
+    if m.eq_nonlin.len() != neqnln
+        || m.ineq_nonlin.len() != niqnln
+        || m.mu_l.len() != split.na
+        || m.mu_u.len() != split.na
+        || m.upper.len() != nx
+        || cold.s_l.len() != split.lo.len()
+        || split
+            .lo
+            .iter()
+            .chain(&split.up)
+            .chain(&split.fixed)
+            .any(|&k| k >= nx)
+    {
+        return Err(InteriorPointError::Dimension {
+            what: "the warm start's multipliers",
+        });
+    }
+    let raise = |values: &mut Vec<f64>| {
+        for value in values.iter_mut() {
+            *value = value.max(shift);
+        }
+    };
+    let mut lam = m.eq_nonlin.clone();
+    lam.extend(split.ieq.iter().map(|&r| m.mu_u[r] - m.mu_l[r]));
+    lam.extend(split.fixed.iter().map(|&k| m.upper[k] - m.lower[k]));
+    let mut mu = m.ineq_nonlin.clone();
+    mu.extend(split.ilt.iter().map(|&r| m.mu_u[r]));
+    mu.extend(split.igt.iter().map(|&r| m.mu_l[r]));
+    mu.extend(split.ibx.iter().map(|&r| m.mu_u[r]));
+    mu.extend(split.ibx.iter().map(|&r| m.mu_l[r]));
+    debug_assert_eq!(mu.len(), h.len());
+    raise(&mut mu);
+    let z = h.iter().map(|&h| (-h).max(shift)).collect();
+    let mut pi_l: Vec<f64> = split.lo.iter().map(|&k| m.lower[k]).collect();
+    let mut pi_u: Vec<f64> = split.up.iter().map(|&k| m.upper[k]).collect();
+    raise(&mut pi_l);
+    raise(&mut pi_u);
+    let (mut s_l, mut s_u) = (cold.s_l, cold.s_u);
+    raise(&mut s_l);
+    raise(&mut s_u);
+    Ok((
+        lam,
+        Pairs {
+            z,
+            mu,
+            s_l,
+            pi_l,
+            s_u,
+            pi_u,
+        },
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every kind of row of A (an equality, upper-only, lower-only, boxed and unbounded) and of
+    ///   bound (lower-only, upper-only, both, fixed and none)
+    fn split() -> Split {
+        let inf = f64::INFINITY;
+        let a = CsrMatrix::from_triplets(5, 5, (0..5).map(|r| (r, r, 1.0)).collect::<Vec<_>>())
+            .unwrap();
+        let constraints = Constraints {
+            a: Some(a),
+            l: Some(vec![1.0, -inf, -2.0, -3.0, -inf]),
+            u: Some(vec![1.0, 2.0, inf, 3.0, inf]),
+            xmin: Some(vec![0.0, -inf, -1.0, 0.5, -inf]),
+            xmax: Some(vec![inf, 4.0, 1.0, 0.5, inf]),
+        };
+        Split::new(&constraints, 5).unwrap()
+    }
+
+    #[test]
+    fn the_warm_mapping_is_the_reports_inverse() {
+        let split = split();
+        let (nx, nonlinear) = (5, (2, 3));
+        let mut next = 0.5;
+        let mut value = || {
+            next += 1.25;
+            next
+        };
+        let (mut mu_l, mut mu_u) = (vec![0.0; split.na], vec![0.0; split.na]);
+        for (k, &r) in split.ieq.iter().enumerate() {
+            if k % 2 == 0 {
+                mu_l[r] = value()
+            } else {
+                mu_u[r] = value()
+            }
+        }
+        for &r in &split.ilt {
+            mu_u[r] = value();
+        }
+        for &r in &split.igt {
+            mu_l[r] = value();
+        }
+        for &r in &split.ibx {
+            (mu_l[r], mu_u[r]) = (value(), value());
+        }
+        let (mut lower, mut upper) = (vec![0.0; nx], vec![0.0; nx]);
+        for &k in &split.lo {
+            lower[k] = value();
+        }
+        for &k in &split.up {
+            upper[k] = value();
+        }
+        for &k in &split.fixed {
+            upper[k] = value();
+        }
+        let m = Multipliers {
+            eq_nonlin: (0..nonlinear.0).map(|_| value() - 7.0).collect(),
+            ineq_nonlin: (0..nonlinear.1).map(|_| value()).collect(),
             mu_l,
             mu_u,
             lower,
             upper,
-        },
-        history: History::Mehrotra(history),
-        analyses: kkt.analyses(),
-        refinement_steps: kkt.refinement_steps(),
-        kkt: kkt.statistics(),
-        inertia_corrections: corrections,
-    })
-}
-
-/// The predictor-corrector method for a quadratic or linear program: minimizes
-/// `½ xᵀ H x + cᵀ x` subject to `constraints`, from `x0` (zeros if absent), as
-/// [`qps_mips`](crate::mips::qps_mips) wraps MIPS.
-///
-/// Returns `InteriorPointError::UnboundedLinearProgram` for a linear program with no constraints
-/// or bounds, and the errors of [`mehrotra`].
-pub fn qps_mehrotra(
-    qp: &QuadraticProblem,
-    constraints: &Constraints,
-    x0: Option<&[f64]>,
-    options: &MehrotraOptions,
-) -> Result<Solution, InteriorPointError> {
-    let nx = qp.c.len();
-    if qp.h.is_none()
-        && constraints.a.as_ref().is_none_or(|a| a.shape().0 == 0)
-        && constraints.xmin.is_none()
-        && constraints.xmax.is_none()
-    {
-        return Err(InteriorPointError::UnboundedLinearProgram);
+        };
+        assert!(!split.fixed.is_empty() && !split.ieq.is_empty() && !split.ibx.is_empty());
+        let niq = nonlinear.1 + split.ilt.len() + split.igt.len() + 2 * split.ibx.len();
+        let cold = Pairs {
+            z: vec![1.0; niq],
+            mu: vec![1.0; niq],
+            s_l: vec![0.25; split.lo.len()],
+            pi_l: vec![1.0; split.lo.len()],
+            s_u: vec![0.75; split.up.len()],
+            pi_u: vec![1.0; split.up.len()],
+        };
+        let (lam, p) = warm_pairs(&m, &vec![-2.0; niq], &split, nonlinear, cold, 0.0).unwrap();
+        assert_eq!(p.z, vec![2.0; niq]);
+        assert_eq!(
+            (p.s_l[0], p.s_u[0]),
+            (0.25, 0.75),
+            "the bound slacks are the point's"
+        );
+        assert_eq!(
+            report(&lam, &p.mu, &p.pi_l, &p.pi_u, &split, nx, nonlinear),
+            m
+        );
     }
-    if let Some(h) = &qp.h {
-        if h.shape() != (nx, nx) {
-            return Err(InteriorPointError::Dimension { what: "H" });
+
+    #[test]
+    fn the_warm_start_moves_every_pair_off_the_boundary() {
+        let split = split();
+        let niq = split.ilt.len() + split.igt.len() + 2 * split.ibx.len();
+        let m = Multipliers {
+            mu_l: vec![0.0; split.na],
+            mu_u: vec![0.0; split.na],
+            lower: vec![0.0; 5],
+            upper: vec![0.0; 5],
+            ..Multipliers::default()
+        };
+        let cold = Pairs {
+            z: vec![1.0; niq],
+            mu: vec![1.0; niq],
+            s_l: vec![0.0; split.lo.len()],
+            pi_l: vec![1.0; split.lo.len()],
+            s_u: vec![0.0; split.up.len()],
+            pi_u: vec![1.0; split.up.len()],
+        };
+        let (_, p) = warm_pairs(&m, &vec![0.0; niq], &split, (0, 0), cold, 1e-3).unwrap();
+        for values in [&p.z, &p.mu, &p.s_l, &p.pi_l, &p.s_u, &p.pi_u] {
+            assert!(values.iter().all(|&v| v >= 1e-3), "{values:?}");
         }
     }
-    let zeros = vec![0.0; nx];
-    mehrotra(qp, constraints, x0.unwrap_or(&zeros), options)
 }
