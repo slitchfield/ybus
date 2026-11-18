@@ -24,6 +24,9 @@ releases.
   `CscMatrix`) for the numerical work, generic over the element type, `f64` by default.
 - Arithmetic, sparse products, norms and selections, and refilling values into a fixed pattern
   through an assembly map.
+- Cholesky and LDLᵀ analyses with a permutation of the caller's
+  (`analyze_cholesky_with_permutation`, `analyze_ldlt_with_permutation`), for orderings that
+  need more than the pattern.
 - Product and sum plans (`ProductPlan`, `SumPlan`): a product or sum planned once for fixed
   patterns, then recomputed from new values bit for bit as `matmul` and `try_add` compute it,
   with no hashing, sorting or allocation.

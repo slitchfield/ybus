@@ -712,3 +712,36 @@ fn amalgamation_keeps_the_fill_bounded() {
     eprintln!("stored entries with amalgamation: up to {worst:.2}× without");
     assert!(worst < 4.0, "{worst:.2}");
 }
+
+#[test]
+fn an_analysis_with_amds_own_permutation_is_amds_analysis() {
+    // The analyses have no equality; their Debug output prints every field, so equal output
+    //   is the same analysis
+    for (seed, n, fill) in [(1, 12, 30), (2, 40, 8), (3, 90, 4)] {
+        let a = random_symmetric(n, fill, seed);
+        let perm = a.ordering(Ordering::Amd).unwrap();
+        assert_eq!(
+            format!(
+                "{:?}",
+                a.analyze_cholesky_with_permutation(perm.clone()).unwrap()
+            ),
+            format!("{:?}", a.analyze_cholesky(Ordering::Amd).unwrap())
+        );
+        assert_eq!(
+            format!("{:?}", a.analyze_ldlt_with_permutation(perm).unwrap()),
+            format!("{:?}", a.analyze_ldlt(Ordering::Amd).unwrap())
+        );
+    }
+    let a = random_symmetric(4, 50, 9);
+    for bad in [vec![0, 1, 2], vec![0, 1, 1, 3], vec![0, 1, 2, 4]] {
+        assert!(matches!(
+            a.analyze_ldlt_with_permutation(bad),
+            Err(SparseError::InvalidPermutation { .. })
+        ));
+    }
+    let rectangular = CsrMatrix::<f64>::from_triplets(2, 3, vec![(0, 0, 1.0)]).unwrap();
+    assert!(matches!(
+        rectangular.analyze_cholesky_with_permutation(vec![0, 1]),
+        Err(SparseError::NotSquare { .. })
+    ));
+}

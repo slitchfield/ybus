@@ -706,6 +706,18 @@ with legacy results generated locally to explain differences.
                  - **The temporary reference kernel is removed.** It's at `9734167`, to
                    restore for any later change to the kernel.
                - **Next:** the KKT-aware ordering, the second PR.
+             - **The KKT-aware ordering** (planned 2026-11-17): Duff and Pralet's matched
+               ordering as an option, made a default only by a rule written before its survey.
+               The survey also closes the ordering study. In six commits:
+               - [x] **Analyses with a given permutation:** `analyze_cholesky_with_permutation`
+                 and `analyze_ldlt_with_permutation` in `ybus_sparse`, as LU's
+                 `analyze_lu_with_permutation` already was. Given AMD's own permutation, each
+                 gives AMD's analysis.
+               - [ ] the KKT factorizations' statistics
+               - [ ] the matched ordering
+               - [ ] the rule, before the survey
+               - [ ] the survey, the study and the defaults
+               - [ ] the record, closing O4
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style
       pivoting, written from the literature and compared with the LU; and reduced against
