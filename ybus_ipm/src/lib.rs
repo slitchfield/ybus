@@ -77,6 +77,7 @@ pub mod mips;
 mod newton;
 pub mod problem;
 pub mod solution;
+pub mod start;
 mod vector;
 
 pub use interior_point_error::InteriorPointError;
