@@ -47,7 +47,8 @@ releases.
   method corrects an indefinite Hessian using LDLᵀ's inertia.
 - The matched ordering for the pivoted LDLᵀ (`kkt::KktOrdering::Matched`, Duff and Pralet,
   2005): each constraint paired with a variable it touches, so that its pivot isn't delayed.
-  AMD stays the default.
+  The DC OPF's predictor-corrector default (`DcOpfOptions::mehrotra()`) uses it; AMD stays the
+  default elsewhere.
 - The KKT factorizations' statistics on `Solution` (`kkt: KktStatistics`): factorizations,
   delayed pivots, 2×2 pivots and factor entries, totalled over a solve.
 - Buffer-taking evaluations on `Problem` (`objective_hessian_into`, `constraints_into`,

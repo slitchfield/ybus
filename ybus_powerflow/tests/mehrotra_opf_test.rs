@@ -235,12 +235,16 @@ fn the_defaults_run_mips() {
     //   docs/benchmarks/ldlt-amalgamation-2026-11-08.md
     assert_eq!(dc.kkt_factorization, KktFactorization::Ldlt);
     assert!(!dc.inertia_correction);
+    // DC orders it by the matched ordering, AC by AMD, as the rule written before the survey
+    //   decided (docs/benchmarks/kkt-ordering-2026-11-17.md)
+    assert_eq!(dc.kkt_ordering, KktOrdering::Matched);
     let OpfSolver::Mehrotra(ac) = AcOpfOptions::mehrotra().solver else {
         panic!("AcOpfOptions::mehrotra chooses the predictor-corrector method");
     };
     assert_eq!((ac.feastol, ac.cost_mult), (5e-6, 1e-4));
     assert_eq!(ac.kkt_factorization, KktFactorization::Ldlt);
     assert!(!ac.inertia_correction);
+    assert_eq!(ac.kkt_ordering, KktOrdering::Amd);
 }
 
 #[test]
@@ -255,7 +259,9 @@ fn the_matched_ordering_delays_fewer_pivots_with_the_same_outcome() {
     let matched = |solver: OpfSolver| solver.with_kkt_ordering(KktOrdering::Matched);
     let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0);
 
-    let amd = dc_opf_with_options(&case, &DcOpfOptions::mehrotra()).unwrap();
+    let mut amd_options = DcOpfOptions::mehrotra();
+    amd_options.solver = amd_options.solver.with_kkt_ordering(KktOrdering::Amd);
+    let amd = dc_opf_with_options(&case, &amd_options).unwrap();
     let mut options = DcOpfOptions::mehrotra();
     options.solver = matched(options.solver);
     let ordered = dc_opf_with_options(&case, &options).unwrap();

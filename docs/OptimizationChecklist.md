@@ -753,7 +753,24 @@ with legacy results generated locally to explain differences.
 
                  Iterations are reported, not required. A model whose survey fails any condition
                  keeps AMD, and the record says which condition failed.
-               - [ ] the survey, the study and the defaults
+               - [x] **The survey, and the defaults the rule gives** (all 73 cases, DC and AC,
+                 the predictor-corrector method on LDLᵀ with AMD and with matched, and on LU,
+                 and MIPS on LU).
+                 - **DC: the rule holds, so `DcOpfOptions::mehrotra()` now orders by the matched
+                   ordering.**
+                   1. O3's bar is met on 58 of 58 where AMD meets it.
+                   2. The outcomes are the same on all 73.
+                   3. It's 1.14× faster in the median, and 1.27× in total.
+                 - **AC: the rule fails on its second condition, so `AcOpfOptions::mehrotra()`
+                   keeps AMD.** case13659pegase ends at the iteration limit with AMD (150) and in
+                   a numerical failure with matched (147). Neither converges, but the outcomes
+                   differ, and the rule asks them to be the same.
+                   - **The rule's other conditions held:** O3's bar on 30 of 30, and 1.09×
+                     faster in the median and 1.17× in total.
+                   - **Not revised after the fact.** A later rule, written before another survey,
+                     could treat two failures as the same outcome.
+                 - **The snapshot changes only in its DC predictor-corrector column,** on 67 of 72
+                   cases. MIPS and AC are untouched.
                - [ ] the record, closing O4
 - [ ] **The KKT solve.** Reusing the symbolic analysis across iterations while the pattern stays
       fixed; a symmetric indefinite LDLᵀ factorization in `ybus_sparse`, with Bunch–Kaufman-style
