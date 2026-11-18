@@ -1,8 +1,8 @@
 # Long-term goals
 
 Goals beyond the current roadmaps ([`PowerFlowChecklist.md`](PowerFlowChecklist.md), complete,
-and [`OptimizationChecklist.md`](OptimizationChecklist.md), whose phase O1 is complete), recorded
-2026-11-04 with coarse plans. Each becomes a checklist of its own, planned with the maintainer,
+and [`OptimizationChecklist.md`](OptimizationChecklist.md), whose phases O1 to O4 are complete),
+recorded 2026-11-04 with coarse plans, and goal 5 on 2026-11-18. Each becomes a checklist of its own, planned with the maintainer,
 when its turn comes.
 
 ## 1. Stable foreign function interfaces: C, Python and Julia
@@ -83,8 +83,52 @@ challenge, into the case model, so its public datasets can drive goal 3.
 - **Data licensing** to check before committing anything derived from the datasets, as for
   MATPOWER's cases.
 
+## 5. A line search for the predictor-corrector method
+
+Give `ybus_ipm::mehrotra` a globalization: a merit function or filter line search that accepts
+or shortens each step by whether it makes progress, so that the method converges from poor
+starting points and on nonconvex problems. Recorded 2026-11-18, from phase O4's records, where it
+was the last open item of #59's "left for later".
+
+- **Why it's needed:**
+  - **Today the method takes every step** it computes, at the fraction-to-the-boundary length.
+    It has no merit function or line search, as MIPS by default has none (MIPS's optional
+    `step_control` is MATPOWER's own, and only for MIPS).
+  - **The inertia correction (#58) can't pay off without one.** It makes a step a descent
+    direction, but nothing then checks that the step makes progress. On hs71 it refuses the
+    local maximum from 2, then fails, as MIPS does. It fails near the minima of a nonconvex
+    problem with an equality. On the OPF it improved no outcome, so it's off by default.
+  - **The remaining AC failures** include case13659pegase. It fails under both KKT orderings, at
+    the iteration limit with AMD and by a numerical failure with matched (#82), which kept AC's
+    default on AMD.
+- **Builds on:**
+  - the inertia from the pivoted LDLᵀ (#57, #58)
+  - the predictor-corrector method's damped corrector (phase O3), whose own notes record that
+    merit-function backtracking couldn't help where steps were already short
+  - the KKT residuals the solvers report (`kkt_residuals`)
+- **Coarse plan:**
+  - **The method from the literature:** Wächter and Biegler's filter line search (IPOPT, 2006).
+    It comes with its second-order correction and feasibility restoration, and it's the same
+    paper whose inertia correction (Algorithm IC) #58 follows. A merit-function line search
+    (ℓ1 or augmented Lagrangian) is the alternative to weigh when planned.
+  - **An option first,** off by default, with the inertia correction turned on with it, since
+    they're designed together.
+  - **Measured** on MIPS's test problems (hs71 and the nonconvex QPs among them), then the
+    full OPF survey.
+  - **As a default** only by a rule written before its survey, as #59's and #82's were: O3's
+    bar wherever today's default meets it, and the outcomes the same or better.
+- **Open questions:**
+  - **How a line search fits Mehrotra's predictor-corrector.** The literature's filter methods
+    globalize a single Newton step per iteration; the corrector's combined step may need its own
+    acceptance test.
+  - **Whether MIPS should get it too,** beside its `step_control`. Its default must stay
+    MATPOWER's, bit for bit.
+  - **What it costs per iteration:** each trial step evaluates the problem again, which #79's
+    plans made cheaper.
+
 ## Order
 
 Goal 4's parser and goal 3's DC SCOPF can follow the optimization roadmap's phases O3 and O4,
 which the AC SCOPF needs. Goal 1 is independent of them and can start with the C layer whenever
-the API settles; goal 2 follows it.
+the API settles; goal 2 follows it. Goal 5 is independent of the others; the AC SCOPF would
+benefit from it, since its problems are larger and more nonconvex than the OPF's.
