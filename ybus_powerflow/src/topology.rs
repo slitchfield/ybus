@@ -96,14 +96,14 @@ pub(crate) struct Topology {
 /// type, each generator's bus label and status, and each branch's ends and status. Everything
 /// else a solve reads from the case it's given.
 #[derive(Debug, Clone)]
-struct Signature {
+pub(crate) struct Signature {
     buses: Vec<(usize, BusType)>,
     generators: Vec<(usize, bool)>,
     branches: Vec<(usize, usize, bool)>,
 }
 
 impl Signature {
-    fn new(case: &Case) -> Signature {
+    pub(crate) fn new(case: &Case) -> Signature {
         Signature {
             buses: case
                 .bus
@@ -124,8 +124,64 @@ impl Signature {
     }
 
     /// The table lengths: buses, generators, branches
-    fn shape(&self) -> (usize, usize, usize) {
+    pub(crate) fn shape(&self) -> (usize, usize, usize) {
         (self.buses.len(), self.generators.len(), self.branches.len())
+    }
+
+    /// Whether `case` has this topology, so a model built from one case can solve the other.
+    ///
+    /// Returns `PowerflowError::CaseMismatch` if the tables' lengths differ, and otherwise
+    /// `TopologyMismatch`, naming the first row (bus, then generator, then branch) whose
+    /// topology differs: a bus's label or type, a generator's bus or status, or a branch's
+    /// ends or status.
+    pub(crate) fn check(&self, case: &Case) -> Result<(), PowerflowError> {
+        let signature = self;
+        let found = (case.bus.len(), case.generator.len(), case.branch.len());
+        if found != signature.shape() {
+            return Err(PowerflowError::CaseMismatch {
+                expected: signature.shape(),
+                found,
+            });
+        }
+        let mismatch = |table, row: usize, field| -> Result<(), PowerflowError> {
+            Err(PowerflowError::TopologyMismatch {
+                table,
+                row: row + 1,
+                field,
+            })
+        };
+        for (row, (bus, &(label, bus_type))) in case.bus.iter().zip(&signature.buses).enumerate() {
+            if bus.bus_label != label {
+                return mismatch("bus", row, "bus_label");
+            }
+            if bus.bus_type != bus_type {
+                return mismatch("bus", row, "bus_type");
+            }
+        }
+        for (row, (generator, &(label, status))) in
+            case.generator.iter().zip(&signature.generators).enumerate()
+        {
+            if generator.bus_label != label {
+                return mismatch("gen", row, "bus_label");
+            }
+            if generator.status != status {
+                return mismatch("gen", row, "status");
+            }
+        }
+        for (row, (branch, &(from, to, status))) in
+            case.branch.iter().zip(&signature.branches).enumerate()
+        {
+            if branch.from_label != from {
+                return mismatch("branch", row, "from_label");
+            }
+            if branch.to_label != to {
+                return mismatch("branch", row, "to_label");
+            }
+            if branch.status != status {
+                return mismatch("branch", row, "status");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -239,53 +295,7 @@ impl Topology {
     /// topology differs: a bus's label or type, a generator's bus or status, or a branch's
     /// ends or status.
     pub(crate) fn check_case(&self, case: &Case) -> Result<(), PowerflowError> {
-        let signature = &self.signature;
-        let found = (case.bus.len(), case.generator.len(), case.branch.len());
-        if found != signature.shape() {
-            return Err(PowerflowError::CaseMismatch {
-                expected: signature.shape(),
-                found,
-            });
-        }
-        let mismatch = |table, row: usize, field| -> Result<(), PowerflowError> {
-            Err(PowerflowError::TopologyMismatch {
-                table,
-                row: row + 1,
-                field,
-            })
-        };
-        for (row, (bus, &(label, bus_type))) in case.bus.iter().zip(&signature.buses).enumerate() {
-            if bus.bus_label != label {
-                return mismatch("bus", row, "bus_label");
-            }
-            if bus.bus_type != bus_type {
-                return mismatch("bus", row, "bus_type");
-            }
-        }
-        for (row, (generator, &(label, status))) in
-            case.generator.iter().zip(&signature.generators).enumerate()
-        {
-            if generator.bus_label != label {
-                return mismatch("gen", row, "bus_label");
-            }
-            if generator.status != status {
-                return mismatch("gen", row, "status");
-            }
-        }
-        for (row, (branch, &(from, to, status))) in
-            case.branch.iter().zip(&signature.branches).enumerate()
-        {
-            if branch.from_label != from {
-                return mismatch("branch", row, "from_label");
-            }
-            if branch.to_label != to {
-                return mismatch("branch", row, "to_label");
-            }
-            if branch.status != status {
-                return mismatch("branch", row, "status");
-            }
-        }
-        Ok(())
+        self.signature.check(case)
     }
 }
 

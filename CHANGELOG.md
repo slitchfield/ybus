@@ -76,6 +76,9 @@ releases.
   method. The AC OPF keeps plans of its derivatives' sparse products and sums for the solve
   (`opf::derivatives::WeightedHessianPlan`, `SquaredMagnitudeHessianPlan`, `FlowsPlan`,
   `SquaredMagnitudesPlan`), with the same results bit for bit.
+- OPF models (`opf::ac::AcOpfModel`, `opf::dc::DcOpfModel`): a network's OPF built once and
+  solved for many cases on it, such as a load sweep, keeping the network, its matrices and the
+  AC problem's plans. Bit for bit what the one-shot functions give, which now use them.
 - Islands and bridges of a network.
 - Each solver is tested against results computed by MATPOWER.
 - Optional features: `rayon` for parallel outages and sensitivities, and `cuda`

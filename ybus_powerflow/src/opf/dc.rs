@@ -38,7 +38,7 @@ use crate::opf::{
     helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver,
 };
 use crate::powerflow_error::PowerflowError;
-use crate::topology::Network;
+use crate::topology::{Network, Signature};
 
 /// The DC optimal power flow's options.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -157,168 +157,231 @@ pub fn dc_opf_with_options(
     case: &Case,
     options: &DcOpfOptions,
 ) -> Result<DcOpfSolution, PowerflowError> {
-    let network = Network::new(case, |row, branch| {
-        if branch.x == 0.0 {
-            Err(PowerflowError::ZeroReactance { row })
-        } else {
-            Ok(())
-        }
-    })?;
-    let nb = network.bus_rows.len();
-    let ng = network.gen_rows.len();
-    let base = case.base_mva;
-    let refs = reference_buses(case, &network)?;
-    let costs = OpfCosts::new(case, &network.gen_rows, false)?;
-    let ny = costs.piecewise.len();
-    let Bdc {
-        bbus,
-        bf,
-        pbusinj_pu,
-        pfinj_pu,
-    } = Bdc::new(case, nb, &network.branch_rows, &network.ends);
-    let (va, pg, y) = (0, nb, nb + ng);
-    let nx = nb + ng + ny;
+    DcOpfModel::new(case)?.solve(case, options)
+}
 
-    // The variables' bounds
-    let mut xmin = vec![f64::NEG_INFINITY; nx];
-    let mut xmax = vec![f64::INFINITY; nx];
-    for &i in &refs {
-        let angle = case.bus[network.bus_rows[i]].va_deg * (PI / 180.0);
-        (xmin[va + i], xmax[va + i]) = (angle, angle);
+/// A DC OPF branch's check: a zero reactance can't be represented
+fn check_reactance(row: usize, branch: &crate::case::Branch) -> Result<(), PowerflowError> {
+    if branch.x == 0.0 {
+        Err(PowerflowError::ZeroReactance { row })
+    } else {
+        Ok(())
     }
-    for (k, &row) in network.gen_rows.iter().enumerate() {
-        let generator = &case.generator[row];
-        xmin[pg + k] = generator.pmin_mw / base;
-        xmax[pg + k] = generator.pmax_mw / base;
-    }
+}
 
-    // The linear constraints, block by block: Pmis, Pf, ang, ycon
-    let mut rows = LinearRows::default();
-    let mut generators_at: Vec<Vec<usize>> = vec![vec![]; nb];
-    for (k, &bus) in network.gen_buses.iter().enumerate() {
-        generators_at[bus].push(k);
-    }
-    for (i, &row) in network.bus_rows.iter().enumerate() {
-        let bus = &case.bus[row];
-        let mismatch = -(bus.pd_mw + bus.gs_mw) / base - pbusinj_pu[i];
-        let (cols, values) = bbus.outer(i).expect("an internal bus");
-        let angles = cols.iter().zip(values).map(|(&j, &b)| (va + j, b));
-        let outputs = generators_at[i].iter().map(|&k| (pg + k, -1.0));
-        rows.push(angles.chain(outputs), mismatch, mismatch);
-    }
-    let limited: Vec<usize> = (0..network.branch_rows.len())
-        .filter(|&k| {
-            let rate = case.branch[network.branch_rows[k]].rate_a_mva;
-            rate != 0.0 && rate < 1e10
+/// The DC optimal power flow of one network, built once and solved for many cases on it, as
+/// [`DcModel`](crate::dc::DcModel) is for the power flow: each solve keeps the network and its
+/// B matrices, and reads the values that change.
+///
+/// [`DcOpfModel::solve`] takes the case the model was built from, or a copy with different
+/// values:
+///
+/// - **Read from the case:** the loads and shunts (`pd_mw`, `gs_mw`), the generators' limits
+///   (`pmin_mw`, `pmax_mw`), the costs, the reference angles, and the branches' flow and angle
+///   limits. Which branches are limited may change, as nothing kept depends on it.
+/// - **Kept from the model:** the topology and the branches' reactances, taps and shifts, which
+///   make `Bbus`, `Bf` and the shifts' injections.
+/// - **Refused** with [`PowerflowError::TopologyMismatch`]: a changed topology, as
+///   [`DcModel::solve`](crate::dc::DcModel::solve) refuses.
+///
+/// [`dc_opf_with_options`] is `DcOpfModel::new(case)?.solve(case, options)`, so a model's solve
+/// of its own case gives the same results, bit for bit.
+pub struct DcOpfModel {
+    signature: Signature,
+    network: Network,
+    bdc: Bdc,
+}
+
+impl DcOpfModel {
+    /// Builds the model of `case`'s network, checking the case as [`dc_opf`] does before its
+    /// costs.
+    ///
+    /// Returns [`PowerflowError::ZeroReactance`], [`PowerflowError::NoReferenceBus`], or the
+    /// errors of [`Case::validate`].
+    pub fn new(case: &Case) -> Result<DcOpfModel, PowerflowError> {
+        let network = Network::new(case, check_reactance)?;
+        reference_buses(case, &network)?;
+        let nb = network.bus_rows.len();
+        let bdc = Bdc::new(case, nb, &network.branch_rows, &network.ends);
+        Ok(DcOpfModel {
+            signature: Signature::new(case),
+            network,
+            bdc,
         })
-        .collect();
-    for &k in &limited {
-        let (cols, values) = bf.outer(k).expect("an internal branch");
-        let rate = case.branch[network.branch_rows[k]].rate_a_mva / base;
-        rows.push(
-            cols.iter().zip(values).map(|(&j, &b)| (va + j, b)),
-            -(rate + pfinj_pu[k]),
-            rate - pfinj_pu[k],
-        );
-    }
-    let first_angle_row = rows.len();
-    let angle_limited = rows.angle_limits(case, &network, va);
-    rows.piecewise(&costs, pg, None, y);
-    let (a, l, u) = rows.finish(nx);
-
-    // The objective, without the constant terms
-    let quadratic: Vec<(usize, usize, f64)> = costs
-        .active
-        .quadratic
-        .iter()
-        .enumerate()
-        .filter(|&(_, &q)| q != 0.0)
-        .map(|(k, &q)| (pg + k, pg + k, q))
-        .collect();
-    let h = (!quadratic.is_empty())
-        .then(|| CsrMatrix::from_triplets(nx, nx, quadratic).expect("indices in range"));
-    let mut c = vec![0.0; nx];
-    c[pg..pg + ng].copy_from_slice(&costs.active.linear);
-    c[y..].fill(1.0);
-
-    // dcopf_solver's starting point, with every angle at the first reference bus's
-    let mut x0 = starting_point(&xmin, &xmax);
-    x0[va..pg].fill(xmin[va + refs[0]]);
-    if let Some(start) = helper_start(&costs) {
-        x0[y..].fill(start);
     }
 
-    let constraints = Constraints {
-        a: Some(a),
-        l: Some(l),
-        u: Some(u),
-        xmin: Some(xmin),
-        xmax: Some(xmax),
-    };
-    let qp = QuadraticProblem { h, c };
-    let refused = |error| PowerflowError::Solver { error };
-    let solution = match &options.solver {
-        OpfSolver::Mips(mips) => qps_mips(&qp, &constraints, Some(&x0), mips).map_err(refused)?,
-        OpfSolver::Mehrotra(mehrotra) => {
-            qps_mehrotra(&qp, &constraints, Some(&x0), mehrotra).map_err(refused)?
+    /// Solves the DC optimal power flow for `case`, which must be the model's case or a copy
+    /// with different values (see the type's documentation), as [`dc_opf_with_options`] does.
+    ///
+    /// Returns [`dc_opf_with_options`]'s errors, and `PowerflowError::CaseMismatch` or
+    /// `TopologyMismatch` for a case on another network.
+    pub fn solve(
+        &self,
+        case: &Case,
+        options: &DcOpfOptions,
+    ) -> Result<DcOpfSolution, PowerflowError> {
+        Network::new(case, check_reactance)?;
+        self.signature.check(case)?;
+        let network = &self.network;
+        let nb = network.bus_rows.len();
+        let ng = network.gen_rows.len();
+        let base = case.base_mva;
+        let refs = reference_buses(case, network)?;
+        let costs = OpfCosts::new(case, &network.gen_rows, false)?;
+        let ny = costs.piecewise.len();
+        let Bdc {
+            bbus,
+            bf,
+            pbusinj_pu,
+            pfinj_pu,
+        } = &self.bdc;
+        let (va, pg, y) = (0, nb, nb + ng);
+        let nx = nb + ng + ny;
+
+        // The variables' bounds
+        let mut xmin = vec![f64::NEG_INFINITY; nx];
+        let mut xmax = vec![f64::INFINITY; nx];
+        for &i in &refs {
+            let angle = case.bus[network.bus_rows[i]].va_deg * (PI / 180.0);
+            (xmin[va + i], xmax[va + i]) = (angle, angle);
         }
-    };
-    let residuals = kkt_residuals(&qp, &constraints, &solution.x, &solution.multipliers)
-        .expect("the solver's multipliers fit its problem");
+        for (k, &row) in network.gen_rows.iter().enumerate() {
+            let generator = &case.generator[row];
+            xmin[pg + k] = generator.pmin_mw / base;
+            xmax[pg + k] = generator.pmax_mw / base;
+        }
 
-    // The results, back on the case's tables
-    let x = &solution.x;
-    let multipliers = &solution.multipliers;
-    let mut va_deg: Vec<f64> = case.bus.iter().map(|bus| bus.va_deg).collect();
-    let mut lam_p = vec![0.0; case.bus.len()];
-    for (i, &row) in network.bus_rows.iter().enumerate() {
-        va_deg[row] = x[va + i] * 180.0 / PI;
-        lam_p[row] = (multipliers.mu_u[i] - multipliers.mu_l[i]) / base;
-    }
-    let ngen = case.generator.len();
-    let (mut pg_mw, mut mu_pmin, mut mu_pmax) = (vec![0.0; ngen], vec![0.0; ngen], vec![0.0; ngen]);
-    for (k, &row) in network.gen_rows.iter().enumerate() {
-        pg_mw[row] = x[pg + k] * base;
-        mu_pmin[row] = multipliers.lower[pg + k] / base;
-        mu_pmax[row] = multipliers.upper[pg + k] / base;
-    }
-    let nl = case.branch.len();
-    let mut pf_mw = vec![0.0; nl];
-    let (mut mu_sf, mut mu_st) = (vec![0.0; nl], vec![0.0; nl]);
-    let (mut mu_angmin, mut mu_angmax) = (vec![0.0; nl], vec![0.0; nl]);
-    let flows = bf.mul_vec(&x[va..pg]).expect("Bf has a column per bus");
-    for (k, &row) in network.branch_rows.iter().enumerate() {
-        pf_mw[row] = (flows[k] + pfinj_pu[k]) * base;
-    }
-    for (n, &k) in limited.iter().enumerate() {
-        let row = network.branch_rows[k];
-        mu_sf[row] = multipliers.mu_u[nb + n] / base;
-        mu_st[row] = multipliers.mu_l[nb + n] / base;
-    }
-    for (n, &k) in angle_limited.iter().enumerate() {
-        let row = network.branch_rows[k];
-        mu_angmin[row] = per_degree(multipliers.mu_l[first_angle_row + n]);
-        mu_angmax[row] = per_degree(multipliers.mu_u[first_angle_row + n]);
-    }
-    let constant: f64 = costs.active.constant.iter().sum();
+        // The linear constraints, block by block: Pmis, Pf, ang, ycon
+        let mut rows = LinearRows::default();
+        let mut generators_at: Vec<Vec<usize>> = vec![vec![]; nb];
+        for (k, &bus) in network.gen_buses.iter().enumerate() {
+            generators_at[bus].push(k);
+        }
+        for (i, &row) in network.bus_rows.iter().enumerate() {
+            let bus = &case.bus[row];
+            let mismatch = -(bus.pd_mw + bus.gs_mw) / base - pbusinj_pu[i];
+            let (cols, values) = bbus.outer(i).expect("an internal bus");
+            let angles = cols.iter().zip(values).map(|(&j, &b)| (va + j, b));
+            let outputs = generators_at[i].iter().map(|&k| (pg + k, -1.0));
+            rows.push(angles.chain(outputs), mismatch, mismatch);
+        }
+        let limited: Vec<usize> = (0..network.branch_rows.len())
+            .filter(|&k| {
+                let rate = case.branch[network.branch_rows[k]].rate_a_mva;
+                rate != 0.0 && rate < 1e10
+            })
+            .collect();
+        for &k in &limited {
+            let (cols, values) = bf.outer(k).expect("an internal branch");
+            let rate = case.branch[network.branch_rows[k]].rate_a_mva / base;
+            rows.push(
+                cols.iter().zip(values).map(|(&j, &b)| (va + j, b)),
+                -(rate + pfinj_pu[k]),
+                rate - pfinj_pu[k],
+            );
+        }
+        let first_angle_row = rows.len();
+        let angle_limited = rows.angle_limits(case, network, va);
+        rows.piecewise(&costs, pg, None, y);
+        let (a, l, u) = rows.finish(nx);
 
-    Ok(DcOpfSolution {
-        va_deg,
-        lam_p,
-        pg_mw,
-        mu_pmin,
-        mu_pmax,
-        pf_mw,
-        mu_sf,
-        mu_st,
-        mu_angmin,
-        mu_angmax,
-        objective: solution.f + constant,
-        status: solution.status,
-        iterations: solution.iterations,
-        residuals,
-        solver: solution,
-    })
+        // The objective, without the constant terms
+        let quadratic: Vec<(usize, usize, f64)> = costs
+            .active
+            .quadratic
+            .iter()
+            .enumerate()
+            .filter(|&(_, &q)| q != 0.0)
+            .map(|(k, &q)| (pg + k, pg + k, q))
+            .collect();
+        let h = (!quadratic.is_empty())
+            .then(|| CsrMatrix::from_triplets(nx, nx, quadratic).expect("indices in range"));
+        let mut c = vec![0.0; nx];
+        c[pg..pg + ng].copy_from_slice(&costs.active.linear);
+        c[y..].fill(1.0);
+
+        // dcopf_solver's starting point, with every angle at the first reference bus's
+        let mut x0 = starting_point(&xmin, &xmax);
+        x0[va..pg].fill(xmin[va + refs[0]]);
+        if let Some(start) = helper_start(&costs) {
+            x0[y..].fill(start);
+        }
+
+        let constraints = Constraints {
+            a: Some(a),
+            l: Some(l),
+            u: Some(u),
+            xmin: Some(xmin),
+            xmax: Some(xmax),
+        };
+        let qp = QuadraticProblem { h, c };
+        let refused = |error| PowerflowError::Solver { error };
+        let solution = match &options.solver {
+            OpfSolver::Mips(mips) => {
+                qps_mips(&qp, &constraints, Some(&x0), mips).map_err(refused)?
+            }
+            OpfSolver::Mehrotra(mehrotra) => {
+                qps_mehrotra(&qp, &constraints, Some(&x0), mehrotra).map_err(refused)?
+            }
+        };
+        let residuals = kkt_residuals(&qp, &constraints, &solution.x, &solution.multipliers)
+            .expect("the solver's multipliers fit its problem");
+
+        // The results, back on the case's tables
+        let x = &solution.x;
+        let multipliers = &solution.multipliers;
+        let mut va_deg: Vec<f64> = case.bus.iter().map(|bus| bus.va_deg).collect();
+        let mut lam_p = vec![0.0; case.bus.len()];
+        for (i, &row) in network.bus_rows.iter().enumerate() {
+            va_deg[row] = x[va + i] * 180.0 / PI;
+            lam_p[row] = (multipliers.mu_u[i] - multipliers.mu_l[i]) / base;
+        }
+        let ngen = case.generator.len();
+        let (mut pg_mw, mut mu_pmin, mut mu_pmax) =
+            (vec![0.0; ngen], vec![0.0; ngen], vec![0.0; ngen]);
+        for (k, &row) in network.gen_rows.iter().enumerate() {
+            pg_mw[row] = x[pg + k] * base;
+            mu_pmin[row] = multipliers.lower[pg + k] / base;
+            mu_pmax[row] = multipliers.upper[pg + k] / base;
+        }
+        let nl = case.branch.len();
+        let mut pf_mw = vec![0.0; nl];
+        let (mut mu_sf, mut mu_st) = (vec![0.0; nl], vec![0.0; nl]);
+        let (mut mu_angmin, mut mu_angmax) = (vec![0.0; nl], vec![0.0; nl]);
+        let flows = bf.mul_vec(&x[va..pg]).expect("Bf has a column per bus");
+        for (k, &row) in network.branch_rows.iter().enumerate() {
+            pf_mw[row] = (flows[k] + pfinj_pu[k]) * base;
+        }
+        for (n, &k) in limited.iter().enumerate() {
+            let row = network.branch_rows[k];
+            mu_sf[row] = multipliers.mu_u[nb + n] / base;
+            mu_st[row] = multipliers.mu_l[nb + n] / base;
+        }
+        for (n, &k) in angle_limited.iter().enumerate() {
+            let row = network.branch_rows[k];
+            mu_angmin[row] = per_degree(multipliers.mu_l[first_angle_row + n]);
+            mu_angmax[row] = per_degree(multipliers.mu_u[first_angle_row + n]);
+        }
+        let constant: f64 = costs.active.constant.iter().sum();
+
+        Ok(DcOpfSolution {
+            va_deg,
+            lam_p,
+            pg_mw,
+            mu_pmin,
+            mu_pmax,
+            pf_mw,
+            mu_sf,
+            mu_st,
+            mu_angmin,
+            mu_angmax,
+            objective: solution.f + constant,
+            status: solution.status,
+            iterations: solution.iterations,
+            residuals,
+            solver: solution,
+        })
+    }
 }
 
 /// `makeAang`'s angle difference limits over the in-service branches at case rows
