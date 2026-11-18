@@ -7,7 +7,9 @@
 //! zero, and the step to the boundary blocks almost every step. A warm start therefore keeps
 //! the previous point `x`, its equality multipliers `λ` and its inequality multipliers `μ`. It
 //! recomputes the slacks from `x` (`z = −h(x)`, and the bounds' slacks), and raises every slack
-//! and inequality multiplier to at least `warm_shift` (the solvers' option). That moves each
+//! and inequality multiplier to at least `warm_shift` (the solvers' option). The predictor-
+//! corrector method's bound slacks are the exception: they're `x − xmin` and `xmax − x` by
+//! definition, so its point is pushed `warm_shift` inside its bounds instead. That moves each
 //! complementary pair back off the boundary, by the same amount wherever it was active, so each
 //! product `z_i μ_i` is at least `warm_shift²`. The equality multipliers, which are free, aren't
 //! moved.

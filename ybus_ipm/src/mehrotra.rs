@@ -490,9 +490,10 @@ pub fn mehrotra<P: Problem>(
 /// [`mehrotra`] from `start`: a cold start from a point, exactly [`mehrotra`]'s, or a warm start
 /// from a previous solution's point and multipliers (see [`crate::start`]).
 ///
-/// A warm start moves the point only `warm_shift` inside its bounds, keeps the equality
-/// multipliers, recomputes the slacks from the point, and raises every slack and inequality
-/// multiplier, the bounds' included, to at least `warm_shift`. Returns [`mehrotra`]'s errors,
+/// A warm start moves the point only `warm_shift` inside its bounds (at most `bound_frac` of
+/// the distance between two), keeps the equality multipliers, recomputes the slacks from the
+/// point, and raises the inequalities' slacks and every inequality multiplier, the bounds'
+/// included, to at least `warm_shift`. The bound slacks stay the point's. Returns [`mehrotra`]'s errors,
 /// `InvalidOption` for a negative or non-finite `warm_shift`, and `Dimension` for a warm start
 /// whose point or multipliers don't fit the problem.
 pub fn mehrotra_from<P: Problem>(
@@ -1131,9 +1132,9 @@ fn report(
 
 /// A warm start's `λ` and pairs in the method's internal layout, from `multipliers` in MIPS's
 /// reported layout, the inequalities' values `h` at the (already pushed) point, and the cold
-/// start's pairs `cold`, whose bound slacks it keeps: the inverse of the report `mehrotra_from`
-/// builds at its end, with every slack and inequality multiplier, the bounds' included, raised
-/// to at least `shift`.
+/// start's pairs `cold`, whose bound slacks, the point's, it keeps: the inverse of the report
+/// `mehrotra_from` builds at its end, with the inequalities' slacks and every inequality
+/// multiplier, the bounds' included, raised to at least `shift`.
 ///
 /// - `λ`: the nonlinear equalities', then each of A's equality rows (`ieq`) and each fixed
 ///   variable, as its upper side's multiplier less its lower side's.
@@ -1187,9 +1188,11 @@ fn warm_pairs(
     let mut pi_u: Vec<f64> = split.up.iter().map(|&k| m.upper[k]).collect();
     raise(&mut pi_l);
     raise(&mut pi_u);
-    let (mut s_l, mut s_u) = (cold.s_l, cold.s_u);
-    raise(&mut s_l);
-    raise(&mut s_u);
+    // The bound slacks stay the point's, x − xmin and xmax − x, as every iteration recomputes
+    //   them: the push keeps them off the boundary, by warm_shift or, between two bounds closer
+    //   than that allows, by bound_frac of the distance. Raised, a slack would overstate the room
+    //   to the bound, and a step could cross it
+    let (s_l, s_u) = (cold.s_l, cold.s_u);
     Ok((
         lam,
         Pairs {
@@ -1304,14 +1307,22 @@ mod tests {
         let cold = Pairs {
             z: vec![1.0; niq],
             mu: vec![1.0; niq],
-            s_l: vec![0.0; split.lo.len()],
+            s_l: vec![1e-4; split.lo.len()],
             pi_l: vec![1.0; split.lo.len()],
-            s_u: vec![0.0; split.up.len()],
+            s_u: vec![1e-4; split.up.len()],
             pi_u: vec![1.0; split.up.len()],
         };
         let (_, p) = warm_pairs(&m, &vec![0.0; niq], &split, (0, 0), cold, 1e-3).unwrap();
-        for values in [&p.z, &p.mu, &p.s_l, &p.pi_l, &p.s_u, &p.pi_u] {
+        for values in [&p.z, &p.mu, &p.pi_l, &p.pi_u] {
             assert!(values.iter().all(|&v| v >= 1e-3), "{values:?}");
         }
+        // The bound slacks stay the point's, even below the shift (between two close bounds):
+        //   raised, they'd let a step cross its bound
+        assert!(
+            p.s_l.iter().chain(&p.s_u).all(|&s| s == 1e-4),
+            "{:?} {:?}",
+            p.s_l,
+            p.s_u
+        );
     }
 }
