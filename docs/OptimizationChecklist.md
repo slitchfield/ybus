@@ -908,7 +908,9 @@ with legacy results generated locally to explain differences.
             - **Left for later:**
               - the kernel's cost per front, which would let DC qualify;
               - a KKT-aware ordering for the structural delays;
-              - a globalization for the predictor-corrector method.
+              - a globalization for the predictor-corrector method, now goal 5 of
+                [`LongTermGoals.md`](LongTermGoals.md) (2026-11-18). The other two are done:
+                the kernel's cost per front (#61, #62, #81) and the KKT-aware ordering (#82).
 - [x] **A fuller study of the KKT ordering and factorization,** once phase O3's solver exists to
       compare against. MIPS's LU switched from AMD to COLAMD in O1's PR 2: with zero diagonals
       in the equality block, AMD's factors filled 14 million entries on `case_ACTIVSg10k`
