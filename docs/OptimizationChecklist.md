@@ -933,6 +933,50 @@ with legacy results generated locally to explain differences.
 **Phase O4 is complete** (PRs #53–#62 and #79–#81, and this one, 2026-11-17). Its open item,
 "Parallel and GPU", continues in O5.
 
+## Warm starts for OPF sequences
+
+Planned 2026-11-18, before O5, from O3's and O4's open items ("warm starts across related
+problems, such as outage sequences"). Many uses of an OPF solve a sequence of related problems.
+Each solve now starts cold, rebuilding its problem and starting from the same point.
+
+- **Decided with the maintainer (2026-11-18):**
+  - **Both kinds of sequence, in stages:** the same network with new data first, then outages.
+  - **What carries over:** the primal point and the duals, shifted off the boundary (Yildirim
+    and Wright, 2002; Gondzio and Grothey, 2008). Measured against a primal-only warm start and
+    a cold start.
+  - **Both solvers, opt-in:** a cold start stays today's path, MIPS's bit for bit.
+  - **A kept OPF model first,** as `AcModel` is for the power flow.
+- [x] **Kept OPF models** (PR A): `AcOpfModel` and `DcOpfModel`. `new(case)` builds what the
+  network fixes, and `solve(case, options)` reads only values. `ac_opf_with_options` and
+  `dc_opf_with_options` are now `new(case)?.solve(case, options)`.
+  - **What AC keeps:** the network, its admittances, and the problem with #79's plans and #80's
+    assemblies. Each solve copies the problem with its case's values.
+  - **What AC refuses,** with `TopologyMismatch` naming the field: a changed topology, and any
+    value that fixes a pattern:
+    - which branches are limited (`rate_a_mva`)
+    - which have angle limits (`angmin_deg`)
+    - which generators are dispatchable loads (`pmin_mw`)
+    - a piecewise cost's points (`ncost`)
+    - which quadratic coefficients are 0 (`quadratic`)
+  - **What DC keeps:** the network and its B matrices. Nothing kept depends on the limits or
+    costs, so only the topology is refused.
+  - **Not kept: the solver's KKT analysis,** a change from the plan (2026-11-18). Keeping it
+    needs a public workspace type in `ybus_ipm`, and the analysis is about 1% of a solve in the
+    profiles.
+  - **Bit for bit:**
+    - the 72-case snapshot is unchanged
+    - a model solving a copy with loads scaled ×0.95 or ×1.04 matches the one-shot solve of the
+      copy, on case9, case30, case118 and case2383wp, both solvers, AC and DC
+  - **Planted bug caught:** a solve keeping the model's own loads.
+  - **What it saves on its own: little**
+    ([`opf-models-2026-11-18.md`](benchmarks/opf-models-2026-11-18.md)). On an 11-solve load
+    sweep the speedup is 0.98–1.04×, since a solve's own work dwarfs its setup. The models are
+    for what they enable: warm starts, and sequences through one value with pattern changes
+    refused.
+- [ ] Warm starts in the solvers (PR B)
+- [ ] Warm OPF sequences on one network (PR C)
+- [ ] Warm starts across outages (PR D)
+
 ## References
 
 Each was checked online (Crossref) on 2026-11-03, and the last on 2026-11-17.
