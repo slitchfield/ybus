@@ -54,7 +54,8 @@ releases.
 - Warm starts (`start::Start`, `WarmStart`; `mips_from`, `mehrotra_from` and their `qps_`
   forms): a solve started from a previous solution's point and multipliers, with every slack
   and inequality multiplier raised to at least `warm_shift`, for sequences of related problems.
-  A cold start is the solvers' original path, bit for bit.
+  A cold start is the solvers' original path, bit for bit. `Solution::iterate_multipliers`
+  keeps the final iterate's multipliers, unthresholded, which a warm start reads.
 - Buffer-taking evaluations on `Problem` (`objective_hessian_into`, `constraints_into`,
   `lagrangian_hessian_into`), which the solvers keep across iterations, so a problem whose
   patterns don't change can refill values in place. Each defaults to its allocating method.

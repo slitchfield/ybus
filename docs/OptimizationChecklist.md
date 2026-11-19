@@ -973,9 +973,29 @@ Each solve now starts cold, rebuilding its problem and starting from the same po
     sweep the speedup is 0.98–1.04×, since a solve's own work dwarfs its setup. The models are
     for what they enable: warm starts, and sequences through one value with pattern changes
     refused.
-- [ ] Warm starts in the solvers (PR B)
-- [ ] **Warm OPF sequences on one network** (PR C): `solve_from` with `OpfStart` on both
+- [x] **Warm starts in the solvers** (PR B, #85): `ybus_ipm::start` with `Start::Cold` and
+  `Start::Warm(&WarmStart)`. The solvers take them through `mips_from`, `mehrotra_from` and their
+  `qps_` forms, and the original functions delegate with a cold start, bit for bit.
+  - **The warm start:**
+    - It inverts each solver's multiplier report, a function whose round trip a unit test checks.
+    - It recomputes the slacks from `h(x)`.
+    - It raises every inequality slack and multiplier to at least `warm_shift`.
+    - The predictor-corrector method pushes its point `warm_shift` inside its bounds.
+  - **Three defects, found by PR C's OPF sequences and fixed there:**
+    - the multipliers weren't scaled back by `cost_mult`
+    - the predictor-corrector method's bound slacks were raised, letting a step cross its bound
+    - it read the thresholded report instead of the final iterate's multipliers
+- [x] **Warm OPF sequences on one network** (PR C): `solve_from` with `OpfStart` on both
   models, the `opf_sequence` survey, and `warm_shift`'s default from it.
+  - **The result** ([`opf-warm-start-2026-11-18.md`](benchmarks/opf-warm-start-2026-11-18.md)):
+    no shift qualifies under the corrected rule, for either solver, so `warm_shift` stays at
+    the provisional 1e-4.
+    - **MIPS at 1e-6** comes closest. It has no regressions and 38 rescues, with median
+      speedups of ×2.11 (DC) and ×3.40 (AC), and misses on 3 AC steps of 616.
+    - **The predictor-corrector method** fails most on case9241pegase's AC, where an absolute
+      shift moves the start far from stationary.
+  - **Left for later:** a shift relative to the problem (for example, to the previous
+    solution's complementarity, as Gondzio and Grothey's is), surveyed by the same tool.
   - **The rule, written 2026-11-18 before the survey,** as #59's and #82's were:
     - **The sequences:** each case's loads swept ×0.90 to ×1.10 (21 steps), and a seeded random
       walk of 25 steps, each bus ±2% a step. Every step is solved cold, primal-only and warm
