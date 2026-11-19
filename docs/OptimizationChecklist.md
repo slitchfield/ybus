@@ -1045,7 +1045,22 @@ Each solve now starts cold, rebuilding its problem and starting from the same po
       case3120sp and case9241pegase, DC and AC, both solvers, both sequences. Tier 2 runs the
       chosen shift on case13659pegase (AC), case_ACTIVSg10k (DC, AC) and case_ACTIVSg25k (DC,
       and AC on the predictor-corrector method only).
-- [ ] Warm starts across outages (PR D)
+- [x] **Warm starts across outages** (PR D): `map_start` on both models, with
+  `OpfStart::Mapped` and `MappedPrimal`.
+  - **The mapping:** each model keys its variables and constraints by case row, built from the
+    same lists that build its problem. A solution of one model carries onto another model of
+    the same case's tables, such as with a branch or a generator out of service.
+  - **The survey** ([`opf-outage-warm-start-2026-11-19.md`](benchmarks/opf-outage-warm-start-2026-11-19.md)):
+    up to 50 sampled branch outages (not bridges) and 50 generator outages per tier-1 case,
+    each warm from the base solution, as an N-1 study runs, at all five shifts.
+    - **MIPS at 1e-6:** ×2.05–2.24 (DC) and ×2.99–3.38 (AC), with 49 rescues, and 4
+      regressions and 6 misses in 1,106 steps.
+    - **The predictor-corrector method:** it fails where it failed in PR C, on case9241pegase's
+      AC at the large shifts.
+    - **A model per outage** costs about 2% of a cold solve.
+  - **Decided (2026-11-19):** `warm_shift`'s default wasn't revisited, so it stays at 1e-4.
+- **The warm-start section is complete.** Left for later is a shift relative to the problem
+  (PR C), which both surveys' tools can measure.
 
 ## References
 
