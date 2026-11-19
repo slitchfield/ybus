@@ -194,6 +194,38 @@ pub struct SymbolicLdlt {
     mirror: Vec<usize>,
 }
 
+/// The shape of a multifrontal factorization's front tree, from its symbolic analysis
+/// ([`SymbolicLdlt::front_tree`]): how much work the fronts hold, and how much of it lies on the
+/// tree's critical path, the heaviest chain from a leaf to a root.
+///
+/// The work counts multiply-adds on the symbolic fronts. For a front with `c` pivot columns
+/// and `r` rows below them, so `m = c + r` rows in all:
+/// - **the factorization** is `Σ_{j<c} (m − j − 1)(m − j) / 2`, the trailing lower triangle's
+///   update after each pivot
+/// - **one triangular sweep** is `c (c − 1) / 2 + c r`, the front's columns of `L`
+///
+/// A front depends on its children, so `work / critical_work` bounds the speedup any
+/// parallelism over independent subtrees can give, and `solve_work / solve_critical_work` a
+/// level-scheduled solve's. Pivots delayed at factorization time enlarge parents beyond these
+/// symbolic sizes, so the bounds are for the factorization without delays.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrontTree {
+    /// The fronts
+    pub fronts: usize,
+    /// The roots, one per connected block of the matrix's graph
+    pub roots: usize,
+    /// The most fronts on a path from a leaf to a root
+    pub height: usize,
+    /// The factorization's work over all fronts
+    pub work: u64,
+    /// The factorization's work on the critical path
+    pub critical_work: u64,
+    /// One triangular sweep's work over all fronts
+    pub solve_work: u64,
+    /// One triangular sweep's work on its critical path
+    pub solve_critical_work: u64,
+}
+
 /// How [`SymbolicLdlt`] merges supernodes into larger fronts (relaxed amalgamation,
 /// Ashcraft and Grimes, "The influence of relaxed supernode partitions on the multifrontal
 /// method," *ACM Trans. Math. Softw.* 15(4):291–309, 1989, doi:10.1145/76909.76910).
@@ -403,6 +435,50 @@ impl SymbolicLdlt {
             source,
             mirror,
         }
+    }
+
+    /// The front tree's shape: its fronts' work and its critical path (see [`FrontTree`]).
+    pub fn front_tree(&self) -> FrontTree {
+        let n = self.nodes.len();
+        let front = |node: &Supernode| -> (u64, u64) {
+            let c = (node.end - node.start) as u64;
+            let m = c + node.below.len() as u64;
+            let factor = (0..c).map(|j| (m - j - 1) * (m - j) / 2).sum();
+            let solve = c * c.saturating_sub(1) / 2 + c * node.below.len() as u64;
+            (factor, solve)
+        };
+        // Each front's heaviest chain down to a leaf, and its depth: a parent's index is
+        //   above its children's, as the supernodes follow the postordered columns
+        let mut chain = vec![(0u64, 0u64, 0usize); n];
+        let mut tree = FrontTree {
+            fronts: n,
+            ..FrontTree::default()
+        };
+        for (k, node) in self.nodes.iter().enumerate() {
+            let (factor, solve) = front(node);
+            let below = chain[k];
+            let ours = (below.0 + factor, below.1 + solve, below.2 + 1);
+            tree.work += factor;
+            tree.solve_work += solve;
+            match node.parent {
+                Some(parent) => {
+                    debug_assert!(parent > k, "a parent front after its children");
+                    let theirs = &mut chain[parent];
+                    *theirs = (
+                        theirs.0.max(ours.0),
+                        theirs.1.max(ours.1),
+                        theirs.2.max(ours.2),
+                    );
+                }
+                None => {
+                    tree.roots += 1;
+                    tree.critical_work = tree.critical_work.max(ours.0);
+                    tree.solve_critical_work = tree.solve_critical_work.max(ours.1);
+                    tree.height = tree.height.max(ours.2);
+                }
+            }
+        }
+        tree
     }
 
     /// The Cholesky analysis it was built on.
