@@ -64,7 +64,7 @@ change. Each record names the code, the machine and the method it used.
 - **Warm-started OPF sequences:** `scripts/benchmark-opf-sequence.sh [<output.csv>]` runs the
   `opf_sequence` example over cases, models, solvers, sequences (a load sweep and a seeded
   random walk) and warm shifts, from the `YBUS_SEQUENCE_*` variables. Each step is solved cold,
-  primal-only and warm, and the last two are compared with the cold step by O3's bar.
+  primal-only and warm, and the last two get the warm-start rule's verdict against the cold step.
 - **Orderings:** `scripts/benchmark-ordering.sh [<output.csv>]` factors each case's Jacobian and
   B′ under AMD and COLAMD with the `ordering_survey` example.
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example

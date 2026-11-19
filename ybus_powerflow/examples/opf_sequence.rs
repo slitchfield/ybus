@@ -23,13 +23,22 @@
 //! **Prints** one CSV line per step and chain, with the columns in `HEADER`: the step's outcome,
 //! iterations and solve time (one run: a chain can't repeat a step), its objective and KKT
 //! statistics, and for `primal` and `warm` the differences from the same step's cold solve and
-//! the warm-start survey's bar against it (`acceptable`): the same outcome, and where the cold
-//! solve converged, O3's bar without `LAM_Q`. That's the objective within 1e-6 (relative, to at
-//! least 1), `LAM_P` within 1e-3 (relative, to at least 1), and each KKT residual within 100×
-//! the cold solve's or below 1e-6. `LAM_Q`'s difference is reported (`lam_q_rel`) but not
-//! barred: two cold solvers already differ in it by up to 9.4e-3 (MIPS and the
-//! predictor-corrector method on case9241pegase), so a difference near 1e-3 is within what the
-//! AC tolerance determines (`docs/OptimizationChecklist.md`, the warm-start rule).
+//! the warm-start survey's verdict against it (`verdict`, the rule in
+//! `docs/OptimizationChecklist.md`, as corrected on 2026-11-18):
+//! - `regression`: the cold solve converged and this one didn't
+//! - `rescue`: this one converged and the cold solve didn't; `both failed` if neither did
+//! - where both converged, `miss: …` naming what O3's bar without `LAM_Q` misses: the objective
+//!   within 1e-6 and `LAM_P` within 1e-3 of the cold solve's (relative, to at least 1), and each
+//!   KKT residual within 100× MIPS-LU's cold solve of the step, or below 1e-6, as O3's bar
+//!   compared them. A predictor-corrector run solves that reference too (`reference_outcome`);
+//!   for MIPS it's the cold solve. Residuals aren't compared when the reference didn't converge.
+//! - `local optimum`: on AC, a miss of the objective alone (with the prices that follow it), the
+//!   residuals within the bar
+//! - `acceptable` otherwise
+//!
+//! `LAM_Q`'s difference is reported (`lam_q_rel`) but not barred: two cold solvers already
+//! differ in it by up to 9.4e-3 (MIPS and the predictor-corrector method on case9241pegase), so
+//! a difference near 1e-3 is within what the AC tolerance determines.
 
 use std::env;
 use std::path::Path;
@@ -44,7 +53,8 @@ use ybus_powerflow::opf::{KktResiduals, KktStatistics, OpfSolver, OpfStart, Solu
 const HEADER: &str = "case,model,solver,sequence,warm_shift,step,load_factor,mode,start,outcome,\
                       iterations,solve_ms,objective,objective_rel,lam_p_rel,lam_q_rel,\
                       kkt_stationarity,kkt_feasibility,kkt_complementarity,kkt_dual_feasibility,\
-                      kkt_factorizations,kkt_delays,kkt_factor_entries,acceptable";
+                      kkt_factorizations,kkt_delays,kkt_factor_entries,reference_outcome,\
+                      verdict";
 
 /// O3's bar, but for `LAM_Q`
 const OBJECTIVE: f64 = 1e-6;
@@ -249,8 +259,13 @@ fn relative_difference(actual: &[f64], expected: &[f64]) -> f64 {
 }
 
 /// The differences of `step` from `cold` (objective, LAM_P, LAM_Q, as CSV fields), and the
-///   survey's bar: O3's without LAM_Q
-fn compare(step: &Fields, cold: &Fields) -> (String, bool) {
+///   survey's verdict, with residuals against `reference`, MIPS-LU's cold solve if it converged
+fn compare(
+    step: &Fields,
+    cold: &Fields,
+    reference: Option<&KktResiduals>,
+    ac: bool,
+) -> (String, String) {
     let objective = (step.objective - cold.objective).abs() / cold.objective.abs().max(1.0);
     let lam_p = relative_difference(&step.lam_p, &cold.lam_p);
     let lam_q = match (&step.lam_q, &cold.lam_q) {
@@ -258,18 +273,43 @@ fn compare(step: &Fields, cold: &Fields) -> (String, bool) {
         _ => String::new(),
     };
     let fields = format!("{objective:e},{lam_p:e},{lam_q}");
-    let (a, b) = (step.residuals, cold.residuals);
-    let residuals = [
-        (a.stationarity, b.stationarity),
-        (a.feasibility, b.feasibility),
-        (a.complementarity, b.complementarity),
-        (a.dual_feasibility, b.dual_feasibility),
-    ]
-    .iter()
-    .all(|&(a, b)| a <= RESIDUAL_FACTOR * b || a <= RESIDUAL_FLOOR);
-    let acceptable = step.converged() == cold.converged()
-        && (!cold.converged() || (objective <= OBJECTIVE && lam_p <= PRICE && residuals));
-    (fields, acceptable)
+    let verdict = match (cold.converged(), step.converged()) {
+        (true, false) => "regression".to_string(),
+        (false, true) => "rescue".to_string(),
+        (false, false) => "both failed".to_string(),
+        (true, true) => {
+            let mut misses = vec![];
+            if objective > OBJECTIVE || objective.is_nan() {
+                misses.push("objective");
+            }
+            if lam_p > PRICE || lam_p.is_nan() {
+                misses.push("LAM_P");
+            }
+            let mut residual_misses = vec![];
+            if let Some(b) = reference {
+                let a = step.residuals;
+                for (name, a, b) in [
+                    ("stationarity", a.stationarity, b.stationarity),
+                    ("feasibility", a.feasibility, b.feasibility),
+                    ("complementarity", a.complementarity, b.complementarity),
+                    ("dual feasibility", a.dual_feasibility, b.dual_feasibility),
+                ] {
+                    if a > RESIDUAL_FACTOR * b && a > RESIDUAL_FLOOR {
+                        residual_misses.push(name);
+                    }
+                }
+            }
+            if ac && residual_misses.is_empty() && misses.first() == Some(&"objective") {
+                "local optimum".to_string()
+            } else if misses.is_empty() && residual_misses.is_empty() {
+                "acceptable".to_string()
+            } else {
+                misses.extend(residual_misses);
+                format!("miss: {}", misses.join("; "))
+            }
+        }
+    };
+    (fields, verdict)
 }
 
 fn outcome(status: Status) -> &'static str {
@@ -311,6 +351,23 @@ fn own_shift(solver: OpfSolver) -> f64 {
 }
 
 impl Kept {
+    /// MIPS-LU's cold solve of `case`, the residuals' reference, for a predictor-corrector run
+    fn reference(&self, case: &Case) -> Option<Result<Fields, String>> {
+        if matches!(self.solver(), OpfSolver::Mips(_)) {
+            return None;
+        }
+        Some(match self {
+            Kept::Dc(model, _) => model
+                .solve(case, &DcOpfOptions::default())
+                .map(Fields::dc)
+                .map_err(|err| err.to_string()),
+            Kept::Ac(model, _) => model
+                .solve(case, &AcOpfOptions::default())
+                .map(Fields::ac)
+                .map_err(|err| err.to_string()),
+        })
+    }
+
     fn solver(&self) -> OpfSolver {
         match self {
             Kept::Dc(_, options) => options.solver,
@@ -412,6 +469,19 @@ fn run(
             results.push((from, ms, result));
         }
         let cold = results[0].2.as_ref().ok();
+        let reference_solve = if step == 0 {
+            None
+        } else {
+            kept.reference(&changed)
+        };
+        let (reference, reference_outcome) = match &reference_solve {
+            None => (cold, String::new()),
+            Some(Ok(fields)) => (Some(fields), outcome(fields.status).to_string()),
+            Some(Err(err)) => (None, format!("error: {}", err.replace(',', ";"))),
+        };
+        let reference = reference
+            .filter(|fields| fields.converged())
+            .map(|fields| &fields.residuals);
         for (&mode, (from, ms, result)) in modes.iter().zip(&results) {
             let shift = match mode {
                 Mode::Warm(shift) => format!("{shift:e}"),
@@ -419,17 +489,18 @@ fn run(
             };
             let line = match result {
                 Ok(fields) => {
-                    let (differences, acceptable) = match (mode, cold) {
+                    let (differences, verdict) = match (mode, cold) {
                         (Mode::Cold, _) | (_, None) => (",,".to_string(), String::new()),
-                        (_, Some(cold)) => {
-                            let (d, ok) = compare(fields, cold);
-                            (d, ok.to_string())
-                        }
+                        (_, Some(cold)) => compare(fields, cold, reference, model == Model::Ac),
+                    };
+                    let reference_outcome = match mode {
+                        Mode::Cold => "",
+                        _ => reference_outcome.as_str(),
                     };
                     let r = fields.residuals;
                     format!(
                         "{prefix},{shift},{step},{mean:.6},{},{from},{},{},{ms:.3},{:e},\
-                         {differences},{:e},{:e},{:e},{:e},{},{},{},{acceptable}",
+                         {differences},{:e},{:e},{:e},{:e},{},{},{},{reference_outcome},{verdict}",
                         mode.name(),
                         outcome(fields.status),
                         fields.iterations,
@@ -443,11 +514,20 @@ fn run(
                         fields.kkt.factor_entries,
                     )
                 }
-                Err(err) => format!(
-                    "{prefix},{shift},{step},{mean:.6},{},{from},error: {},,{ms:.3},,,,,,,,,,,,",
-                    mode.name(),
-                    err.replace(',', ";")
-                ),
+                Err(err) => {
+                    // The objective through reference_outcome left empty, then the verdict
+                    let verdict = match (mode, cold) {
+                        (Mode::Cold, _) => "",
+                        (_, Some(cold)) if cold.converged() => "regression",
+                        _ => "both failed",
+                    };
+                    format!(
+                        "{prefix},{shift},{step},{mean:.6},{},{from},error: {},,{ms:.3}{}{verdict}",
+                        mode.name(),
+                        err.replace(',', ";"),
+                        ",".repeat(13),
+                    )
+                }
             };
             println!("{line}");
         }
