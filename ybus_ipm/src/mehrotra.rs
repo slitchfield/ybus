@@ -990,6 +990,19 @@ pub fn mehrotra_from<P: Problem>(
         Status::MaxIterations
     };
 
+    let unscale = |v: &[f64]| -> Vec<f64> { v.iter().map(|v| v / opt.cost_mult).collect() };
+    // The final iterate's multipliers, kept for a warm start before the report thresholds them
+    //   (unscaled, as reported)
+    let lam = unscale(&lam);
+    let iterate_multipliers = report(
+        &lam,
+        &unscale(&p.mu),
+        &unscale(&p.pi_l),
+        &unscale(&p.pi_u),
+        &split,
+        nx,
+        (neqnln, niqnln),
+    );
     // Constraints well inside their limits lose a small multiplier, as in MIPS; then the scale
     //   comes off
     for (mu, &h) in p.mu.iter_mut().zip(&e.h) {
@@ -1007,13 +1020,7 @@ pub fn mehrotra_from<P: Problem>(
             *pi = 0.0;
         }
     }
-    let unscale = |v: &[f64]| -> Vec<f64> { v.iter().map(|v| v / opt.cost_mult).collect() };
-    let (lam, mu, pi_l, pi_u) = (
-        unscale(&lam),
-        unscale(&p.mu),
-        unscale(&p.pi_l),
-        unscale(&p.pi_u),
-    );
+    let (mu, pi_l, pi_u) = (unscale(&p.mu), unscale(&p.pi_l), unscale(&p.pi_u));
 
     // The multipliers in MIPS's convention
     let multipliers = report(&lam, &mu, &pi_l, &pi_u, &split, nx, (neqnln, niqnln));
@@ -1023,6 +1030,7 @@ pub fn mehrotra_from<P: Problem>(
         status,
         iterations: i,
         multipliers,
+        iterate_multipliers,
         history: History::Mehrotra(history),
         analyses: kkt.analyses(),
         refinement_steps: kkt.refinement_steps(),

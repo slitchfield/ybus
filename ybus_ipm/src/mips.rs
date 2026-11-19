@@ -649,6 +649,9 @@ pub fn mips_from<P: Problem>(
         Status::MaxIterations
     };
 
+    // The final iterate's inequality multipliers, kept for a warm start before the report
+    //   thresholds them (unscaled, as reported)
+    let iterate_mu: Vec<f64> = mu.iter().map(|v| v / opt.cost_mult).collect();
     // Inequalities well inside their limits lose a small multiplier; then the scale comes off
     for (mu, &h) in mu.iter_mut().zip(&e.h) {
         if h < -opt.feastol && *mu < opt.mu_threshold {
@@ -661,19 +664,17 @@ pub fn mips_from<P: Problem>(
     }
 
     // The linear constraints' multipliers, back on the rows of [I; A]
-    let multipliers = report(
-        &lam,
-        &mu,
-        (&ieq, &ilt, &igt, &ibx),
-        (nx, na),
-        (setup.neqnln, setup.niqnln),
-    );
+    let sets = (&ieq[..], &ilt[..], &igt[..], &ibx[..]);
+    let nonlinear = (setup.neqnln, setup.niqnln);
+    let multipliers = report(&lam, &mu, sets, (nx, na), nonlinear);
+    let iterate_multipliers = report(&lam, &iterate_mu, sets, (nx, na), nonlinear);
     Ok(Solution {
         x,
         f,
         status,
         iterations: i,
         multipliers,
+        iterate_multipliers,
         history: History::Mips(history),
         analyses: kkt.analyses(),
         refinement_steps: kkt.refinement_steps(),

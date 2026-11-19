@@ -10,7 +10,7 @@ use ybus_powerflow::case::Case;
 use ybus_powerflow::opf::ac::{AcOpfModel, AcOpfOptions, AcOpfSolution};
 use ybus_powerflow::opf::dc::{DcOpfModel, DcOpfOptions, DcOpfSolution};
 use ybus_powerflow::opf::{
-    InteriorPointError, KktResiduals, OpfSolver, OpfStart, Solution, Status,
+    History, InteriorPointError, KktResiduals, OpfSolver, OpfStart, Solution, Status,
 };
 use ybus_powerflow::powerflow_error::PowerflowError;
 
@@ -333,5 +333,61 @@ fn a_solution_from_another_model_is_refused() {
             "AC: {:?}",
             result.err()
         );
+    }
+}
+
+/// Iteration `k`'s gradient measure, either solver
+fn gradcond(s: &Solution, k: usize) -> f64 {
+    match &s.history {
+        History::Mips(records) => records[k].gradcond,
+        History::Mehrotra(records) => records[k].gradcond,
+    }
+}
+
+fn last(s: &Solution) -> usize {
+    match &s.history {
+        History::Mips(records) => records.len() - 1,
+        History::Mehrotra(records) => records.len() - 1,
+    }
+}
+
+#[test]
+fn a_warm_start_from_its_own_solution_starts_there() {
+    // With a negligible shift and no iteration, the start is as stationary as the solution: the
+    //   reported multipliers, thresholded by mu_threshold, wouldn't be on an OPF's many inactive
+    //   flow limits (gradcond 0.27 against 2.8e-7 on case9241pegase's AC)
+    for name in ["case118", "case2383wp"] {
+        let Some(case) = case(name) else { continue };
+        let model = AcOpfModel::new(&case).unwrap();
+        for options in [AcOpfOptions::default(), AcOpfOptions::mehrotra()] {
+            let solution = model.solve(&case, &options).unwrap();
+            assert!(solution.converged(), "{name}");
+            let mut start = options;
+            start.solver = match start.solver {
+                OpfSolver::Mips(mut o) => {
+                    (o.warm_shift, o.max_it) = (1e-12, 0);
+                    OpfSolver::Mips(o)
+                }
+                OpfSolver::Mehrotra(mut o) => {
+                    (o.warm_shift, o.max_it) = (1e-12, 0);
+                    OpfSolver::Mehrotra(o)
+                }
+                other => other,
+            };
+            let warm = model
+                .solve_from(&case, &start, OpfStart::Warm(&solution.solver))
+                .unwrap();
+            let (at_start, at_solution) = (
+                gradcond(&warm.solver, 0),
+                gradcond(&solution.solver, last(&solution.solver)),
+            );
+            eprintln!(
+                "{name}: the start's gradcond {at_start:.1e}, the solution's {at_solution:.1e}"
+            );
+            assert!(
+                at_start <= (10.0 * at_solution).max(1e-6),
+                "{name}: gradcond {at_start:e} against {at_solution:e}"
+            );
+        }
     }
 }

@@ -315,3 +315,22 @@ fn a_warm_start_that_doesnt_fit_is_an_error() {
         Err(InteriorPointError::InvalidOption { name: "warm_shift" })
     ));
 }
+
+#[test]
+fn the_iterate_multipliers_are_the_report_before_its_threshold() {
+    let (qp, constraints) = every_row_kind([-5.0, 3.0, -4.0, 0.0]);
+    let mut mips_options = MipsOptions::default();
+    mips_options.mu_threshold = 0.0;
+    let mut mehrotra_options = MehrotraOptions::default();
+    mehrotra_options.mu_threshold = 0.0;
+    for solution in [
+        qps_mips_from(&qp, &constraints, Start::Cold(&[0.0; 4]), &mips_options).unwrap(),
+        qps_mehrotra_from(&qp, &constraints, Start::Cold(&[0.0; 4]), &mehrotra_options).unwrap(),
+    ] {
+        assert_eq!(solution.iterate_multipliers, solution.multipliers);
+        assert_eq!(
+            WarmStart::from_solution(&solution).multipliers,
+            solution.iterate_multipliers
+        );
+    }
+}

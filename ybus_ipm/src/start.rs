@@ -54,11 +54,12 @@ pub struct WarmStart {
 }
 
 impl WarmStart {
-    /// The point and multipliers `solution` ended at.
+    /// The point and multipliers `solution` ended at: its final iterate's multipliers
+    /// ([`Solution::iterate_multipliers`]), before the report thresholds them.
     pub fn from_solution(solution: &Solution) -> WarmStart {
         WarmStart {
             x: solution.x.clone(),
-            multipliers: solution.multipliers.clone(),
+            multipliers: solution.iterate_multipliers.clone(),
         }
     }
 }

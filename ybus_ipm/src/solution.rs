@@ -50,8 +50,13 @@ pub struct Solution {
     pub status: Status,
     /// The number of iterations taken
     pub iterations: usize,
-    /// The multipliers
+    /// The multipliers, with an inequality's set to zero when it isn't binding and its multiplier
+    /// is below the solver's `mu_threshold`, as MATPOWER reports them
     pub multipliers: Multipliers,
+    /// The final iterate's multipliers, in the same layout and units but not thresholded: what a
+    /// warm start ([`WarmStart::from_solution`](crate::start::WarmStart::from_solution)) carries,
+    /// since the zeroed multipliers of many inactive constraints move it off the solution
+    pub iterate_multipliers: Multipliers,
     /// One record for the starting point and one per iteration, in the solver's own terms
     pub history: History,
     /// How many times the KKT matrix was analyzed: 1 if its pattern held from the first
