@@ -63,8 +63,8 @@ change. Each record names the code, the machine and the method it used.
   example on each case with costs, the model chosen by `YBUS_BENCH_MODEL` (`dc` or `ac`), and
   compares it with MATPOWER's MP-Core and legacy results, generating any that are missing.
 - **Warm-started OPF sequences:** `scripts/benchmark-opf-sequence.sh [<output.csv>]` runs the
-  `opf_sequence` example over cases, models, solvers, sequences (a load sweep and a seeded
-  random walk) and warm shifts, from the `YBUS_SEQUENCE_*` variables. Each step is solved cold,
+  `opf_sequence` example over cases, models, solvers, sequences (a load sweep, a seeded
+  random walk, and seeded samples of single branch and generator outages) and warm shifts, from the `YBUS_SEQUENCE_*` variables. Each step is solved cold,
   primal-only and warm, and the last two get the warm-start rule's verdict against the cold step.
 - **Orderings:** `scripts/benchmark-ordering.sh [<output.csv>]` factors each case's Jacobian and
   B′ under AMD and COLAMD with the `ordering_survey` example.

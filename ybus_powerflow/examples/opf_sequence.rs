@@ -11,14 +11,29 @@
 //! solver's own `warm_shift`). The cold and primal chains don't depend on the shift, so one run
 //! covers every shift with one of each.
 //!
-//! **The sequences** scale every bus's load, active and reactive, from the case's:
+//! **The sequences.** The load sequences scale every bus's load, active and reactive, from the
+//! case's:
 //! - `sweep`: by 0.90, 0.91, …, 1.10, 21 steps
 //! - `walk`: 25 steps from the case's own load, each bus's then moved by an independent uniform
 //!   step in ±2% of its current value per step, from a SplitMix64 stream with a fixed seed
 //!
-//! **The chains.** Step 0 is solved cold, and starts every chain. From step 1 each chain starts
-//! from its own previous solution, so a warm chain's drift shows. A chain whose previous solve
-//! didn't converge starts its step cold, and the row says so (`start`).
+//! The outage sequences take one branch or generator out of service per step:
+//! - `branch-outages`: the in-service branches that aren't bridges (`find_bridges`), whose
+//!   outage would island part of the network
+//! - `generator-outages`: the in-service generators
+//!
+//! Each takes a seeded sample of at most 50 (`OUTAGES`), in case order, after step 0, the case
+//! itself. Each outage step builds its own model (timed as `model_ms`), and `outage` is the
+//! branch's or generator's case row.
+//!
+//! **The chains.** Step 0 is solved cold, and starts every chain:
+//! - **On a load sequence,** each chain from step 1 starts from its own previous solution, so a
+//!   warm chain's drift shows. A chain whose previous solve didn't converge starts its step
+//!   cold, and the row says so (`start`).
+//! - **On an outage sequence,** the chains are a star, as an N-1 study solves them. Each step
+//!   starts from step 0's solution, mapped onto its model by `map_start` (`start` is `base`):
+//!   `primal` from its point (`OpfStart::MappedPrimal`), and `warm` from its point and
+//!   multipliers (`OpfStart::Mapped`).
 //!
 //! **Prints** one CSV line per step and chain, with the columns in `HEADER`: the step's outcome,
 //! iterations and solve time (one run: a chain can't repeat a step), its objective and KKT
@@ -46,15 +61,18 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use ybus_powerflow::case::Case;
+use ybus_powerflow::islands::find_bridges;
 use ybus_powerflow::opf::ac::{AcOpfModel, AcOpfOptions, AcOpfSolution};
 use ybus_powerflow::opf::dc::{DcOpfModel, DcOpfOptions, DcOpfSolution};
-use ybus_powerflow::opf::{KktResiduals, KktStatistics, OpfSolver, OpfStart, Solution, Status};
+use ybus_powerflow::opf::{
+    KktResiduals, KktStatistics, OpfSolver, OpfStart, Solution, Status, WarmStart,
+};
 
 const HEADER: &str = "case,model,solver,sequence,warm_shift,step,load_factor,mode,start,outcome,\
                       iterations,solve_ms,objective,objective_rel,lam_p_rel,lam_q_rel,\
                       kkt_stationarity,kkt_feasibility,kkt_complementarity,kkt_dual_feasibility,\
                       kkt_factorizations,kkt_delays,kkt_factor_entries,reference_outcome,\
-                      verdict";
+                      verdict,outage,model_ms";
 
 /// O3's bar, but for `LAM_Q`
 const OBJECTIVE: f64 = 1e-6;
@@ -66,6 +84,10 @@ const RESIDUAL_FLOOR: f64 = 1e-6;
 const WALK_SEED: u64 = 0x0005_EED0_FDA7;
 const WALK_STEP: f64 = 0.02;
 const WALK_STEPS: usize = 25;
+
+/// The outage sequences' seed, and their most outages
+const OUTAGE_SEED: u64 = 0x0000_0D7A_6E5E;
+const OUTAGES: usize = 50;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Model {
@@ -110,7 +132,9 @@ fn main() -> ExitCode {
     };
     let (sequence, rest) = match rest {
         [flag, sequence, rest @ ..]
-            if flag == "--sequence" && (sequence == "sweep" || sequence == "walk") =>
+            if flag == "--sequence"
+                && ["sweep", "walk", "branch-outages", "generator-outages"]
+                    .contains(&sequence.as_str()) =>
         {
             (sequence.as_str(), rest)
         }
@@ -137,7 +161,8 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: opf_sequence --model dc|ac --solver mips|mehrotra --sequence sweep|walk \
+        "usage: opf_sequence --model dc|ac --solver mips|mehrotra \
+         --sequence sweep|walk|branch-outages|generator-outages \
          [--warm-shifts <δ>[,<δ>…]] <case.m> | --header"
     );
     ExitCode::from(2)
@@ -184,6 +209,72 @@ fn steps(sequence: &str, buses: usize) -> Vec<(Vec<f64>, f64)> {
             steps
         }
     }
+}
+
+/// One step of a sequence: its case, the mean load factor for the CSV, and the case row of the
+///   branch or generator out of service, for an outage sequence's steps after the first
+struct Step {
+    case: Case,
+    factor: f64,
+    outage: Option<usize>,
+}
+
+/// The sequence's steps from `case`: a load sequence's, or an outage sequence's (the case
+///   itself, then each sampled outage)
+fn sequence_steps(sequence: &str, case: &Case) -> Result<Vec<Step>, String> {
+    let outages = match sequence {
+        "branch-outages" => {
+            let bridges = find_bridges(case).map_err(|err| err.to_string())?;
+            (0..case.branch.len())
+                .filter(|&row| case.branch[row].status && bridges.binary_search(&row).is_err())
+                .collect()
+        }
+        "generator-outages" => (0..case.generator.len())
+            .filter(|&row| case.generator[row].status)
+            .collect(),
+        _ => {
+            return Ok(steps(sequence, case.bus.len())
+                .into_iter()
+                .map(|(factors, factor)| Step {
+                    case: loaded(case, &factors),
+                    factor,
+                    outage: None,
+                })
+                .collect());
+        }
+    };
+    let mut steps = vec![Step {
+        case: case.clone(),
+        factor: 1.0,
+        outage: None,
+    }];
+    for row in sample(outages, OUTAGES) {
+        let mut outage = case.clone();
+        match sequence {
+            "branch-outages" => outage.branch[row].status = false,
+            _ => outage.generator[row].status = false,
+        }
+        steps.push(Step {
+            case: outage,
+            factor: 1.0,
+            outage: Some(row),
+        });
+    }
+    Ok(steps)
+}
+
+/// At most `n` of `rows`, a seeded sample (a partial Fisher–Yates shuffle by SplitMix64), in
+///   case order
+fn sample(mut rows: Vec<usize>, n: usize) -> Vec<usize> {
+    let mut random = SplitMix64(OUTAGE_SEED);
+    let n = n.min(rows.len());
+    for i in 0..n {
+        let j = i + (random.next() % (rows.len() - i) as u64) as usize;
+        rows.swap(i, j);
+    }
+    rows.truncate(n);
+    rows.sort_unstable();
+    rows
 }
 
 fn loaded(case: &Case, factors: &[f64]) -> Case {
@@ -351,6 +442,51 @@ fn own_shift(solver: OpfSolver) -> f64 {
 }
 
 impl Kept {
+    /// The kept model of `case`, at MATPOWER's OPF settings for MIPS or the predictor-corrector
+    ///   method
+    fn new(model: Model, mehrotra: bool, case: &Case) -> Result<Kept, String> {
+        Ok(match model {
+            Model::Dc => {
+                let options = if mehrotra {
+                    DcOpfOptions::mehrotra()
+                } else {
+                    DcOpfOptions::default()
+                };
+                let model = DcOpfModel::new(case).map_err(|err| err.to_string())?;
+                Kept::Dc(Box::new(model), options)
+            }
+            Model::Ac => {
+                let options = if mehrotra {
+                    AcOpfOptions::mehrotra()
+                } else {
+                    AcOpfOptions::default()
+                };
+                let model = AcOpfModel::new(case).map_err(|err| err.to_string())?;
+                Kept::Ac(Box::new(model), options)
+            }
+        })
+    }
+
+    /// `previous`, `from`'s solution of `from_case`, mapped onto this model's `case`
+    fn map_start(
+        &self,
+        case: &Case,
+        from: &Kept,
+        from_case: &Case,
+        previous: &Solution,
+    ) -> Result<WarmStart, String> {
+        match (self, from) {
+            (Kept::Dc(model, _), Kept::Dc(from, _)) => {
+                model.map_start(case, from, from_case, previous)
+            }
+            (Kept::Ac(model, _), Kept::Ac(from, _)) => {
+                model.map_start(case, from, from_case, previous)
+            }
+            _ => unreachable!("models of one kind"),
+        }
+        .map_err(|err| err.to_string())
+    }
+
     /// MIPS-LU's cold solve of `case`, the residuals' reference, for a predictor-corrector run
     fn reference(&self, case: &Case) -> Option<Result<Fields, String>> {
         if matches!(self.solver(), OpfSolver::Mips(_)) {
@@ -419,26 +555,12 @@ fn run(
         .and_then(|stem| stem.to_str())
         .ok_or("the case path has no file name")?;
     let case = Case::from_path(path).map_err(|err| err.to_string())?;
-    let kept = match model {
-        Model::Dc => {
-            let options = if mehrotra {
-                DcOpfOptions::mehrotra()
-            } else {
-                DcOpfOptions::default()
-            };
-            let model = DcOpfModel::new(&case).map_err(|err| err.to_string())?;
-            Kept::Dc(Box::new(model), options)
-        }
-        Model::Ac => {
-            let options = if mehrotra {
-                AcOpfOptions::mehrotra()
-            } else {
-                AcOpfOptions::default()
-            };
-            let model = AcOpfModel::new(&case).map_err(|err| err.to_string())?;
-            Kept::Ac(Box::new(model), options)
-        }
-    };
+    let kept = Kept::new(model, mehrotra, &case)?;
+    // An outage sequence's chains are a star, every step from the base case's solution, as an
+    //   N-1 study solves them, each step on its own model; a load sequence's are chains, each
+    //   from its own previous step, on the base case's model
+    let star = sequence.ends_with("-outages");
+    let mut base: Option<Solution> = None;
     let shifts = shifts.unwrap_or_else(|| vec![own_shift(kept.solver())]);
     let mut chains = vec![Mode::Cold, Mode::Primal];
     chains.extend(shifts.iter().map(|&shift| Mode::Warm(shift)));
@@ -449,14 +571,52 @@ fn run(
     );
     // Each chain's previous solution, if it converged
     let mut previous: Vec<Option<Solution>> = vec![None; chains.len()];
-    for (step, (factors, mean)) in steps(sequence, case.bus.len()).iter().enumerate() {
-        let changed = loaded(&case, factors);
+    for (
+        step,
+        Step {
+            case: changed,
+            factor: mean,
+            outage,
+        },
+    ) in sequence_steps(sequence, &case)?.iter().enumerate()
+    {
         let modes = if step == 0 { &chains[..1] } else { &chains[..] };
+        // An outage step's own model, and the base solution mapped onto it
+        let (own, model_ms) = if star && step > 0 {
+            let begin = Instant::now();
+            let own = Kept::new(model, mehrotra, changed);
+            (
+                Some(own),
+                format!("{:.3}", begin.elapsed().as_secs_f64() * 1e3),
+            )
+        } else {
+            (None, String::new())
+        };
+        let own = match own {
+            Some(Ok(own)) => Some(own),
+            Some(Err(err)) => {
+                // A model that can't be built: every chain fails alike, so print none
+                eprintln!("step {step}, outage {outage:?}: {err}");
+                continue;
+            }
+            None => None,
+        };
+        let stepped = own.as_ref().unwrap_or(&kept);
+        let mapped = match (&own, &base) {
+            (Some(own), Some(base)) => Some(own.map_start(changed, &kept, &case, base)?),
+            _ => None,
+        };
+        let suffix = format!(
+            ",{},{model_ms}",
+            outage.map(|row| row.to_string()).unwrap_or_default()
+        );
         let mut results: Vec<(&str, f64, Result<Fields, String>)> = vec![];
         for (&mode, chain) in modes.iter().zip(&previous) {
-            let (start, from) = match (mode, chain) {
-                (Mode::Primal, Some(p)) => (OpfStart::Primal(p), "previous"),
-                (Mode::Warm(_), Some(p)) => (OpfStart::Warm(p), "previous"),
+            let (start, from) = match (mode, chain, &mapped) {
+                (Mode::Primal, _, Some(m)) => (OpfStart::MappedPrimal(m), "base"),
+                (Mode::Warm(_), _, Some(m)) => (OpfStart::Mapped(m), "base"),
+                (Mode::Primal, Some(p), None) if !star => (OpfStart::Primal(p), "previous"),
+                (Mode::Warm(_), Some(p), None) if !star => (OpfStart::Warm(p), "previous"),
                 _ => (OpfStart::Cold, "cold"),
             };
             let shift = match mode {
@@ -464,7 +624,7 @@ fn run(
                 _ => None,
             };
             let begin = Instant::now();
-            let result = kept.solve(&changed, start, shift);
+            let result = stepped.solve(changed, start, shift);
             let ms = begin.elapsed().as_secs_f64() * 1e3;
             results.push((from, ms, result));
         }
@@ -472,7 +632,7 @@ fn run(
         let reference_solve = if step == 0 {
             None
         } else {
-            kept.reference(&changed)
+            stepped.reference(changed)
         };
         let (reference, reference_outcome) = match &reference_solve {
             None => (cold, String::new()),
@@ -500,7 +660,8 @@ fn run(
                     let r = fields.residuals;
                     format!(
                         "{prefix},{shift},{step},{mean:.6},{},{from},{},{},{ms:.3},{:e},\
-                         {differences},{:e},{:e},{:e},{:e},{},{},{},{reference_outcome},{verdict}",
+                         {differences},{:e},{:e},{:e},{:e},{},{},{},{reference_outcome},{verdict}\
+                         {suffix}",
                         mode.name(),
                         outcome(fields.status),
                         fields.iterations,
@@ -522,7 +683,8 @@ fn run(
                         _ => "both failed",
                     };
                     format!(
-                        "{prefix},{shift},{step},{mean:.6},{},{from},error: {},,{ms:.3}{}{verdict}",
+                        "{prefix},{shift},{step},{mean:.6},{},{from},error: {},,{ms:.3}{}{verdict}\
+                         {suffix}",
                         mode.name(),
                         err.replace(',', ";"),
                         ",".repeat(13),
@@ -538,8 +700,9 @@ fn run(
             .map(|(_, _, result)| result.ok().filter(Fields::converged).map(|f| f.solver))
             .collect();
         if step == 0 {
+            base = solutions[0].clone();
             previous = vec![solutions[0].clone(); chains.len()];
-        } else {
+        } else if !star {
             previous = solutions;
         }
     }
