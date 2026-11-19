@@ -973,8 +973,78 @@ Each solve now starts cold, rebuilding its problem and starting from the same po
     sweep the speedup is 0.98–1.04×, since a solve's own work dwarfs its setup. The models are
     for what they enable: warm starts, and sequences through one value with pattern changes
     refused.
-- [ ] Warm starts in the solvers (PR B)
-- [ ] Warm OPF sequences on one network (PR C)
+- [x] **Warm starts in the solvers** (PR B, #85): `ybus_ipm::start` with `Start::Cold` and
+  `Start::Warm(&WarmStart)`. The solvers take them through `mips_from`, `mehrotra_from` and their
+  `qps_` forms, and the original functions delegate with a cold start, bit for bit.
+  - **The warm start:**
+    - It inverts each solver's multiplier report, a function whose round trip a unit test checks.
+    - It recomputes the slacks from `h(x)`.
+    - It raises every inequality slack and multiplier to at least `warm_shift`.
+    - The predictor-corrector method pushes its point `warm_shift` inside its bounds.
+  - **Three defects, found by PR C's OPF sequences and fixed there:**
+    - the multipliers weren't scaled back by `cost_mult`
+    - the predictor-corrector method's bound slacks were raised, letting a step cross its bound
+    - it read the thresholded report instead of the final iterate's multipliers
+- [x] **Warm OPF sequences on one network** (PR C): `solve_from` with `OpfStart` on both
+  models, the `opf_sequence` survey, and `warm_shift`'s default from it.
+  - **The result** ([`opf-warm-start-2026-11-18.md`](benchmarks/opf-warm-start-2026-11-18.md)):
+    no shift qualifies under the corrected rule, for either solver, so `warm_shift` stays at
+    the provisional 1e-4.
+    - **MIPS at 1e-6** comes closest. It has no regressions and 38 rescues, with median
+      speedups of ×2.11 (DC) and ×3.40 (AC), and misses on 3 AC steps of 616.
+    - **The predictor-corrector method** fails most on case9241pegase's AC, where an absolute
+      shift moves the start far from stationary.
+  - **Left for later:** a shift relative to the problem (for example, to the previous
+    solution's complementarity, as Gondzio and Grothey's is), surveyed by the same tool.
+  - **The rule, written 2026-11-18 before the survey,** as #59's and #82's were:
+    - **The sequences:** each case's loads swept ×0.90 to ×1.10 (21 steps), and a seeded random
+      walk of 25 steps, each bus ±2% a step. Every step is solved cold, primal-only and warm
+      at each shift, each chain from its own previous solution.
+    - **The shifts:** 1, 1e-1, 1e-2, 1e-4 and 1e-6, widened from the planned 1e-2, 1e-4 and
+      1e-6 (decided 2026-11-18). On case2383wp's DC OPF, the predictor-corrector method warm
+      from ×1.00 to ×1.02 converges from 1, 1e-1 and 1e-2 in 17, 15 and 22 iterations (31 cold),
+      and fails from 1e-4 and 1e-6 on the step-size limit. Its multipliers reach 1e5.
+    - **A warm step is acceptable** if it has the cold step's outcome and, where the cold step
+      converged, meets O3's bar against it without `LAM_Q`:
+      - the objective within 1e-6
+      - `LAM_P` within 1e-3
+      - each KKT residual within 100× the cold step's or below 1e-6
+    - **Why `LAM_Q` is reported but not barred** (decided 2026-11-18): two cold solvers already
+      differ in it. MIPS and the predictor-corrector method, each against MATPOWER, differ by
+      3.5e-4 on case118, 7.3e-3 on case300 and 9.4e-3 on case9241pegase. On case118's AC,
+      the warm and primal steps' only misses were `LAM_Q`'s, at 1.0e-3 to 1.8e-3.
+    - **On AC, a warm step reaching a different local optimum** is counted and listed per case,
+      but doesn't disqualify a shift. It means both steps converged with every residual within
+      the bar, but the objective beyond 1e-6 (its prices differ with it). The problem is
+      nonconvex, the warm start is opt-in, and neither optimum is wrong.
+    - **`warm_shift`'s default** is the shift with the fewest median iterations over all warm
+      steps, among those with no unacceptable step on DC. On AC, the steps where the cold step
+      converged count too, apart from the different local optima. Both solvers get the same
+      default. Ties go to the larger shift, which is safer. If no shift qualifies, the default
+      stays provisional and the record says why.
+    - **Corrected 2026-11-18, after the first tier-1 run and before the rerun** (decided with
+      the maintainer). The rule as written above chose no shift, for reasons outside the warm
+      start:
+      - **The outcome:** "the cold step's outcome" counted a warm step that converged where the
+        cold one failed as unacceptable: 38 such rescues on MIPS's DC alone. Now only a
+        **regression** is unacceptable, meaning the cold step converged and the warm one didn't.
+        Rescues are counted as gains.
+      - **The residuals' reference:** "100× the cold step's" flagged warm steps that stopped at
+        the solver's tolerance where the cold solve over-converged: on case9, a stationarity of
+        5e-6 against 1e-11, with objectives agreeing to 1e-11. They're now compared with
+        **MIPS-LU's cold solve of the step**, as O3's bar compared them. They aren't compared
+        where that solve didn't converge.
+      - **Per solver:** each solver gets the default this rule chooses from its own steps, since
+        the best shifts differ by solver (1e-6 for MIPS on DC and AC; 1e-2 on DC and 1e-6 on AC
+        for the predictor-corrector method). A solver with no qualifying shift keeps the
+        provisional 1e-4.
+      - **The first run also found a defect, fixed before the rerun:** the warm start read the
+        thresholded multipliers (`mu_threshold`). It now reads the final iterate's,
+        `Solution::iterate_multipliers`.
+    - **The cases:** tier 1 runs every shift on case9, case30, case118, case300, case2383wp,
+      case3120sp and case9241pegase, DC and AC, both solvers, both sequences. Tier 2 runs the
+      chosen shift on case13659pegase (AC), case_ACTIVSg10k (DC, AC) and case_ACTIVSg25k (DC,
+      and AC on the predictor-corrector method only).
 - [ ] Warm starts across outages (PR D)
 
 ## References

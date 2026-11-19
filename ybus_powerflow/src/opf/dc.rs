@@ -21,12 +21,15 @@
 //! options for the OPF (`feastol` = `opf.violation` = 5e-6, the rest MIPS's defaults), or, if
 //! the options choose it, by [`qps_mehrotra`] from the same point with the same `feastol`. The
 //! results and multipliers are mapped back to the case as `dcopf_solver` and `opf` map them.
+//!
+//! [`qps_mips`]: ybus_ipm::mips::qps_mips
+//! [`qps_mehrotra`]: ybus_ipm::mehrotra::qps_mehrotra
 
 use std::f64::consts::PI;
 
 use ybus_ipm::kkt::{KktFactorization, KktOrdering};
-use ybus_ipm::mehrotra::{qps_mehrotra, MehrotraOptions};
-use ybus_ipm::mips::{qps_mips, MipsOptions};
+use ybus_ipm::mehrotra::{qps_mehrotra_from, MehrotraOptions};
+use ybus_ipm::mips::{qps_mips_from, MipsOptions};
 use ybus_ipm::problem::{Constraints, QuadraticProblem};
 use ybus_ipm::solution::{kkt_residuals, KktResiduals, Solution, Status};
 use ybus_sparse::compressed_matrix::CsrMatrix;
@@ -35,7 +38,7 @@ use crate::case::Case;
 use crate::dc::Bdc;
 use crate::opf::cost::OpfCosts;
 use crate::opf::{
-    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver,
+    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver, OpfStart,
 };
 use crate::powerflow_error::PowerflowError;
 use crate::topology::{Network, Signature};
@@ -220,6 +223,20 @@ impl DcOpfModel {
         case: &Case,
         options: &DcOpfOptions,
     ) -> Result<DcOpfSolution, PowerflowError> {
+        self.solve_from(case, options, OpfStart::Cold)
+    }
+
+    /// [`DcOpfModel::solve`] from `start`: MATPOWER's starting point, exactly
+    /// [`DcOpfModel::solve`]'s, or a previous solution of this model's (see [`OpfStart`]).
+    ///
+    /// Returns [`DcOpfModel::solve`]'s errors, and `PowerflowError::Solver` for a previous
+    /// solution that doesn't fit the model's problem.
+    pub fn solve_from(
+        &self,
+        case: &Case,
+        options: &DcOpfOptions,
+        start: OpfStart<'_>,
+    ) -> Result<DcOpfSolution, PowerflowError> {
         Network::new(case, check_reactance)?;
         self.signature.check(case)?;
         let network = &self.network;
@@ -316,12 +333,14 @@ impl DcOpfModel {
         };
         let qp = QuadraticProblem { h, c };
         let refused = |error| PowerflowError::Solver { error };
+        let warm = start.warm_start();
+        let start = start.solver_start(&x0, &warm);
         let solution = match &options.solver {
             OpfSolver::Mips(mips) => {
-                qps_mips(&qp, &constraints, Some(&x0), mips).map_err(refused)?
+                qps_mips_from(&qp, &constraints, start, mips).map_err(refused)?
             }
             OpfSolver::Mehrotra(mehrotra) => {
-                qps_mehrotra(&qp, &constraints, Some(&x0), mehrotra).map_err(refused)?
+                qps_mehrotra_from(&qp, &constraints, start, mehrotra).map_err(refused)?
             }
         };
         let residuals = kkt_residuals(&qp, &constraints, &solution.x, &solution.multipliers)

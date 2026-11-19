@@ -31,6 +31,7 @@ change. Each record names the code, the machine and the method it used.
 | [`ldlt-kernel-2026-11-17.md`](ldlt-kernel-2026-11-17.md) | The LDLᵀ's dense kernel updating only its lower triangle (phase O4, target 4), bit for bit: the kernel stage 1.23–2.00× faster, the AC predictor-corrector solves 1.11–1.26×; and a blocked update, also bit for bit, tried and dropped as slower at these front sizes. |
 | [`kkt-ordering-2026-11-17.md`](kkt-ordering-2026-11-17.md) | The matched KKT ordering for the pivoted LDLᵀ (phase O4, target 4), and the ordering study that closes O4: delays 7.4× (DC) and 22× (AC) fewer, fill 19–21% less; the DC predictor-corrector default switched by the rule written before the survey (1.14–1.30× faster), AC kept on AMD for one differing outcome. |
 | [`opf-models-2026-11-18.md`](opf-models-2026-11-18.md) | Kept OPF models (`AcOpfModel`, `DcOpfModel`), the warm starts' first stage: bit for bit what the one-shot functions give, and on their own within 4% of them on a load sweep, since a solve's work dwarfs its setup. |
+| [`opf-warm-start-2026-11-18.md`](opf-warm-start-2026-11-18.md) | Warm-started OPF sequences (`solve_from`, `OpfStart`): three warm-start defects found and fixed, then no `warm_shift` qualifying under the rule written before the survey, so the default stays provisional. MIPS at 1e-6 saves a median ×2.11 (DC) and ×3.40 (AC) with no regressions; the predictor-corrector method needs a relative shift. The survey's CSV is beside it, gzipped. |
 
 ## Measuring
 
@@ -61,6 +62,10 @@ change. Each record names the code, the machine and the method it used.
 - **The optimal power flow:** `scripts/benchmark-opf.sh [<output.csv>]` runs the `opf_survey`
   example on each case with costs, the model chosen by `YBUS_BENCH_MODEL` (`dc` or `ac`), and
   compares it with MATPOWER's MP-Core and legacy results, generating any that are missing.
+- **Warm-started OPF sequences:** `scripts/benchmark-opf-sequence.sh [<output.csv>]` runs the
+  `opf_sequence` example over cases, models, solvers, sequences (a load sweep and a seeded
+  random walk) and warm shifts, from the `YBUS_SEQUENCE_*` variables. Each step is solved cold,
+  primal-only and warm, and the last two get the warm-start rule's verdict against the cold step.
 - **Orderings:** `scripts/benchmark-ordering.sh [<output.csv>]` factors each case's Jacobian and
   B′ under AMD and COLAMD with the `ordering_survey` example.
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example

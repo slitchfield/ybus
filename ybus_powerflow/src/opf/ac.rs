@@ -29,10 +29,13 @@
 //! `feastol` and `cost_mult`, and with the constraints' derivatives from Technical Note 2's
 //! formulas (in `opf::derivatives`, public only for its tests). The results and multipliers are mapped back to the case
 //! as `nlpopf_solver` and `opf` map them.
+//!
+//! [`mips`]: ybus_ipm::mips::mips
+//! [`mehrotra`]: ybus_ipm::mehrotra::mehrotra
 
 use ybus_ipm::kkt::KktFactorization;
-use ybus_ipm::mehrotra::{mehrotra, MehrotraOptions};
-use ybus_ipm::mips::{mips, MipsOptions};
+use ybus_ipm::mehrotra::{mehrotra_from, MehrotraOptions};
+use ybus_ipm::mips::{mips_from, MipsOptions};
 use ybus_ipm::problem::{
     same_pattern, Constraints, NonlinearConstraints, NonlinearMultipliers, Problem,
 };
@@ -48,7 +51,7 @@ use crate::opf::derivatives::{
     SquaredMagnitudesPlan, WeightedHessianPlan,
 };
 use crate::opf::{
-    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver,
+    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver, OpfStart,
 };
 use crate::powerflow_error::PowerflowError;
 use crate::topology::{Network, Signature};
@@ -842,6 +845,20 @@ impl AcOpfModel {
         case: &Case,
         options: &AcOpfOptions,
     ) -> Result<AcOpfSolution, PowerflowError> {
+        self.solve_from(case, options, OpfStart::Cold)
+    }
+
+    /// [`AcOpfModel::solve`] from `start`: MATPOWER's starting point, exactly
+    /// [`AcOpfModel::solve`]'s, or a previous solution of this model's (see [`OpfStart`]).
+    ///
+    /// Returns [`AcOpfModel::solve`]'s errors, and `PowerflowError::Solver` for a previous
+    /// solution that doesn't fit the model's problem.
+    pub fn solve_from(
+        &self,
+        case: &Case,
+        options: &AcOpfOptions,
+        start: OpfStart<'_>,
+    ) -> Result<AcOpfSolution, PowerflowError> {
         Network::new(case, check_impedance)?;
         self.signature.check(case)?;
         let network = &self.network;
@@ -896,12 +913,14 @@ impl AcOpfModel {
             xmax: Some(xmax),
         };
         let refused = |error| PowerflowError::Solver { error };
+        let warm = start.warm_start();
+        let start = start.solver_start(&x0, &warm);
         let solution = match &options.solver {
             OpfSolver::Mips(options) => {
-                mips(&problem, &constraints, &x0, options).map_err(refused)?
+                mips_from(&problem, &constraints, start, options).map_err(refused)?
             }
             OpfSolver::Mehrotra(options) => {
-                mehrotra(&problem, &constraints, &x0, options).map_err(refused)?
+                mehrotra_from(&problem, &constraints, start, options).map_err(refused)?
             }
         };
         let residuals = kkt_residuals(&problem, &constraints, &solution.x, &solution.multipliers)

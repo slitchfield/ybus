@@ -64,18 +64,20 @@ fn every_row_kind(c: [f64; 4]) -> (QuadraticProblem, Constraints) {
     (qp, constraints)
 }
 
-/// The predictor-corrector method's options with `warm_shift` and `max_it`
-fn mehrotra_options(shift: f64, max_it: usize) -> MehrotraOptions {
+/// The predictor-corrector method's options with `warm_shift`, `max_it` and `cost_mult`
+fn mehrotra_options(shift: f64, max_it: usize, cost_mult: f64) -> MehrotraOptions {
     let mut options = MehrotraOptions::default();
     options.warm_shift = shift;
     options.max_it = max_it;
+    options.cost_mult = cost_mult;
     options
 }
 
-fn mips_options(shift: f64, max_it: usize) -> MipsOptions {
+fn mips_options(shift: f64, max_it: usize, cost_mult: f64) -> MipsOptions {
     let mut options = MipsOptions::default();
     options.warm_shift = shift;
     options.max_it = max_it;
+    options.cost_mult = cost_mult;
     options
 }
 
@@ -102,13 +104,30 @@ fn close(a: f64, b: f64) -> bool {
 fn the_multipliers_map_back_onto_every_kind_of_row() {
     // Warm started from a solution with a negligible shift, and no iteration taken, the start's
     //   gradient measure is the solution's: any multiplier on the wrong row, or of the wrong sign,
-    //   would make it large
+    //   would make it large. At a cost_mult other than 1 too, as the AC OPF runs, since a
+    //   solution reports its multipliers unscaled
     let (qp, constraints) = every_row_kind([-5.0, 3.0, -4.0, 0.0]);
-    for solver in ["MIPS", "predictor-corrector"] {
+    for (solver, cost_mult) in [
+        ("MIPS", 1.0),
+        ("predictor-corrector", 1.0),
+        ("MIPS", 1e-4),
+        ("predictor-corrector", 1e-4),
+    ] {
+        let solver = &format!("{solver}, cost_mult {cost_mult:e}");
         let solve = |start: Start<'_>, shift: f64, max_it: usize| {
-            match solver {
-                "MIPS" => qps_mips_from(&qp, &constraints, start, &mips_options(shift, max_it)),
-                _ => qps_mehrotra_from(&qp, &constraints, start, &mehrotra_options(shift, max_it)),
+            match solver.starts_with("MIPS") {
+                true => qps_mips_from(
+                    &qp,
+                    &constraints,
+                    start,
+                    &mips_options(shift, max_it, cost_mult),
+                ),
+                false => qps_mehrotra_from(
+                    &qp,
+                    &constraints,
+                    start,
+                    &mehrotra_options(shift, max_it, cost_mult),
+                ),
             }
             .unwrap()
         };
@@ -282,7 +301,7 @@ fn a_warm_start_that_doesnt_fit_is_an_error() {
             &qp,
             &constraints,
             Start::Warm(&warm),
-            &mips_options(-1.0, 150)
+            &mips_options(-1.0, 150, 1.0)
         ),
         Err(InteriorPointError::InvalidOption { name: "warm_shift" })
     ));
@@ -291,8 +310,27 @@ fn a_warm_start_that_doesnt_fit_is_an_error() {
             &qp,
             &constraints,
             Start::Warm(&warm),
-            &mehrotra_options(f64::NAN, 150)
+            &mehrotra_options(f64::NAN, 150, 1.0)
         ),
         Err(InteriorPointError::InvalidOption { name: "warm_shift" })
     ));
+}
+
+#[test]
+fn the_iterate_multipliers_are_the_report_before_its_threshold() {
+    let (qp, constraints) = every_row_kind([-5.0, 3.0, -4.0, 0.0]);
+    let mut mips_options = MipsOptions::default();
+    mips_options.mu_threshold = 0.0;
+    let mut mehrotra_options = MehrotraOptions::default();
+    mehrotra_options.mu_threshold = 0.0;
+    for solution in [
+        qps_mips_from(&qp, &constraints, Start::Cold(&[0.0; 4]), &mips_options).unwrap(),
+        qps_mehrotra_from(&qp, &constraints, Start::Cold(&[0.0; 4]), &mehrotra_options).unwrap(),
+    ] {
+        assert_eq!(solution.iterate_multipliers, solution.multipliers);
+        assert_eq!(
+            WarmStart::from_solution(&solution).multipliers,
+            solution.iterate_multipliers
+        );
+    }
 }

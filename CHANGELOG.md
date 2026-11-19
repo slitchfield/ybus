@@ -54,7 +54,8 @@ releases.
 - Warm starts (`start::Start`, `WarmStart`; `mips_from`, `mehrotra_from` and their `qps_`
   forms): a solve started from a previous solution's point and multipliers, with every slack
   and inequality multiplier raised to at least `warm_shift`, for sequences of related problems.
-  A cold start is the solvers' original path, bit for bit.
+  A cold start is the solvers' original path, bit for bit. `Solution::iterate_multipliers`
+  keeps the final iterate's multipliers, unthresholded, which a warm start reads.
 - Buffer-taking evaluations on `Problem` (`objective_hessian_into`, `constraints_into`,
   `lagrangian_hessian_into`), which the solvers keep across iterations, so a problem whose
   patterns don't change can refill values in place. Each defaults to its allocating method.
@@ -83,6 +84,8 @@ releases.
 - OPF models (`opf::ac::AcOpfModel`, `opf::dc::DcOpfModel`): a network's OPF built once and
   solved for many cases on it, such as a load sweep, keeping the network, its matrices and the
   AC problem's plans. Bit for bit what the one-shot functions give, which now use them.
+  `solve_from` starts a solve from a previous solution of the model (`opf::OpfStart`: cold,
+  primal-only or warm), for sequences of cases.
 - Islands and bridges of a network.
 - Each solver is tested against results computed by MATPOWER.
 - Optional features: `rayon` for parallel outages and sensitivities, and `cuda`
