@@ -38,7 +38,8 @@ use crate::case::Case;
 use crate::dc::Bdc;
 use crate::opf::cost::OpfCosts;
 use crate::opf::{
-    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver, OpfStart,
+    helper_start, per_degree, reference_buses, starting_point, Key, Layout, LinearRows, OpfSolver,
+    OpfStart, WarmStart,
 };
 use crate::powerflow_error::PowerflowError;
 use crate::topology::{Network, Signature};
@@ -196,6 +197,116 @@ pub struct DcOpfModel {
 }
 
 impl DcOpfModel {
+    /// The variables' bounds for `case`, with `nx` variables and the reference buses `refs`
+    fn bounds(&self, case: &Case, refs: &[usize], nx: usize) -> (Vec<f64>, Vec<f64>) {
+        let network = &self.network;
+        let (va, pg) = (0, network.bus_rows.len());
+        let base = case.base_mva;
+        let mut xmin = vec![f64::NEG_INFINITY; nx];
+        let mut xmax = vec![f64::INFINITY; nx];
+        for &i in refs {
+            let angle = case.bus[network.bus_rows[i]].va_deg * (PI / 180.0);
+            (xmin[va + i], xmax[va + i]) = (angle, angle);
+        }
+        for (k, &row) in network.gen_rows.iter().enumerate() {
+            let generator = &case.generator[row];
+            xmin[pg + k] = generator.pmin_mw / base;
+            xmax[pg + k] = generator.pmax_mw / base;
+        }
+        (xmin, xmax)
+    }
+
+    /// The branches (internal indices) whose flow `case` limits
+    fn limited(&self, case: &Case) -> Vec<usize> {
+        let network = &self.network;
+        (0..network.branch_rows.len())
+            .filter(|&k| {
+                let rate = case.branch[network.branch_rows[k]].rate_a_mva;
+                rate != 0.0 && rate < 1e10
+            })
+            .collect()
+    }
+
+    /// dcopf_solver's starting point, with every angle at the first reference bus's
+    fn cold_point(&self, xmin: &[f64], xmax: &[f64], refs: &[usize], costs: &OpfCosts) -> Vec<f64> {
+        let (va, pg) = (0, self.network.bus_rows.len());
+        let y = pg + self.network.gen_rows.len();
+        let mut x0 = starting_point(xmin, xmax);
+        x0[va..pg].fill(xmin[va + refs[0]]);
+        if let Some(start) = helper_start(costs) {
+            x0[y..].fill(start);
+        }
+        x0
+    }
+
+    /// The problem's layout for `case` (see `opf::Layout`), and its cold start: `[Va, Pg, y]`,
+    ///   and the rows of `A` as `solve_from` pushes them, the power balances `P`, the flow
+    ///   limits, the angle limits, then the piecewise costs' segments
+    fn layout(&self, case: &Case) -> Result<(Layout, Vec<f64>), PowerflowError> {
+        Network::new(case, check_reactance)?;
+        self.signature.check(case)?;
+        let network = &self.network;
+        let refs = reference_buses(case, network)?;
+        let costs = OpfCosts::new(case, &network.gen_rows, false)?;
+        let nx = network.bus_rows.len() + network.gen_rows.len() + costs.piecewise.len();
+        let branch = |k: usize| network.branch_rows[k];
+        let mut layout = Layout::default();
+        layout
+            .columns
+            .extend(network.bus_rows.iter().map(|&row| Key::Va(row)));
+        layout
+            .columns
+            .extend(network.gen_rows.iter().map(|&row| Key::Pg(row)));
+        layout
+            .rows
+            .extend(network.bus_rows.iter().map(|&row| Key::P(row)));
+        layout
+            .rows
+            .extend(self.limited(case).into_iter().map(|k| Key::Flow(branch(k))));
+        layout.rows.extend(
+            angle_limits(case, &network.branch_rows)
+                .into_iter()
+                .map(|(k, _, _)| Key::Angle(branch(k))),
+        );
+        layout.piecewise(&costs, &network.gen_rows);
+        let (xmin, xmax) = self.bounds(case, &refs, nx);
+        let cold = self.cold_point(&xmin, &xmax, &refs, &costs);
+        Ok((layout, cold))
+    }
+
+    /// A warm start for this model's solve of `case` ([`OpfStart::Mapped`]) from `previous`,
+    /// `from`'s solution of `from_case`: another model of the same case's tables, for example
+    /// with a branch or a generator out of service.
+    ///
+    /// As [`AcOpfModel::map_start`](crate::opf::ac::AcOpfModel::map_start) maps it: each
+    /// variable and multiplier is matched by what it belongs to, by case row (a bus's angle
+    /// and power balance, a generator's output, a branch's flow and angle limits, a piecewise
+    /// cost's helper and segments), and takes `previous`'s value, from its final iterate's
+    /// multipliers. A variable without a match takes its cold start's value, and a multiplier
+    /// 0, which the solver's shift raises.
+    ///
+    /// Returns `PowerflowError::CaseMismatch` if the cases' tables differ in length, `case`'s
+    /// or `from_case`'s errors as [`DcOpfModel::solve`] would return them, and
+    /// `PowerflowError::Solver` (`Dimension`) if `previous` doesn't fit `from`'s problem.
+    pub fn map_start(
+        &self,
+        case: &Case,
+        from: &DcOpfModel,
+        from_case: &Case,
+        previous: &Solution,
+    ) -> Result<WarmStart, PowerflowError> {
+        let shape = |case: &Case| (case.bus.len(), case.generator.len(), case.branch.len());
+        if shape(case) != shape(from_case) {
+            return Err(PowerflowError::CaseMismatch {
+                expected: shape(from_case),
+                found: shape(case),
+            });
+        }
+        let (ours, cold) = self.layout(case)?;
+        let (theirs, _) = from.layout(from_case)?;
+        ours.map(&theirs, previous, &cold)
+    }
+
     /// Builds the model of `case`'s network, checking the case as [`dc_opf`] does before its
     /// costs.
     ///
@@ -255,18 +366,7 @@ impl DcOpfModel {
         let (va, pg, y) = (0, nb, nb + ng);
         let nx = nb + ng + ny;
 
-        // The variables' bounds
-        let mut xmin = vec![f64::NEG_INFINITY; nx];
-        let mut xmax = vec![f64::INFINITY; nx];
-        for &i in &refs {
-            let angle = case.bus[network.bus_rows[i]].va_deg * (PI / 180.0);
-            (xmin[va + i], xmax[va + i]) = (angle, angle);
-        }
-        for (k, &row) in network.gen_rows.iter().enumerate() {
-            let generator = &case.generator[row];
-            xmin[pg + k] = generator.pmin_mw / base;
-            xmax[pg + k] = generator.pmax_mw / base;
-        }
+        let (xmin, xmax) = self.bounds(case, &refs, nx);
 
         // The linear constraints, block by block: Pmis, Pf, ang, ycon
         let mut rows = LinearRows::default();
@@ -282,12 +382,7 @@ impl DcOpfModel {
             let outputs = generators_at[i].iter().map(|&k| (pg + k, -1.0));
             rows.push(angles.chain(outputs), mismatch, mismatch);
         }
-        let limited: Vec<usize> = (0..network.branch_rows.len())
-            .filter(|&k| {
-                let rate = case.branch[network.branch_rows[k]].rate_a_mva;
-                rate != 0.0 && rate < 1e10
-            })
-            .collect();
+        let limited = self.limited(case);
         for &k in &limited {
             let (cols, values) = bf.outer(k).expect("an internal branch");
             let rate = case.branch[network.branch_rows[k]].rate_a_mva / base;
@@ -317,12 +412,7 @@ impl DcOpfModel {
         c[pg..pg + ng].copy_from_slice(&costs.active.linear);
         c[y..].fill(1.0);
 
-        // dcopf_solver's starting point, with every angle at the first reference bus's
-        let mut x0 = starting_point(&xmin, &xmax);
-        x0[va..pg].fill(xmin[va + refs[0]]);
-        if let Some(start) = helper_start(&costs) {
-            x0[y..].fill(start);
-        }
+        let x0 = self.cold_point(&xmin, &xmax, &refs, &costs);
 
         let constraints = Constraints {
             a: Some(a),
