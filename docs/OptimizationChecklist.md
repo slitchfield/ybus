@@ -1002,6 +1002,25 @@ Each solve now starts cold, rebuilding its problem and starting from the same po
       converged count too, apart from the different local optima. Both solvers get the same
       default. Ties go to the larger shift, which is safer. If no shift qualifies, the default
       stays provisional and the record says why.
+    - **Corrected 2026-11-18, after the first tier-1 run and before the rerun** (decided with
+      the maintainer). The rule as written above chose no shift, for reasons outside the warm
+      start:
+      - **The outcome:** "the cold step's outcome" counted a warm step that converged where the
+        cold one failed as unacceptable: 38 such rescues on MIPS's DC alone. Now only a
+        **regression** is unacceptable, meaning the cold step converged and the warm one didn't.
+        Rescues are counted as gains.
+      - **The residuals' reference:** "100× the cold step's" flagged warm steps that stopped at
+        the solver's tolerance where the cold solve over-converged: on case9, a stationarity of
+        5e-6 against 1e-11, with objectives agreeing to 1e-11. They're now compared with
+        **MIPS-LU's cold solve of the step**, as O3's bar compared them. They aren't compared
+        where that solve didn't converge.
+      - **Per solver:** each solver gets the default this rule chooses from its own steps, since
+        the best shifts differ by solver (1e-6 for MIPS on DC and AC; 1e-2 on DC and 1e-6 on AC
+        for the predictor-corrector method). A solver with no qualifying shift keeps the
+        provisional 1e-4.
+      - **The first run also found a defect, fixed before the rerun:** the warm start read the
+        thresholded multipliers (`mu_threshold`). It now reads the final iterate's,
+        `Solution::iterate_multipliers`.
     - **The cases:** tier 1 runs every shift on case9, case30, case118, case300, case2383wp,
       case3120sp and case9241pegase, DC and AC, both solvers, both sequences. Tier 2 runs the
       chosen shift on case13659pegase (AC), case_ACTIVSg10k (DC, AC) and case_ACTIVSg25k (DC,
