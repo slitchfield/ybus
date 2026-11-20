@@ -982,6 +982,22 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
 - [ ] **Batched OPF solves** (O5 target 1): many solves sharing a base (N-1 OPF warm from the
   base with `map_start`, or a day's hours), each on its own thread with its own model, results
   in input order. Bound: about ×10.
+  - **The survey's rule, written 2026-11-20 before it runs:**
+    - **Bit for bit at every thread count.** `opf_batch` compares every parallel batch with
+      the serial one and fails on a difference, so a difference is a bug, not a result.
+    - **The speedups are recorded, with nothing chosen.** Target 1 adds APIs and changes no
+      default.
+    - **The record compares them with the ×10 bound,** and explains any batch far below it.
+  - **The survey:**
+    - **The cases:** case2383wp, case3120sp and case9241pegase, DC and AC, both solvers, both
+      batches, cold and warm at each solver's own `warm_shift`. Also case_ACTIVSg25k on the
+      predictor-corrector method, with 7 outages of each kind.
+    - **The threads:** 1, 2, 4, 8, 14 and 28.
+  - **Changed from the plan:**
+    - **14 branch and 14 generator outages per case,** not 50 each, to keep the survey near two
+      hours. 28 fill 28 threads in one wave.
+    - **Each process times the serial batch once,** then the `par_` form on each pool, rather
+      than one process per thread count, which would repeat the serial batch six times.
 - [ ] **Within one solve** (O5 target 2): the LDLᵀ's independent subtrees with `rayon::join`,
   with each child's update extended into its parent in the serial order; and the AC
   evaluation's plans split by fixed element ranges. Bound: ×1.5–3.0 on the predictor-corrector
