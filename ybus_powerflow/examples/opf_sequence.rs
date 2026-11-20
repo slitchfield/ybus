@@ -61,12 +61,16 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use ybus_powerflow::case::Case;
-use ybus_powerflow::islands::find_bridges;
 use ybus_powerflow::opf::ac::{AcOpfModel, AcOpfOptions, AcOpfSolution};
 use ybus_powerflow::opf::dc::{DcOpfModel, DcOpfOptions, DcOpfSolution};
 use ybus_powerflow::opf::{
     KktResiduals, KktStatistics, OpfSolver, OpfStart, Solution, Status, WarmStart,
 };
+
+#[path = "shared/sequences.rs"]
+mod sequences;
+
+use sequences::{loaded, outage_rows, sample, steps, OUTAGES};
 
 const HEADER: &str = "case,model,solver,sequence,warm_shift,step,load_factor,mode,start,outcome,\
                       iterations,solve_ms,objective,objective_rel,lam_p_rel,lam_q_rel,\
@@ -79,15 +83,6 @@ const OBJECTIVE: f64 = 1e-6;
 const PRICE: f64 = 1e-3;
 const RESIDUAL_FACTOR: f64 = 100.0;
 const RESIDUAL_FLOOR: f64 = 1e-6;
-
-/// The walk's seed and step
-const WALK_SEED: u64 = 0x0005_EED0_FDA7;
-const WALK_STEP: f64 = 0.02;
-const WALK_STEPS: usize = 25;
-
-/// The outage sequences' seed, and their most outages
-const OUTAGE_SEED: u64 = 0x0000_0D7A_6E5E;
-const OUTAGES: usize = 50;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Model {
@@ -168,49 +163,6 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
-/// SplitMix64 (Steele, Lea and Flood, 2014), for a walk that is the same on every machine
-struct SplitMix64(u64);
-
-impl SplitMix64 {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// Uniform in [−1, 1)
-    fn symmetric(&mut self) -> f64 {
-        (self.next() >> 11) as f64 / (1u64 << 52) as f64 - 1.0
-    }
-}
-
-/// The sequence's steps: each bus's load factor, and the mean factor for the CSV
-fn steps(sequence: &str, buses: usize) -> Vec<(Vec<f64>, f64)> {
-    match sequence {
-        "sweep" => (0..=20)
-            .map(|k| {
-                let factor = 0.90 + 0.01 * k as f64;
-                (vec![factor; buses], factor)
-            })
-            .collect(),
-        _ => {
-            let mut random = SplitMix64(WALK_SEED);
-            let mut factors = vec![1.0; buses];
-            let mut steps = vec![(factors.clone(), 1.0)];
-            for _ in 1..WALK_STEPS {
-                for factor in &mut factors {
-                    *factor *= 1.0 + WALK_STEP * random.symmetric();
-                }
-                let mean = factors.iter().sum::<f64>() / buses as f64;
-                steps.push((factors.clone(), mean));
-            }
-            steps
-        }
-    }
-}
-
 /// One step of a sequence: its case, the mean load factor for the CSV, and the case row of the
 ///   branch or generator out of service, for an outage sequence's steps after the first
 struct Step {
@@ -223,15 +175,8 @@ struct Step {
 ///   itself, then each sampled outage)
 fn sequence_steps(sequence: &str, case: &Case) -> Result<Vec<Step>, String> {
     let outages = match sequence {
-        "branch-outages" => {
-            let bridges = find_bridges(case).map_err(|err| err.to_string())?;
-            (0..case.branch.len())
-                .filter(|&row| case.branch[row].status && bridges.binary_search(&row).is_err())
-                .collect()
-        }
-        "generator-outages" => (0..case.generator.len())
-            .filter(|&row| case.generator[row].status)
-            .collect(),
+        "branch-outages" => outage_rows(case, true)?,
+        "generator-outages" => outage_rows(case, false)?,
         _ => {
             return Ok(steps(sequence, case.bus.len())
                 .into_iter()
@@ -261,29 +206,6 @@ fn sequence_steps(sequence: &str, case: &Case) -> Result<Vec<Step>, String> {
         });
     }
     Ok(steps)
-}
-
-/// At most `n` of `rows`, a seeded sample (a partial Fisher–Yates shuffle by SplitMix64), in
-///   case order
-fn sample(mut rows: Vec<usize>, n: usize) -> Vec<usize> {
-    let mut random = SplitMix64(OUTAGE_SEED);
-    let n = n.min(rows.len());
-    for i in 0..n {
-        let j = i + (random.next() % (rows.len() - i) as u64) as usize;
-        rows.swap(i, j);
-    }
-    rows.truncate(n);
-    rows.sort_unstable();
-    rows
-}
-
-fn loaded(case: &Case, factors: &[f64]) -> Case {
-    let mut case = case.clone();
-    for (bus, &factor) in case.bus.iter_mut().zip(factors) {
-        bus.pd_mw *= factor;
-        bus.qd_mvar *= factor;
-    }
-    case
 }
 
 /// One solve's results, from either model

@@ -941,6 +941,33 @@ impl AcOpfModel {
         self.solve_from(case, options, OpfStart::Cold)
     }
 
+    /// [`AcOpfModel::solve_from`] for each of `cases`, all from `start`, serially, in order: cases
+    /// on this model's network with new values, such as a day's hours (see
+    /// [`crate::opf::batch`]).
+    pub fn solve_many(
+        &self,
+        cases: &[Case],
+        options: &AcOpfOptions,
+        start: OpfStart<'_>,
+    ) -> Vec<Result<AcOpfSolution, PowerflowError>> {
+        cases
+            .iter()
+            .map(|case| self.solve_from(case, options, start))
+            .collect()
+    }
+
+    /// [`AcOpfModel::solve_many`] in parallel (feature `rayon`), on rayon's current pool, the model
+    /// shared: bit for bit its results, in the same order, at any thread count.
+    #[cfg(feature = "rayon")]
+    pub fn par_solve_many(
+        &self,
+        cases: &[Case],
+        options: &AcOpfOptions,
+        start: OpfStart<'_>,
+    ) -> Vec<Result<AcOpfSolution, PowerflowError>> {
+        crate::opf::batch::par_map(cases, |case| self.solve_from(case, options, start))
+    }
+
     /// [`AcOpfModel::solve`] from `start`: MATPOWER's starting point, exactly
     /// [`AcOpfModel::solve`]'s, or a previous solution of this model's (see [`OpfStart`]).
     ///
