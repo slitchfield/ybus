@@ -15,6 +15,7 @@
 //! See phase O1 of `docs/OptimizationChecklist.md` for the roadmap.
 
 pub mod ac;
+pub mod batch;
 pub mod cost;
 pub mod dc;
 // The derivatives of AC power injections and branch flows that the AC OPF uses, as MATPOWER

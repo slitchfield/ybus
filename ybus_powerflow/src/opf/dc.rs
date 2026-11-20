@@ -337,6 +337,33 @@ impl DcOpfModel {
         self.solve_from(case, options, OpfStart::Cold)
     }
 
+    /// [`DcOpfModel::solve_from`] for each of `cases`, all from `start`, serially, in order: cases
+    /// on this model's network with new values, such as a day's hours (see
+    /// [`crate::opf::batch`]).
+    pub fn solve_many(
+        &self,
+        cases: &[Case],
+        options: &DcOpfOptions,
+        start: OpfStart<'_>,
+    ) -> Vec<Result<DcOpfSolution, PowerflowError>> {
+        cases
+            .iter()
+            .map(|case| self.solve_from(case, options, start))
+            .collect()
+    }
+
+    /// [`DcOpfModel::solve_many`] in parallel (feature `rayon`), on rayon's current pool, the model
+    /// shared: bit for bit its results, in the same order, at any thread count.
+    #[cfg(feature = "rayon")]
+    pub fn par_solve_many(
+        &self,
+        cases: &[Case],
+        options: &DcOpfOptions,
+        start: OpfStart<'_>,
+    ) -> Vec<Result<DcOpfSolution, PowerflowError>> {
+        crate::opf::batch::par_map(cases, |case| self.solve_from(case, options, start))
+    }
+
     /// [`DcOpfModel::solve`] from `start`: MATPOWER's starting point, exactly
     /// [`DcOpfModel::solve`]'s, or a previous solution of this model's (see [`OpfStart`]).
     ///

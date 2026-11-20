@@ -146,7 +146,7 @@ pub enum PowerflowError {
     },
     /// A row index given to a study is past the end of its table.
     RowOutOfRange {
-        /// The table: `"bus"` or `"branch"`.
+        /// The table: `"bus"`, `"branch"` or `"generator"`.
         table: &'static str,
         /// The 0-based row given.
         row: usize,

@@ -93,6 +93,11 @@ releases.
   another model of the same case's tables, such as with a branch or a generator out of
   service, matching every variable and constraint by its case row (`OpfStart::Mapped`,
   `OpfStart::MappedPrimal`).
+- Batches of OPF solves (`opf::batch`): a base case and its outages (`OpfOutage`, any set of
+  branches and generators), each on its own model, cold or warm from the base solution
+  (`ac_opf_outages`, `dc_opf_outages`); and many cases on one model (`solve_many` on both
+  models). With the `rayon` feature, their `par_` forms run the solves in parallel, bit for bit
+  the serial results at any thread count.
 - Islands and bridges of a network.
 - Each solver is tested against results computed by MATPOWER.
 - Optional features: `rayon` for parallel outages and sensitivities, and `cuda`
