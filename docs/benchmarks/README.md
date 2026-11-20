@@ -68,6 +68,10 @@ change. Each record names the code, the machine and the method it used.
   `opf_sequence` example over cases, models, solvers, sequences (a load sweep, a seeded
   random walk, and seeded samples of single branch and generator outages) and warm shifts, from the `YBUS_SEQUENCE_*` variables. Each step is solved cold,
   primal-only and warm, and the last two get the warm-start rule's verdict against the cold step.
+- **Batched OPF solves:** `scripts/benchmark-opf-batch.sh [<output.csv>]` runs the `opf_batch`
+  example (feature `rayon`). It times outage and same-network batches cold and warm, serially
+  and with their `par_` forms at several thread counts, from the `YBUS_BATCH_*` variables, and
+  checks every parallel result against the serial one bit for bit.
 - **Orderings:** `scripts/benchmark-ordering.sh [<output.csv>]` factors each case's Jacobian and
   B′ under AMD and COLAMD with the `ordering_survey` example.
 - **Every case, once:** `scripts/benchmark-dc.sh [<output.csv>]` runs the `dc_survey` example

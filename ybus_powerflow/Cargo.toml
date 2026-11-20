@@ -41,6 +41,10 @@ required-features = ["cuda", "rayon"]
 name = "cuda_dc_survey"
 required-features = ["cuda", "rayon"]
 
+[[example]]
+name = "opf_batch"
+required-features = ["rayon"]
+
 [[bench]]
 name = "dc_power_flow"
 harness = false
