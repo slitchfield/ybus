@@ -231,3 +231,110 @@ fn solve_many_is_solve_from_for_each_case() {
         }
     }
 }
+
+#[cfg(feature = "rayon")]
+mod parallel {
+    use super::*;
+    use ybus_powerflow::opf::batch::{par_ac_opf_outages, par_dc_opf_outages};
+
+    const THREADS: [usize; 4] = [1, 2, 7, 28];
+
+    /// `f` on a rayon pool of `threads` threads
+    fn on<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(f)
+    }
+
+    fn same_batch<S: std::fmt::Debug>(label: &str, a: &OpfOutages<S>, b: &OpfOutages<S>) {
+        assert_eq!(format!("{a:?}"), format!("{b:?}"), "{label}");
+    }
+
+    #[test]
+    fn a_parallel_batch_of_outages_is_the_serial_one_at_any_thread_count() {
+        for name in ["case118", "case2383wp"] {
+            let Some(base) = case(name) else { continue };
+            let list = outages(&base);
+            for start in STARTS {
+                // case2383wp's solves dominate the test's time at the test profile's opt-level
+                //   (MIPS's DC fails there after 98 iterations): case118 covers every solver
+                //   and start, and case2383wp the predictor-corrector method's warm batches,
+                //   the larger case's check
+                let dc_solvers = match (name, start) {
+                    ("case2383wp", BatchStart::Cold) => vec![],
+                    ("case2383wp", _) => vec![("predictor-corrector", DcOpfOptions::mehrotra())],
+                    _ => vec![
+                        ("MIPS", DcOpfOptions::default()),
+                        ("predictor-corrector", DcOpfOptions::mehrotra()),
+                    ],
+                };
+                for (solver, options) in dc_solvers {
+                    let serial = dc_opf_outages(&base, &list, &options, start).unwrap();
+                    for threads in THREADS {
+                        let parallel = on(threads, || {
+                            par_dc_opf_outages(&base, &list, &options, start)
+                        })
+                        .unwrap();
+                        let label = format!("{name} DC {solver} {start:?}, {threads} threads");
+                        same_batch(&label, &parallel, &serial);
+                    }
+                }
+                let solvers = match (name, start) {
+                    ("case2383wp", BatchStart::Cold) => vec![],
+                    ("case2383wp", _) => vec![("predictor-corrector", AcOpfOptions::mehrotra())],
+                    _ => vec![
+                        ("MIPS", AcOpfOptions::default()),
+                        ("predictor-corrector", AcOpfOptions::mehrotra()),
+                    ],
+                };
+                for (solver, options) in solvers {
+                    let serial = ac_opf_outages(&base, &list, &options, start).unwrap();
+                    for threads in THREADS {
+                        let parallel = on(threads, || {
+                            par_ac_opf_outages(&base, &list, &options, start)
+                        })
+                        .unwrap();
+                        let label = format!("{name} AC {solver} {start:?}, {threads} threads");
+                        same_batch(&label, &parallel, &serial);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn par_solve_many_is_solve_many_at_any_thread_count() {
+        let Some(base) = case("case118") else { return };
+        let cases: Vec<Case> = (0..9)
+            .map(|k| {
+                let mut case = base.clone();
+                for bus in &mut case.bus {
+                    bus.pd_mw *= 0.96 + 0.01 * k as f64;
+                }
+                case
+            })
+            .collect();
+        let model = AcOpfModel::new(&base).unwrap();
+        let options = AcOpfOptions::mehrotra();
+        let previous = model.solve(&base, &options).unwrap();
+        for start in [OpfStart::Cold, OpfStart::Warm(&previous.solver)] {
+            let serial = format!("{:?}", model.solve_many(&cases, &options, start));
+            for threads in THREADS {
+                let parallel = on(threads, || model.par_solve_many(&cases, &options, start));
+                assert_eq!(format!("{parallel:?}"), serial, "AC, {threads} threads");
+            }
+        }
+        let model = DcOpfModel::new(&base).unwrap();
+        let options = DcOpfOptions::default();
+        let previous = model.solve(&base, &options).unwrap();
+        for start in [OpfStart::Cold, OpfStart::Warm(&previous.solver)] {
+            let serial = format!("{:?}", model.solve_many(&cases, &options, start));
+            for threads in THREADS {
+                let parallel = on(threads, || model.par_solve_many(&cases, &options, start));
+                assert_eq!(format!("{parallel:?}"), serial, "DC, {threads} threads");
+            }
+        }
+    }
+}
