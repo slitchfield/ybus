@@ -15,8 +15,9 @@ include = ["/src/**/*", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/AI-DI
 
 [features]
 # Parallel batches: outages, PTDF and LODF columns (DcStudy::par_solve_outages,
-#   DcSensitivity::par_ptdf_columns and par_lodf_columns)
-rayon = ["ybus_sparse/rayon", "dep:rayon"]
+#   DcSensitivity::par_ptdf_columns and par_lodf_columns), OPF batches (opf::batch's par_ forms),
+#   and each OPF's pivoted LDLᵀ factorizations (ybus_ipm's rayon feature)
+rayon = ["ybus_sparse/rayon", "ybus_ipm/rayon", "dep:rayon"]
 # The GPU path, through ybus_cuda (which needs a CUDA 13 driver and cuSPARSE at run time, not to
 #   build): DcStudy::gpu's batched DC solves and single-branch outages, DcSensitivity::gpu's
 #   PTDF columns and transfers, the cuda_survey and cuda_dc_survey examples, and their tests

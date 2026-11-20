@@ -18,8 +18,13 @@ include = ["/src/**/*", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/LICEN
 [dependencies]
 ybus_sparse.workspace = true
 
-# docs.rs builds the docs for one target: the API is the same on every platform. The crate has
-#   no features; all-features and `--cfg docsrs` are set as in the other published crates.
+[features]
+# The pivoted LDLᵀ's KKT factorizations in parallel, bit for bit the serial ones
+#   (ybus_sparse's rayon feature)
+rayon = ["ybus_sparse/rayon"]
+
+# docs.rs builds the docs for one target: the API is the same on every platform. All features
+#   and `--cfg docsrs` are set as in the other published crates.
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

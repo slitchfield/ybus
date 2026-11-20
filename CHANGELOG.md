@@ -35,6 +35,11 @@ releases.
   and solves with many right-hand sides.
 - A symbolic LDLᵀ's front tree (`SymbolicLdlt::front_tree`, `FrontTree`): its fronts' work,
   height and critical path.
+- With the `rayon` feature, the multifrontal LDLᵀ factors in parallel: independent subtrees of
+  its front tree, and the large fronts' trailing updates, column by column. It's bit for bit the
+  serial factorization at any thread count, and `ybus_ipm`'s new `rayon` feature, forwarded by
+  `ybus_powerflow`'s, gives it to the OPF's KKT factorizations. The LDLᵀ factorizations now
+  require `T: Send + Sync`, which every scalar type here satisfies.
 - Conjugate gradient, and Matrix Market reading and writing.
 - Optional features: `serde`, and `rayon` for parallel products and solves.
 

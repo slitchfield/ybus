@@ -1,6 +1,8 @@
 //! Sparse symmetric (Hermitian) indefinite `L D Lᴴ` by the multifrontal method, with threshold
 //! Bunch–Kaufman pivoting and delayed pivots: [`Ldlt`].
 
+use std::ops::Range;
+
 use num_complex::ComplexFloat;
 use num_traits::NumCast;
 
@@ -146,7 +148,7 @@ impl SymbolicCholesky {
     /// analyzed one, `SparseError::NotSymmetric` if `A ≠ Aᴴ`, and `SparseError::SingularMatrix`
     /// naming a row of `A` where no pivot could be found, the matrix being singular to working
     /// precision. Panics if `options.threshold` is outside `(0, 0.5]`.
-    pub fn factor_ldlt<T: Scalar + ComplexFloat>(
+    pub fn factor_ldlt<T: Scalar + ComplexFloat + Send + Sync>(
         &self,
         matrix: &CsrMatrix<T>,
         options: LdltOptions,
@@ -192,6 +194,46 @@ pub struct SymbolicLdlt {
     /// For each of `A`'s stored entries `(i, j)`, the position of `(j, i)`, or `usize::MAX` if
     /// `A`'s pattern doesn't store it
     mirror: Vec<usize>,
+    /// Each front's children, in increasing index, the order the factorization assembles their
+    /// contribution blocks in (read by the parallel factorization)
+    #[cfg_attr(not(feature = "rayon"), allow(dead_code))]
+    children: Vec<Vec<usize>>,
+    /// Each front's subtree's factorization work (see [`FrontTree`]): its own and its
+    /// descendants'
+    #[cfg_attr(not(feature = "rayon"), allow(dead_code))]
+    subtree_work: Vec<u64>,
+    /// Each front's subtree's first front: the subtree is the run from it to the front, as the
+    /// fronts follow a postorder
+    #[cfg_attr(not(feature = "rayon"), allow(dead_code))]
+    first: Vec<usize>,
+}
+
+/// A front's factorization work and one triangular sweep's, as [`FrontTree`] counts them
+fn front_work(node: &Supernode) -> (u64, u64) {
+    let c = (node.end - node.start) as u64;
+    let m = c + node.below.len() as u64;
+    let factor = (0..c).map(|j| (m - j - 1) * (m - j) / 2).sum();
+    let solve = c * c.saturating_sub(1) / 2 + c * node.below.len() as u64;
+    (factor, solve)
+}
+
+/// Each front's children, in increasing index, each subtree's factorization work, and each
+///   subtree's first front: a parent's index is above its children's, as the supernodes follow
+///   the postordered columns
+#[allow(clippy::type_complexity)]
+fn tree_of(nodes: &[Supernode]) -> (Vec<Vec<usize>>, Vec<u64>, Vec<usize>) {
+    let mut children = vec![Vec::new(); nodes.len()];
+    let mut work: Vec<u64> = nodes.iter().map(|node| front_work(node).0).collect();
+    let mut first: Vec<usize> = (0..nodes.len()).collect();
+    for (k, node) in nodes.iter().enumerate() {
+        if let Some(parent) = node.parent {
+            debug_assert!(parent > k, "a parent front after its children");
+            children[parent].push(k);
+            work[parent] += work[k];
+            first[parent] = first[parent].min(first[k]);
+        }
+    }
+    (children, work, first)
 }
 
 /// The shape of a multifrontal factorization's front tree, from its symbolic analysis
@@ -427,6 +469,7 @@ impl SymbolicLdlt {
                 }
             }
         }
+        let (children, subtree_work, first) = tree_of(&nodes);
         SymbolicLdlt {
             cholesky,
             nodes,
@@ -434,19 +477,16 @@ impl SymbolicLdlt {
             c_idx,
             source,
             mirror,
+            children,
+            subtree_work,
+            first,
         }
     }
 
     /// The front tree's shape: its fronts' work and its critical path (see [`FrontTree`]).
     pub fn front_tree(&self) -> FrontTree {
         let n = self.nodes.len();
-        let front = |node: &Supernode| -> (u64, u64) {
-            let c = (node.end - node.start) as u64;
-            let m = c + node.below.len() as u64;
-            let factor = (0..c).map(|j| (m - j - 1) * (m - j) / 2).sum();
-            let solve = c * c.saturating_sub(1) / 2 + c * node.below.len() as u64;
-            (factor, solve)
-        };
+        let front = front_work;
         // Each front's heaviest chain down to a leaf, and its depth: a parent's index is
         //   above its children's, as the supernodes follow the postordered columns
         let mut chain = vec![(0u64, 0u64, 0usize); n];
@@ -504,21 +544,40 @@ impl SymbolicLdlt {
     /// on the multifrontal method (see [`Ldlt`]), with the analysis's supernodes and
     /// maps.
     ///
+    /// **With the `rayon` feature,** independent subtrees of the front tree factor in parallel,
+    /// and so do the large fronts' trailing updates, column by column. Each front still does
+    /// exactly the serial arithmetic: it assembles its children's contribution blocks in their
+    /// index order, and each element of an update takes the same operations. So the results
+    /// are bit for bit the serial factorization's, at any thread count.
+    ///
     /// Returns `SparseError::PatternMismatch` if `matrix`'s shape or pattern differs from the
     /// analyzed one, `SparseError::NotSymmetric` if `A ≠ Aᴴ`, and `SparseError::SingularMatrix`
     /// naming a row of `A` where no pivot could be found, the matrix being singular to working
-    /// precision. Panics if `options.threshold` is outside `(0, 0.5]`.
-    pub fn factor<T: Scalar + ComplexFloat>(
+    /// precision: the first such front's, in the serial order. Panics if `options.threshold` is
+    /// outside `(0, 0.5]`.
+    pub fn factor<T: Scalar + ComplexFloat + Send + Sync>(
         &self,
         matrix: &CsrMatrix<T>,
         options: LdltOptions,
+    ) -> Result<Ldlt<T>, SparseError> {
+        self.factor_with(matrix, options, Cutoffs::DEFAULT)
+    }
+
+    /// [`SymbolicLdlt::factor`] with the parallel paths' cutoffs given: the tests force every
+    ///   subtree and update onto them with [`Cutoffs::ALWAYS`], and compare with
+    ///   [`Cutoffs::NEVER`], the serial factorization
+    pub(crate) fn factor_with<T: Scalar + ComplexFloat + Send + Sync>(
+        &self,
+        matrix: &CsrMatrix<T>,
+        options: LdltOptions,
+        cutoffs: Cutoffs,
     ) -> Result<Ldlt<T>, SparseError> {
         let threshold = options.threshold;
         assert!(
             threshold > 0.0 && threshold <= 0.5,
             "the threshold must be in (0, 0.5], not {threshold}"
         );
-        let threshold: T::Real = NumCast::from(threshold).expect("the threshold is representable");
+        let _: T::Real = NumCast::from(threshold).expect("the threshold is representable");
         let symbolic = &self.cholesky;
         let n = symbolic.dim();
         if matrix.shape != (n, n) || matrix.ptr != symbolic.a_ptr || matrix.idx != symbolic.a_idx {
@@ -529,134 +588,393 @@ impl SymbolicLdlt {
         }
         // P A Pᵀ's values, gathered into its kept pattern
         let c_data: Vec<T> = self.source.iter().map(|&q| matrix.data[q]).collect();
-        let nodes = &self.nodes;
-
-        // Contribution blocks waiting for their parent: (variables, dense square, both triangles)
-        let mut pending: Vec<Vec<(Vec<usize>, Vec<T>)>> = vec![Vec::new(); nodes.len()];
-        // Reused working space: the front, the kernel's scratch, the front's variables, and
-        //   spent contribution blocks' storage, handed out again (so blocks are still consumed
-        //   in the order they were made, and every sum is as before)
-        let mut front: Vec<T> = Vec::new();
-        let mut scratch: Vec<T> = Vec::new();
-        let mut vars: Vec<usize> = Vec::new();
-        let mut spare_blocks: Vec<Vec<T>> = Vec::new();
-        let mut spare_vars: Vec<Vec<usize>> = Vec::new();
-        // Where each variable sits in the current front, or usize::MAX
-        let mut position = vec![usize::MAX; n];
-        let mut fronts = Vec::with_capacity(nodes.len());
-        let mut delayed = 0;
-        for (s, node) in nodes.iter().enumerate() {
-            let (start, end, below) = (&node.start, &node.end, &node.below);
-            let contributions = std::mem::take(&mut pending[s]);
-            // The front's variables: its own, the children's delayed ones, then the rows below
-            vars.clear();
-            vars.extend(*start..*end);
-            for (child_vars, _) in &contributions {
-                for &v in child_vars {
-                    if v < *start {
-                        vars.push(v);
-                    }
-                }
-            }
-            let fully_summed = vars.len();
-            delayed += fully_summed - (end - start);
-            vars.extend_from_slice(below);
-            let m = vars.len();
-            for (p, &v) in vars.iter().enumerate() {
-                position[v] = p;
-            }
-            front.clear();
-            front.resize(m * m, T::zero());
-            // A's lower triangle in the own columns, mirrored: row j of C holds column j's
-            //   entries, and those at or below the diagonal belong to this front
-            for j in *start..*end {
-                let pj = position[j];
-                let row = self.c_ptr[j]..self.c_ptr[j + 1];
-                for (&i, &stored) in self.c_idx[row.clone()].iter().zip(&c_data[row]) {
-                    if i < j {
-                        continue;
-                    }
-                    let pi = position[i];
-                    debug_assert_ne!(pi, usize::MAX, "A's entry within the factor's pattern");
-                    // c is Hermitian: C(i, j) = conj(C(j, i))
-                    let value = stored.conj();
-                    front[pi + pj * m] = front[pi + pj * m] + value;
-                    if pi != pj {
-                        front[pj + pi * m] = front[pj + pi * m] + value.conj();
-                    }
-                }
-            }
-            // The children's contribution blocks
-            for (child_vars, block) in &contributions {
-                let k = child_vars.len();
-                for (b, &vb) in child_vars.iter().enumerate() {
-                    let pb = position[vb];
-                    debug_assert_ne!(pb, usize::MAX, "a child's variable is in its parent");
-                    for (a, &va) in child_vars.iter().enumerate() {
-                        let pa = position[va];
-                        front[pa + pb * m] = front[pa + pb * m] + block[a + b * k];
-                    }
-                }
-            }
-            for (child_vars, block) in contributions {
-                spare_vars.push(child_vars);
-                spare_blocks.push(block);
-            }
-
-            let root = node.parent.is_none();
-            debug_assert!(!root || below.is_empty());
-            let factored = factor_front(&mut front, m, fully_summed, threshold, root, &mut scratch)
-                .map_err(|error| match error {
-                    SparseError::SingularMatrix { pivot } => SparseError::SingularMatrix {
-                        pivot: symbolic.perm[vars[pivot]],
-                    },
-                    other => other,
-                })?;
-            for &v in &vars {
-                position[v] = usize::MAX;
-            }
-            let ordered: Vec<usize> = factored.order.iter().map(|&p| vars[p]).collect();
-            let e = factored.eliminated;
-            // The contribution block, everything not eliminated, goes to the parent
-            if e < m {
-                let rest = m - e;
-                let mut block = spare_blocks.pop().unwrap_or_default();
-                block.clear();
-                block.resize(rest * rest, T::zero());
-                for b in 0..rest {
-                    for a in 0..rest {
-                        block[a + b * rest] = front[(e + a) + (e + b) * m];
-                    }
-                }
-                let p = node.parent.expect("a front with rows left has a parent");
-                let mut rest_vars = spare_vars.pop().unwrap_or_default();
-                rest_vars.clear();
-                rest_vars.extend_from_slice(&ordered[e..]);
-                pending[p].push((rest_vars, block));
-            }
-            // L's columns, at their exact size; the front is reused
-            let mut l = front[..m * e].to_vec();
-            // Inside a 2×2 block, L's entry is zero (the kernel leaves D's there)
-            let mut at = 0;
-            for block in &factored.blocks {
-                if block.size() == 2 {
-                    l[(at + 1) + at * m] = T::zero();
-                }
-                at += block.size();
-            }
-            fronts.push(Front {
-                vars: ordered,
-                eliminated: e,
-                l,
-                blocks: factored.blocks,
-            });
-        }
+        let context = Context {
+            c_data: &c_data,
+            threshold,
+            node_order: cutoffs.node_order,
+        };
+        let (fronts, delayed) = self.factor_all(&context, cutoffs)?;
         Ok(Ldlt {
             n,
             perm: symbolic.perm.clone(),
             fronts,
             delayed,
         })
+    }
+
+    /// Every front, serially in index order
+    #[cfg(not(feature = "rayon"))]
+    fn factor_all<T: Scalar + ComplexFloat + Send + Sync>(
+        &self,
+        context: &Context<'_, T>,
+        _: Cutoffs,
+    ) -> Result<(Vec<Front<T>>, usize), SparseError> {
+        let mut workspace = Workspace::new(self.cholesky.dim());
+        let (fronts, outgoing, delayed) = self
+            .factor_range(0..self.nodes.len(), context, &mut workspace)
+            .map_err(|(_, error)| error)?;
+        debug_assert!(outgoing.is_none(), "every front's parent within the range");
+        Ok((fronts, delayed))
+    }
+
+    /// Every front: the subtrees whose work passes `cutoffs.subtree_work` in parallel, the
+    ///   rest serially, each front from its children's blocks in their index order
+    #[cfg(feature = "rayon")]
+    fn factor_all<T: Scalar + ComplexFloat + Send + Sync>(
+        &self,
+        context: &Context<'_, T>,
+        cutoffs: Cutoffs,
+    ) -> Result<(Vec<Front<T>>, usize), SparseError> {
+        use rayon::prelude::*;
+        if cutoffs.subtree_work == u64::MAX {
+            let mut workspace = Workspace::new(self.cholesky.dim());
+            let (fronts, _, delayed) = self
+                .factor_range(0..self.nodes.len(), context, &mut workspace)
+                .map_err(|(_, error)| error)?;
+            return Ok((fronts, delayed));
+        }
+        let roots: Vec<usize> = (0..self.nodes.len())
+            .filter(|&s| self.nodes[s].parent.is_none())
+            .collect();
+        // Workspaces shared by the tasks, each taken and given back whole: a front clears and
+        //   rewrites everything it uses, so only the allocation is shared
+        let pool = std::sync::Mutex::new(Vec::new());
+        let subtrees: Vec<_> = roots
+            .par_iter()
+            .map(|&root| self.par_subtree(root, context, cutoffs, &pool))
+            .collect();
+        let mut placed: Vec<Option<Front<T>>> = (0..self.nodes.len()).map(|_| None).collect();
+        let mut delayed = 0;
+        let mut failure: Option<(usize, SparseError)> = None;
+        for subtree in subtrees {
+            match subtree {
+                Ok((fronts, _, d)) => {
+                    delayed += d;
+                    for (s, front) in fronts {
+                        placed[s] = Some(front);
+                    }
+                }
+                Err(error) => failure = first_failure(failure, error),
+            }
+        }
+        if let Some((_, error)) = failure {
+            return Err(error);
+        }
+        let fronts = placed
+            .into_iter()
+            .map(|front| front.expect("every front factored"))
+            .collect();
+        Ok((fronts, delayed))
+    }
+
+    /// Front `s`'s subtree: its children's subtrees in parallel where their work passes the
+    ///   cutoff, then `s` from their blocks in index order. Returns its fronts with their
+    ///   indices, `s`'s contribution block, and the delayed pivots, or the lowest-index failing
+    ///   front's error
+    #[cfg(feature = "rayon")]
+    #[allow(clippy::type_complexity)]
+    fn par_subtree<T: Scalar + ComplexFloat + Send + Sync>(
+        &self,
+        s: usize,
+        context: &Context<'_, T>,
+        cutoffs: Cutoffs,
+        pool: &std::sync::Mutex<Vec<Workspace<T>>>,
+    ) -> Result<(Vec<(usize, Front<T>)>, Option<Block<T>>, usize), (usize, SparseError)> {
+        use rayon::prelude::*;
+        let n = self.cholesky.dim();
+        let take = || {
+            let spare = pool.lock().expect("no task panicked").pop();
+            spare.unwrap_or_else(|| Workspace::new(n))
+        };
+        let give = |workspace| pool.lock().expect("no task panicked").push(workspace);
+        if self.subtree_work[s] < cutoffs.subtree_work {
+            let mut workspace = take();
+            let first = self.first[s];
+            let result = self.factor_range(first..s + 1, context, &mut workspace);
+            give(workspace);
+            let (fronts, outgoing, delayed) = result?;
+            let indexed = (first..s + 1).zip(fronts).collect();
+            return Ok((indexed, outgoing, delayed));
+        }
+        let children: Vec<_> = self.children[s]
+            .par_iter()
+            .map(|&child| self.par_subtree(child, context, cutoffs, pool))
+            .collect();
+        let mut fronts = Vec::new();
+        let mut contributions = Vec::new();
+        let mut delayed = 0;
+        let mut failure: Option<(usize, SparseError)> = None;
+        for child in children {
+            match child {
+                Ok((child_fronts, block, d)) => {
+                    fronts.extend(child_fronts);
+                    contributions.extend(block);
+                    delayed += d;
+                }
+                Err(error) => failure = first_failure(failure, error),
+            }
+        }
+        if let Some(failure) = failure {
+            return Err(failure);
+        }
+        let mut workspace = take();
+        let result = self.factor_node(s, contributions, context, &mut workspace);
+        give(workspace);
+        let (front, block, d) = result.map_err(|error| (s, error))?;
+        fronts.push((s, front));
+        Ok((fronts, block, delayed + d))
+    }
+
+    /// The fronts in `range`, a run of whole subtrees in index order, serially, as the serial
+    ///   factorization runs them: their fronts in order, the block of the last front whose parent
+    ///   lies beyond the range (a subtree's root's), and their delayed pivots
+    #[allow(clippy::type_complexity)]
+    fn factor_range<T: Scalar + ComplexFloat + Send + Sync>(
+        &self,
+        range: Range<usize>,
+        context: &Context<'_, T>,
+        workspace: &mut Workspace<T>,
+    ) -> Result<(Vec<Front<T>>, Option<Block<T>>, usize), (usize, SparseError)> {
+        let first = range.start;
+        // Contribution blocks waiting for their parent within the range
+        let mut pending: Vec<Vec<Block<T>>> = vec![Vec::new(); range.len()];
+        let mut fronts = Vec::with_capacity(range.len());
+        let mut outgoing = None;
+        let mut delayed = 0;
+        for s in range.clone() {
+            let contributions = std::mem::take(&mut pending[s - first]);
+            let (front, block, d) = self
+                .factor_node(s, contributions, context, workspace)
+                .map_err(|error| (s, error))?;
+            delayed += d;
+            if let Some(block) = block {
+                let parent = self.nodes[s]
+                    .parent
+                    .expect("a front with rows left has a parent");
+                if range.contains(&parent) {
+                    pending[parent - first].push(block);
+                } else {
+                    outgoing = Some(block);
+                }
+            }
+            fronts.push(front);
+        }
+        Ok((fronts, outgoing, delayed))
+    }
+
+    /// Front `s`, from its children's contribution blocks in their index order: its factor, its
+    ///   own contribution block for its parent if it leaves rows, and its delayed pivots
+    #[allow(clippy::type_complexity)]
+    fn factor_node<T: Scalar + ComplexFloat + Send + Sync>(
+        &self,
+        s: usize,
+        contributions: Vec<Block<T>>,
+        context: &Context<'_, T>,
+        workspace: &mut Workspace<T>,
+    ) -> Result<(Front<T>, Option<Block<T>>, usize), SparseError> {
+        let Workspace {
+            front,
+            scratch,
+            vars,
+            spare_blocks,
+            spare_vars,
+            position,
+        } = workspace;
+        let c_data = context.c_data;
+        let node = &self.nodes[s];
+        let (start, end, below) = (&node.start, &node.end, &node.below);
+        // The front's variables: its own, the children's delayed ones, then the rows below
+        vars.clear();
+        vars.extend(*start..*end);
+        for (child_vars, _) in &contributions {
+            for &v in child_vars {
+                if v < *start {
+                    vars.push(v);
+                }
+            }
+        }
+        let fully_summed = vars.len();
+        let delayed = fully_summed - (end - start);
+        vars.extend_from_slice(below);
+        let m = vars.len();
+        for (p, &v) in vars.iter().enumerate() {
+            position[v] = p;
+        }
+        front.clear();
+        front.resize(m * m, T::zero());
+        // A's lower triangle in the own columns, mirrored: row j of C holds column j's
+        //   entries, and those at or below the diagonal belong to this front
+        for j in *start..*end {
+            let pj = position[j];
+            let row = self.c_ptr[j]..self.c_ptr[j + 1];
+            for (&i, &stored) in self.c_idx[row.clone()].iter().zip(&c_data[row]) {
+                if i < j {
+                    continue;
+                }
+                let pi = position[i];
+                debug_assert_ne!(pi, usize::MAX, "A's entry within the factor's pattern");
+                // c is Hermitian: C(i, j) = conj(C(j, i))
+                let value = stored.conj();
+                front[pi + pj * m] = front[pi + pj * m] + value;
+                if pi != pj {
+                    front[pj + pi * m] = front[pj + pi * m] + value.conj();
+                }
+            }
+        }
+        // The children's contribution blocks
+        for (child_vars, block) in &contributions {
+            let k = child_vars.len();
+            for (b, &vb) in child_vars.iter().enumerate() {
+                let pb = position[vb];
+                debug_assert_ne!(pb, usize::MAX, "a child's variable is in its parent");
+                for (a, &va) in child_vars.iter().enumerate() {
+                    let pa = position[va];
+                    front[pa + pb * m] = front[pa + pb * m] + block[a + b * k];
+                }
+            }
+        }
+        // Spent blocks' storage, handed out again: only allocation changes, since each reused
+        //   block is cleared and written in full
+        for (child_vars, block) in contributions {
+            spare_vars.push(child_vars);
+            spare_blocks.push(block);
+        }
+
+        let root = node.parent.is_none();
+        debug_assert!(!root || below.is_empty());
+        let factored = factor_front(
+            front,
+            m,
+            fully_summed,
+            NumCast::from(context.threshold).expect("the threshold is representable"),
+            root,
+            scratch,
+            context.node_order,
+        );
+        for &v in vars.iter() {
+            position[v] = usize::MAX;
+        }
+        let factored = factored.map_err(|error| match error {
+            SparseError::SingularMatrix { pivot } => SparseError::SingularMatrix {
+                pivot: self.cholesky.perm[vars[pivot]],
+            },
+            other => other,
+        })?;
+        let ordered: Vec<usize> = factored.order.iter().map(|&p| vars[p]).collect();
+        let e = factored.eliminated;
+        // The contribution block, everything not eliminated, goes to the parent
+        let block = (e < m).then(|| {
+            let rest = m - e;
+            let mut block = spare_blocks.pop().unwrap_or_default();
+            block.clear();
+            block.resize(rest * rest, T::zero());
+            for b in 0..rest {
+                for a in 0..rest {
+                    block[a + b * rest] = front[(e + a) + (e + b) * m];
+                }
+            }
+            let mut rest_vars = spare_vars.pop().unwrap_or_default();
+            rest_vars.clear();
+            rest_vars.extend_from_slice(&ordered[e..]);
+            (rest_vars, block)
+        });
+        // L's columns, at their exact size; the front is reused
+        let mut l = front[..m * e].to_vec();
+        // Inside a 2×2 block, L's entry is zero (the kernel leaves D's there)
+        let mut at = 0;
+        for block in &factored.blocks {
+            if block.size() == 2 {
+                l[(at + 1) + at * m] = T::zero();
+            }
+            at += block.size();
+        }
+        let front = Front {
+            vars: ordered,
+            eliminated: e,
+            l,
+            blocks: factored.blocks,
+        };
+        Ok((front, block, delayed))
+    }
+}
+
+/// A contribution block waiting for its parent: its variables, and its dense square, both
+/// triangles
+type Block<T> = (Vec<usize>, Vec<T>);
+
+/// What every front's factorization reads: `P A Pᵀ`'s values, the pivot threshold, and the
+/// trailing order from which the dense kernel's update splits across threads
+struct Context<'a, T> {
+    c_data: &'a [T],
+    /// As the options give it; each front converts it to `T::Real`, as the serial
+    ///   factorization did once
+    threshold: f64,
+    node_order: usize,
+}
+
+/// Working space reused from front to front by one thread: the front, the kernel's scratch,
+/// the front's variables, spent contribution blocks' storage, and where each variable sits in
+/// the current front (`usize::MAX` outside it)
+struct Workspace<T> {
+    front: Vec<T>,
+    scratch: Vec<T>,
+    vars: Vec<usize>,
+    spare_blocks: Vec<Vec<T>>,
+    spare_vars: Vec<Vec<usize>>,
+    position: Vec<usize>,
+}
+
+impl<T> Workspace<T> {
+    fn new(n: usize) -> Workspace<T> {
+        Workspace {
+            front: Vec::new(),
+            scratch: Vec::new(),
+            vars: Vec::new(),
+            spare_blocks: Vec::new(),
+            spare_vars: Vec::new(),
+            position: vec![usize::MAX; n],
+        }
+    }
+}
+
+/// The work past which the factorization goes parallel (feature `rayon`): a subtree's (in
+/// [`FrontTree`]'s multiply-adds), and a front's trailing order for its dense kernel's update.
+/// Fixed, not a thread count, and the results don't depend on them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Cutoffs {
+    pub(crate) subtree_work: u64,
+    pub(crate) node_order: usize,
+}
+
+impl Cutoffs {
+    /// The factorization's own (set from a calibration: see `docs/benchmarks/`)
+    pub(crate) const DEFAULT: Cutoffs = Cutoffs {
+        subtree_work: 1 << 20,
+        node_order: 256,
+    };
+    /// Every subtree and update on the parallel paths
+    #[allow(dead_code)]
+    pub(crate) const ALWAYS: Cutoffs = Cutoffs {
+        subtree_work: 0,
+        node_order: 0,
+    };
+    /// None: the serial factorization
+    #[allow(dead_code)]
+    pub(crate) const NEVER: Cutoffs = Cutoffs {
+        subtree_work: u64::MAX,
+        node_order: usize::MAX,
+    };
+}
+
+/// Of two failures, the one at the lower front index, the serial factorization's first
+#[cfg(feature = "rayon")]
+fn first_failure(
+    kept: Option<(usize, SparseError)>,
+    new: (usize, SparseError),
+) -> Option<(usize, SparseError)> {
+    match kept {
+        Some(kept) if kept.0 < new.0 => Some(kept),
+        _ => Some(new),
     }
 }
 
@@ -689,7 +1007,7 @@ impl<T: Scalar> CsrMatrix<T> {
     }
 }
 
-impl<T: Scalar + ComplexFloat> CsrMatrix<T> {
+impl<T: Scalar + ComplexFloat + Send + Sync> CsrMatrix<T> {
     /// Factors a symmetric (for a complex element type, Hermitian) matrix as
     /// `P A Pᵀ = Q L D Lᴴ Qᵀ` with threshold Bunch–Kaufman pivoting, ordered by approximate
     /// minimum degree, with the default options: `analyze_cholesky(Ordering::Amd)` followed by
@@ -814,5 +1132,212 @@ impl<T: Scalar + ComplexFloat> Substitute<T> for Ldlt<T> {
         for (&row, &value) in self.perm.iter().zip(scratch.iter()) {
             x[row] = value;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The natural ordering without amalgamation, so the fronts are the fundamental supernodes
+    fn symbolic(n: usize, entries: &[(usize, usize, f64)]) -> SymbolicLdlt {
+        let a = CsrMatrix::from_triplets(n, n, entries.to_vec()).unwrap();
+        let cholesky = a.analyze_cholesky(Ordering::Natural).unwrap();
+        SymbolicLdlt::with_amalgamation(cholesky, Amalgamation::NONE)
+    }
+
+    #[test]
+    fn a_star_has_its_leaves_as_its_hubs_children() {
+        // Columns 0 and 1 each touch only the hub, 2: two leaf fronts of work 1 under the hub's
+        //   of work 0 (front_tree_test's star)
+        let s = symbolic(
+            3,
+            &[
+                (0, 0, 4.0),
+                (1, 1, 4.0),
+                (2, 2, 4.0),
+                (0, 2, 1.0),
+                (2, 0, 1.0),
+                (1, 2, 1.0),
+                (2, 1, 1.0),
+            ],
+        );
+        assert_eq!(s.children, vec![vec![], vec![], vec![0, 1]]);
+        assert_eq!(s.subtree_work, vec![1, 1, 2]);
+    }
+
+    #[cfg(feature = "rayon")]
+    mod parallel {
+        use super::*;
+
+        /// A deterministic stream in [0, 1)
+        fn stream(seed: u64) -> impl FnMut() -> f64 {
+            let mut state = seed;
+            move || {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (state >> 11) as f64 / (1u64 << 53) as f64
+            }
+        }
+
+        /// A symmetric matrix of order `n`: a band of half-width `band`, and about `extra` random
+        ///   off-band pairs, with diagonals of either sign (indefinite)
+        fn indefinite(n: usize, band: usize, extra: usize, seed: u64) -> CsrMatrix<f64> {
+            let mut random = stream(seed);
+            let mut entries = vec![];
+            for i in 0..n {
+                entries.push((i, i, 4.0 * (random() - 0.4)));
+                for j in i + 1..(i + band + 1).min(n) {
+                    let v = random() - 0.5;
+                    entries.push((i, j, v));
+                    entries.push((j, i, v));
+                }
+            }
+            for _ in 0..extra {
+                let (i, j) = (
+                    (random() * n as f64) as usize,
+                    (random() * n as f64) as usize,
+                );
+                if i != j {
+                    let v = random() - 0.5;
+                    entries.push((i, j, v));
+                    entries.push((j, i, v));
+                }
+            }
+            CsrMatrix::from_triplets(n, n, entries).unwrap()
+        }
+
+        /// A saddle-point (KKT-shaped) matrix `[[H, Jᵀ], [J, 0]]`: H a grid Laplacian on `g × g`
+        ///   nodes plus a random diagonal, and J one row per `stride` nodes coupling neighbours; its
+        ///   zero block forces 2×2 pivots and delays
+        fn saddle(g: usize, stride: usize, seed: u64) -> CsrMatrix<f64> {
+            let mut random = stream(seed);
+            let nh = g * g;
+            let rows: Vec<usize> = (0..nh).step_by(stride).collect();
+            let n = nh + rows.len();
+            let mut entries = vec![];
+            for r in 0..g {
+                for c in 0..g {
+                    let i = r * g + c;
+                    entries.push((i, i, 4.0 + random()));
+                    for (dr, dc) in [(0, 1), (1, 0)] {
+                        let (r2, c2) = (r + dr, c + dc);
+                        if r2 < g && c2 < g {
+                            let j = r2 * g + c2;
+                            entries.push((i, j, -1.0));
+                            entries.push((j, i, -1.0));
+                        }
+                    }
+                }
+            }
+            for (k, &node) in rows.iter().enumerate() {
+                let row = nh + k;
+                for j in [node, (node + 1) % nh] {
+                    let v = 1.0 + random();
+                    entries.push((row, j, v));
+                    entries.push((j, row, v));
+                }
+            }
+            CsrMatrix::from_triplets(n, n, entries).unwrap()
+        }
+
+        /// `f` on a rayon pool of `threads` threads
+        fn on<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(f)
+        }
+
+        /// The parallel factorization is the serial one bit for bit, on pools of 1, 2, 7 and 28
+        ///   threads, for each ordering: with its default cutoffs, and if `always`, with every
+        ///   subtree and update on its parallel paths
+        fn check(label: &str, a: &CsrMatrix<f64>, always: bool) {
+            for ordering in [Ordering::Natural, Ordering::Amd] {
+                let symbolic = a.analyze_ldlt(ordering).unwrap();
+                let options = LdltOptions::default();
+                let serial = format!("{:?}", symbolic.factor_with(a, options, Cutoffs::NEVER));
+                for threads in [1, 2, 7, 28] {
+                    if always {
+                        let parallel = on(threads, || {
+                            symbolic.factor_with(a, options, Cutoffs::ALWAYS)
+                        });
+                        assert_eq!(
+                            format!("{parallel:?}"),
+                            serial,
+                            "{label}, {ordering:?}, {threads} threads"
+                        );
+                    }
+                    let defaults = on(threads, || symbolic.factor(a, options));
+                    assert_eq!(format!("{defaults:?}"), serial, "{label}, defaults");
+                }
+            }
+        }
+
+        #[test]
+        fn the_parallel_factorization_is_the_serial_one_bit_for_bit() {
+            check("indefinite", &indefinite(300, 3, 200, 1), true);
+            let kkt = saddle(30, 3, 2);
+            let ldlt = kkt
+                .analyze_ldlt(Ordering::Amd)
+                .unwrap()
+                .factor(&kkt, LdltOptions::default())
+                .unwrap();
+            assert!(ldlt.two_by_two() > 0, "the saddle point has 2×2 pivots");
+            check("saddle point", &kkt, true);
+            // Large enough for fronts past the default cutoffs, which it runs with: forcing every
+            //   pivot's update onto threads would only cost the test time
+            check("large saddle point", &saddle(70, 2, 3), false);
+        }
+
+        #[test]
+        fn a_singular_matrix_fails_as_the_serial_factorization_does() {
+            // Two independent blocks, each with a row and column stored but zero: every update
+            //   into them multiplies by one of their zeros, so the columns stay exactly zero and
+            //   a front in each block fails. The blocks are separate subtrees, so both failures
+            //   happen, and the error must be the first in the serial order, not whichever
+            //   thread finishes last
+            let base = indefinite(100, 2, 50, 4);
+            let mut entries = vec![];
+            for offset in [0, 100] {
+                for i in 0..100 {
+                    let (cols, values) = base.outer(i).unwrap();
+                    for (&j, &v) in cols.iter().zip(values) {
+                        let zero = i == 30 || j == 30;
+                        entries.push((offset + i, offset + j, if zero { 0.0 } else { v }));
+                    }
+                }
+            }
+            let a = CsrMatrix::from_triplets(200, 200, entries).unwrap();
+            let serial = a.analyze_ldlt(Ordering::Amd).unwrap().factor_with(
+                &a,
+                LdltOptions::default(),
+                Cutoffs::NEVER,
+            );
+            assert!(
+                matches!(serial, Err(SparseError::SingularMatrix { .. })),
+                "{serial:?}"
+            );
+            check("singular", &a, true);
+        }
+    }
+
+    #[test]
+    fn independent_blocks_are_two_roots() {
+        let block = |o: usize| {
+            [
+                (o, o, 4.0),
+                (o, o + 1, 1.0),
+                (o + 1, o, 1.0),
+                (o + 1, o + 1, 4.0),
+            ]
+        };
+        let entries: Vec<_> = block(0).into_iter().chain(block(2)).collect();
+        let s = symbolic(4, &entries);
+        assert_eq!(s.children, vec![Vec::<usize>::new(), vec![]]);
+        assert_eq!(s.subtree_work, vec![1, 1]);
+        assert_eq!(s.subtree_work.iter().sum::<u64>(), s.front_tree().work);
     }
 }

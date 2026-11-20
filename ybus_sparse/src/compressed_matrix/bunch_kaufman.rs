@@ -106,15 +106,20 @@ pub(crate) struct FrontFactor<T> {
 ///
 /// `scratch` is working space, reused across calls so a pivot allocates nothing.
 ///
+/// With the `rayon` feature, a pivot's trailing update splits its columns across threads when
+/// the trailing order is at least `node_order` (`usize::MAX` keeps it serial). Each column's
+/// elements take exactly the serial operations, so the result is bit for bit the same.
+///
 /// Returns `SparseError::SingularMatrix` naming the front position where no pivot was found
 /// with `complete`, or of a pivot that is zero or NaN.
-pub(crate) fn factor_front<T: Scalar + ComplexFloat>(
+pub(crate) fn factor_front<T: Scalar + ComplexFloat + Send + Sync>(
     a: &mut [T],
     m: usize,
     k: usize,
     threshold: T::Real,
     complete: bool,
     scratch: &mut Vec<T>,
+    node_order: usize,
 ) -> Result<FrontFactor<T>, SparseError> {
     debug_assert_eq!(a.len(), m * m);
     debug_assert!(k <= m && (!complete || k == m));
@@ -143,7 +148,7 @@ pub(crate) fn factor_front<T: Scalar + ComplexFloat>(
                 if d == zero || Float::is_nan(d) {
                     return Err(SparseError::SingularMatrix { pivot: order[p] });
                 }
-                eliminate_one(a, m, p, d, scratch);
+                eliminate_one(a, m, p, d, scratch, node_order);
                 blocks.push(DBlock::One(from_real(d)));
                 p += 1;
             }
@@ -157,7 +162,7 @@ pub(crate) fn factor_front<T: Scalar + ComplexFloat>(
                 if det == zero || Float::is_nan(det) {
                     return Err(SparseError::SingularMatrix { pivot: order[p] });
                 }
-                eliminate_two(a, m, p, (d11, d21, d22, det), scratch);
+                eliminate_two(a, m, p, (d11, d21, d22, det), scratch, node_order);
                 blocks.push(DBlock::Two {
                     a: from_real(d11),
                     b: d21,
@@ -308,14 +313,40 @@ fn swap<T: ComplexFloat>(a: &mut [T], m: usize, order: &mut [usize], i: usize, j
     order.swap(i, j);
 }
 
+/// Runs `update` on each column of `columns` (column-major, `m` rows each) with its index: in
+/// parallel if `parallel` and the `rayon` feature is on, each column on one thread, else in order.
+/// The columns are disjoint, so the results are the same either way.
+fn update_columns<T: Send + Sync>(
+    columns: &mut [T],
+    m: usize,
+    parallel: bool,
+    update: impl Fn(usize, &mut [T]) + Sync + Send,
+) {
+    #[cfg(feature = "rayon")]
+    if parallel {
+        use rayon::prelude::*;
+        columns
+            .par_chunks_mut(m)
+            .enumerate()
+            .for_each(|(jj, column)| update(jj, column));
+        return;
+    }
+    #[cfg(not(feature = "rayon"))]
+    let _ = parallel;
+    for (jj, column) in columns.chunks_mut(m).enumerate() {
+        update(jj, column);
+    }
+}
+
 /// Eliminates the 1×1 pivot `d` at position `p`: `L`'s column below it is `a_ip / d`, and the
 /// trailing square's lower triangle loses `a_ip conj(l_j)`
-fn eliminate_one<T: Scalar + ComplexFloat>(
+fn eliminate_one<T: Scalar + ComplexFloat + Send + Sync>(
     a: &mut [T],
     m: usize,
     p: usize,
     d: T::Real,
     scratch: &mut Vec<T>,
+    node_order: usize,
 ) {
     let at = |i: usize, j: usize| i + j * m;
     let d_t: T = from_real(d);
@@ -328,13 +359,16 @@ fn eliminate_one<T: Scalar + ComplexFloat>(
         scratch.push(value);
     }
     let (w, l) = scratch.split_at(k);
-    for (jj, j) in (p + 1..m).enumerate() {
+    // Column j's update, from row j down: a_ij − w_i conj(l_j)
+    let update = |jj: usize, column: &mut [T]| {
+        let j = p + 1 + jj;
         let conj_l = l[jj].conj();
         for (ii, i) in (j..m).enumerate().map(|(n, i)| (n + jj, i)) {
-            a[at(i, j)] = a[at(i, j)] - w[ii] * conj_l;
+            column[i] = column[i] - w[ii] * conj_l;
         }
-        a[at(j, j)] = from_real(a[at(j, j)].re());
-    }
+        column[j] = from_real(column[j].re());
+    };
+    update_columns(&mut a[(p + 1) * m..], m, k >= node_order, update);
     for (ii, i) in (p + 1..m).enumerate() {
         a[at(i, p)] = l[ii];
     }
@@ -344,12 +378,13 @@ fn eliminate_one<T: Scalar + ComplexFloat>(
 /// Eliminates the 2×2 pivot `[[d11, conj(d21)], [d21, d22]]` at positions `p` and `p + 1`:
 /// `L`'s two columns below it are `[a_ip, a_i,p+1] D⁻¹`, and the trailing square's lower
 /// triangle loses `a_ip conj(l_j,p) + a_i,p+1 conj(l_j,p+1)`
-fn eliminate_two<T: Scalar + ComplexFloat>(
+fn eliminate_two<T: Scalar + ComplexFloat + Send + Sync>(
     a: &mut [T],
     m: usize,
     p: usize,
     (d11, d21, d22, det): (T::Real, T, T::Real, T::Real),
     scratch: &mut Vec<T>,
+    node_order: usize,
 ) {
     let at = |i: usize, j: usize| i + j * m;
     let (d11_t, d22_t, det_t): (T, T, T) = (from_real(d11), from_real(d22), from_real(det));
@@ -370,14 +405,17 @@ fn eliminate_two<T: Scalar + ComplexFloat>(
     let (xy, l) = scratch.split_at(2 * k);
     let (x, y) = xy.split_at(k);
     let (l0, l1) = l.split_at(k);
-    for (jj, j) in (p + 2..m).enumerate() {
+    // Column j's update, from row j down: a_ij − x_i conj(l0_j) − y_i conj(l1_j)
+    let update = |jj: usize, column: &mut [T]| {
+        let j = p + 2 + jj;
         let (c0, c1) = (l0[jj].conj(), l1[jj].conj());
-        for i in j..m {
+        for (i, value) in column.iter_mut().enumerate().skip(j) {
             let ii = i - p - 2;
-            a[at(i, j)] = a[at(i, j)] - x[ii] * c0 - y[ii] * c1;
+            *value = *value - x[ii] * c0 - y[ii] * c1;
         }
-        a[at(j, j)] = from_real(a[at(j, j)].re());
-    }
+        column[j] = from_real(column[j].re());
+    };
+    update_columns(&mut a[(p + 2) * m..], m, k >= node_order, update);
     for (ii, i) in (p + 2..m).enumerate() {
         a[at(i, p)] = l0[ii];
         a[at(i, p + 1)] = l1[ii];
@@ -444,7 +482,7 @@ pub struct DenseLdlt<T: Scalar = f64> {
     perm: Vec<usize>,
 }
 
-impl<T: Scalar + ComplexFloat> DenseLdlt<T> {
+impl<T: Scalar + ComplexFloat + Send + Sync> DenseLdlt<T> {
     /// The threshold MA57 uses by default, 0.01: every entry of `L` from a threshold pivot is
     /// at most 100 in magnitude.
     pub const DEFAULT_THRESHOLD: f64 = 0.01;
@@ -498,7 +536,7 @@ impl<T: Scalar + ComplexFloat> DenseLdlt<T> {
             }
         }
         let threshold: T::Real = NumCast::from(threshold).expect("the threshold is representable");
-        let front = factor_front(&mut a, n, n, threshold, true, &mut Vec::new())?;
+        let front = factor_front(&mut a, n, n, threshold, true, &mut Vec::new(), usize::MAX)?;
         debug_assert_eq!(front.eliminated, n);
         // L: the strictly lower part, with each 2×2 block's lower-left entry (D's) cleared, and
         //   the unit diagonal
