@@ -979,7 +979,7 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       For MIPS it's at most ×1.12, since its LU isn't tree-parallel.
     - **SIMD in the dense kernel:** at most ×1.14–1.23.
   - **The order stands.**
-- [ ] **Batched OPF solves** (O5 target 1): many solves sharing a base (N-1 OPF warm from the
+- [x] **Batched OPF solves** (O5 target 1): many solves sharing a base (N-1 OPF warm from the
   base with `map_start`, or a day's hours), each on its own thread with its own model, results
   in input order. Bound: about ×10.
   - **The survey's rule, written 2026-11-20 before it runs:**
@@ -998,6 +998,16 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       hours. 28 fill 28 threads in one wave.
     - **Each process times the serial batch once,** then the `par_` form on each pool, rather
       than one process per thread count, which would repeat the serial batch six times.
+  - **The result** ([`o5-batched-solves-2026-11-20.md`](benchmarks/o5-batched-solves-2026-11-20.md)):
+    - **Bit for bit:** every parallel batch matches its serial one, all 321 rows at 1–28
+      threads.
+    - **MIPS:** a median ×9.35 (DC) and ×7.69 (AC) at 28 threads, up to ×11.6, reaching the
+      bound.
+    - **The predictor-corrector method:** ×5.56 (DC) and ×4.13 (AC) at 14 threads, and less at
+      28. The balance doesn't explain it, since its cold batches could reach ×22–27. Memory
+      bandwidth or allocation are the likely causes, for target 3.
+    - **Warm outage batches:** held to ×2–4 by their slowest outage, which was measured.
+    - **Memory:** case_ACTIVSg25k's AC batches went over 12 GiB beyond 8 and 14 threads.
 - [ ] **Within one solve** (O5 target 2): the LDLᵀ's independent subtrees with `rayon::join`,
   with each child's update extended into its parent in the serial order; and the AC
   evaluation's plans split by fixed element ranges. Bound: ×1.5–3.0 on the predictor-corrector
