@@ -33,6 +33,8 @@ releases.
 - Factorizations: sparse LU with threshold partial pivoting, Cholesky, and LDLᵀ with
   Bunch–Kaufman pivoting, with orderings (AMD, COLAMD, reverse Cuthill–McKee), condition estimates,
   and solves with many right-hand sides.
+- A symbolic LDLᵀ's front tree (`SymbolicLdlt::front_tree`, `FrontTree`): its fronts' work,
+  height and critical path.
 - Conjugate gradient, and Matrix Market reading and writing.
 - Optional features: `serde`, and `rayon` for parallel products and solves.
 
@@ -51,6 +53,8 @@ releases.
   default elsewhere.
 - The KKT factorizations' statistics on `Solution` (`kkt: KktStatistics`): factorizations,
   delayed pivots, 2×2 pivots and factor entries, totalled over a solve.
+  With LDLᵀ, `tree` is the last analysis's front tree (`FrontTree`): its fronts' work and its
+  critical path, the bound on parallelism over independent subtrees.
 - Warm starts (`start::Start`, `WarmStart`; `mips_from`, `mehrotra_from` and their `qps_`
   forms): a solve started from a previous solution's point and multipliers, with every slack
   and inequality multiplier raised to at least `warm_shift`, for sequences of related problems.

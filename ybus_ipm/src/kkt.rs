@@ -27,6 +27,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+pub use ybus_sparse::compressed_matrix::FrontTree;
 use ybus_sparse::compressed_matrix::{
     AssemblyMap, Csc, CscMatrix, CsrMatrix, Inertia, Ldlt, LdltOptions, Lu, LuOptions, Ordering,
     SymbolicLdlt, SymbolicLu,
@@ -113,6 +114,9 @@ pub struct KktStatistics {
     pub two_by_two: usize,
     /// The factors' stored entries: `L`'s for LDLᵀ ([`Ldlt::l_entries`]), `L`'s and `U`'s for LU
     pub factor_entries: usize,
+    /// The last LDLᵀ analysis's front tree ([`SymbolicLdlt::front_tree`]): not a total, and
+    /// empty with LU
+    pub tree: FrontTree,
 }
 
 /// The KKT matrix's assembly for one set of input patterns: `from_triplets`' sums replayed
@@ -404,6 +408,7 @@ impl KktSolver {
             }
         };
         self.analyses += 1;
+        self.statistics.tree = symbolic.front_tree();
         let factored = symbolic.factor(&matrix, options);
         self.ldlt = Some(symbolic);
         Ok(FactorKind::Ldlt {

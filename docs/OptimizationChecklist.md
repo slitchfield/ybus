@@ -927,11 +927,75 @@ with legacy results generated locally to explain differences.
           part.
 - [ ] **Parallel and GPU.** Batched OPF solves with rayon, and a GPU KKT factorization if phase
       O2's spike supports one; warm starts across related problems, such as outage sequences.
-      Recorded. **Moved to phase O5** (rayon, SIMD and GPU), with O2's untried "The CPU" ideas;
-      O5's plan comes next.
+      Recorded. **Moved to phase O5** (rayon, SIMD and GPU), with O2's untried "The CPU" ideas:
+      see "Phase O5" below.
 
 **Phase O4 is complete** (PRs #53–#62 and #79–#81, and this one, 2026-11-17). Its open item,
 "Parallel and GPU", continues in O5.
+
+## Phase O5: rayon, SIMD and GPU
+
+Planned 2026-11-19, after the warm starts, as the last optimization phase before the publish
+(P5). It gathers O2's untried "The CPU" ideas and O4's "Parallel and GPU" item.
+
+- **Decided with the maintainer (2026-11-19):**
+  - **The targets:** all four, in this order unless the bounds say otherwise:
+    1. batched OPF solves
+    2. parallelism within one solve
+    3. SIMD and layouts
+    4. a GPU KKT factorization
+  - **Bit for bit, independent of the thread count:**
+    - **Parallel paths:** they give the serial path's results bit for bit, whatever the
+      thread count, through fixed partitions (never by thread count) and ordered reductions.
+    - **Reordered arithmetic:** a change that reorders it (SIMD reductions, FMA) must meet O3's
+      bar and be opt-in, or be the predictor-corrector default within the bar, by the standing
+      rule.
+    - **MIPS's default** stays bit for bit.
+  - **Profile and targets first,** as O2 and O4 began.
+- **Standing constraints:**
+  - **rayon stays an optional feature,** and the serial path the default. `ybus_ipm` gains a
+    `rayon` feature, forwarded by `ybus_powerflow/rayon`. The C build keeps default features
+    only (F0).
+  - **The GPU comes last.** GPU runs have crashed WSL here, so state stays in the repo, commits
+    come before a GPU run, and runs start small.
+- **How each target is checked:**
+  - the 72-case snapshot
+  - results at 1, 2, 7 and 28 threads, bit for bit against the serial path
+  - planted bugs, such as a reduction in thread order or an unordered extend-add
+  - a survey whose rule is written before it runs
+- [x] **The profile and the targets** (O5 PR 1;
+  [`o5-profile-2026-11-19.md`](benchmarks/o5-profile-2026-11-19.md)):
+  - **What it measured:**
+    - re-timed baselines, with outcomes and iterations as archived, and times 1–16% slower
+      than 2026-11-17's
+    - samply profiles, all at 1.0 threads busy
+    - each solve's front tree (`FrontTree`, `KktStatistics::tree`, and the `o5_parallelism`
+      example)
+    - the machine's ceiling for independent work: about ×10–11 on 14 threads, and ×5 on
+      case_ACTIVSg70k
+  - **The bounds:**
+    - **Batched solves:** about ×10, for both solvers.
+    - **Within one solve:** ×1.5–2.1 (DC) and ×2.6–3.0 (AC) for the predictor-corrector method.
+      For MIPS it's at most ×1.12, since its LU isn't tree-parallel.
+    - **SIMD in the dense kernel:** at most ×1.14–1.23.
+  - **The order stands.**
+- [ ] **Batched OPF solves** (O5 target 1): many solves sharing a base (N-1 OPF warm from the
+  base with `map_start`, or a day's hours), each on its own thread with its own model, results
+  in input order. Bound: about ×10.
+- [ ] **Within one solve** (O5 target 2): the LDLᵀ's independent subtrees with `rayon::join`,
+  with each child's update extended into its parent in the serial order; and the AC
+  evaluation's plans split by fixed element ranges. Bound: ×1.5–3.0 on the predictor-corrector
+  method.
+- [ ] **SIMD and layouts** (O5 target 3):
+  - **The dense kernel's rank-k update,** vectorized without reordering any element's
+    operations, if it isn't auto-vectorized already.
+  - **Supernodal or blocked triangular solves.**
+  - **Less allocation and copying.**
+  
+  Reductions that reorder are opt-in under O3's bar. Bound: ×1.14–1.23 from the kernel.
+- [ ] **A GPU KKT factorization** (O5 target 4): a cuDSS spike behind `cuda`. It's gated: only
+  if the KKT factorization is still the largest stage of a large AC solve after targets 1–3,
+  and O2's transfer measurements leave it room.
 
 ## Warm starts for OPF sequences
 

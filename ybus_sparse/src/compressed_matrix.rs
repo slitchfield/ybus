@@ -53,7 +53,7 @@ pub use assembly::AssemblyMap;
 pub use cholesky::{Cholesky, SymbolicCholesky};
 pub use factorization::Factorization;
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
-pub use multifrontal::{Amalgamation, Ldlt, LdltOptions, SymbolicLdlt};
+pub use multifrontal::{Amalgamation, FrontTree, Ldlt, LdltOptions, SymbolicLdlt};
 pub use ordering::Ordering;
 pub use plans::{ProductPlan, SumPlan};
 pub use solvers::SparseSolveWorkspace;
