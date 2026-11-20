@@ -85,7 +85,10 @@ releases.
   solved for many cases on it, such as a load sweep, keeping the network, its matrices and the
   AC problem's plans. Bit for bit what the one-shot functions give, which now use them.
   `solve_from` starts a solve from a previous solution of the model (`opf::OpfStart`: cold,
-  primal-only or warm), for sequences of cases.
+  primal-only or warm), for sequences of cases. `map_start` maps a solution of one model onto
+  another model of the same case's tables, such as with a branch or a generator out of
+  service, matching every variable and constraint by its case row (`OpfStart::Mapped`,
+  `OpfStart::MappedPrimal`).
 - Islands and bridges of a network.
 - Each solver is tested against results computed by MATPOWER.
 - Optional features: `rayon` for parallel outages and sensitivities, and `cuda`

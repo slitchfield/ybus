@@ -23,6 +23,7 @@ pub mod dc;
 #[doc(hidden)]
 pub mod derivatives;
 
+use std::collections::HashMap;
 use std::f64::consts::PI;
 
 // The solvers' types this module's API names, so that choosing and reading a solver needs no
@@ -32,7 +33,8 @@ pub use ybus_ipm::kkt::{KktFactorization, KktOrdering, KktStatistics};
 pub use ybus_ipm::mehrotra::{MehrotraIteration, MehrotraOptions};
 pub use ybus_ipm::mips::{MipsIteration, MipsOptions};
 pub use ybus_ipm::solution::{History, KktResiduals, Multipliers, Solution, Status};
-use ybus_ipm::start::{Start, WarmStart};
+use ybus_ipm::start::Start;
+pub use ybus_ipm::start::WarmStart;
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use crate::case::{BusType, Case};
@@ -59,6 +61,12 @@ pub enum OpfStart<'a> {
     /// A previous solution's point and multipliers, shifted off the boundary by the solver's
     /// `warm_shift`
     Warm(&'a Solution),
+    /// A point and multipliers already in this model's layout, as `map_start` maps a solution
+    /// of another model of the case onto it ([`ac::AcOpfModel::map_start`],
+    /// [`dc::DcOpfModel::map_start`]), for example across an outage: shifted as `Warm` is
+    Mapped(&'a WarmStart),
+    /// [`OpfStart::Mapped`]'s point alone, the multipliers and slacks started as a cold start's
+    MappedPrimal(&'a WarmStart),
 }
 
 impl<'a> OpfStart<'a> {
@@ -68,6 +76,8 @@ impl<'a> OpfStart<'a> {
         match (self, warm) {
             (OpfStart::Primal(previous), _) => Start::Cold(&previous.x),
             (OpfStart::Warm(_), Some(warm)) => Start::Warm(warm),
+            (OpfStart::Mapped(mapped), _) => Start::Warm(mapped),
+            (OpfStart::MappedPrimal(mapped), _) => Start::Cold(&mapped.x),
             _ => Start::Cold(x0),
         }
     }
@@ -78,6 +88,118 @@ impl<'a> OpfStart<'a> {
             OpfStart::Warm(previous) => Some(WarmStart::from_solution(previous)),
             _ => None,
         }
+    }
+}
+
+/// What a variable or a constraint of an OPF problem belongs to, by the case's row: the key on
+/// which `map_start` matches one model's problem to another's
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Key {
+    /// A bus's voltage angle, and for AC its magnitude
+    Va(usize),
+    Vm(usize),
+    /// A generator's real and (AC) reactive output
+    Pg(usize),
+    Qg(usize),
+    /// The helper variable of a generator's piecewise cost of its real (`true`) or reactive
+    /// output
+    Y(usize, bool),
+    /// A bus's real and (AC) reactive power balance
+    P(usize),
+    Q(usize),
+    /// A branch's flow limit: AC's from and to ends, DC's one row
+    Sf(usize),
+    St(usize),
+    Flow(usize),
+    /// A branch's angle difference limit
+    Angle(usize),
+    /// Segment `j` of a generator's piecewise cost of its real (`true`) or reactive output
+    Segment(usize, bool, usize),
+    /// A dispatchable load's power factor
+    PowerFactor(usize),
+}
+
+/// An OPF problem's variables and constraints, each by its [`Key`], in the problem's order:
+/// the columns, the nonlinear equalities and inequalities, and the rows of `A`
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Layout {
+    pub(crate) columns: Vec<Key>,
+    pub(crate) eq: Vec<Key>,
+    pub(crate) ineq: Vec<Key>,
+    pub(crate) rows: Vec<Key>,
+}
+
+impl Layout {
+    /// The keys of `costs`' piecewise costs, for generators at case rows `gen_rows`: their
+    ///   helper columns, and their segments' rows, in `LinearRows::piecewise`'s order
+    pub(crate) fn piecewise(&mut self, costs: &OpfCosts, gen_rows: &[usize]) {
+        let keys: Vec<(usize, bool)> = costs
+            .piecewise
+            .iter()
+            .map(|cost| match cost.variable {
+                CostVariable::Active(k) => (gen_rows[k], true),
+                CostVariable::Reactive(k) => (gen_rows[k], false),
+            })
+            .collect();
+        self.columns
+            .extend(keys.iter().map(|&(row, active)| Key::Y(row, active)));
+        for (&(row, active), cost) in keys.iter().zip(&costs.piecewise) {
+            self.rows
+                .extend((0..cost.slopes.len()).map(|j| Key::Segment(row, active, j)));
+        }
+    }
+
+    /// A warm start in this layout from `previous`, a solution in `from`'s: each variable and
+    /// multiplier whose key `from` has takes its value there, from the final iterate's
+    /// multipliers; a new variable takes its value in `cold`, this problem's cold start, and a
+    /// new multiplier 0.
+    ///
+    /// Returns `PowerflowError::Solver` with the solver's `Dimension` error if `previous`
+    /// doesn't fit `from`.
+    pub(crate) fn map(
+        &self,
+        from: &Layout,
+        previous: &Solution,
+        cold: &[f64],
+    ) -> Result<WarmStart, PowerflowError> {
+        let m = &previous.iterate_multipliers;
+        let fits = previous.x.len() == from.columns.len()
+            && m.lower.len() == from.columns.len()
+            && m.upper.len() == from.columns.len()
+            && m.eq_nonlin.len() == from.eq.len()
+            && m.ineq_nonlin.len() == from.ineq.len()
+            && m.mu_l.len() == from.rows.len()
+            && m.mu_u.len() == from.rows.len();
+        if !fits {
+            return Err(PowerflowError::Solver {
+                error: InteriorPointError::Dimension {
+                    what: "the previous solution",
+                },
+            });
+        }
+        // Each key's position in `from`, then each of ours taken from there
+        let index = |keys: &[Key]| -> HashMap<Key, usize> {
+            keys.iter().enumerate().map(|(i, &key)| (key, i)).collect()
+        };
+        let take = |ours: &[Key], theirs: &[Key], values: &[f64], new: &dyn Fn(usize) -> f64| {
+            let positions = index(theirs);
+            ours.iter()
+                .enumerate()
+                .map(|(i, key)| positions.get(key).map_or_else(|| new(i), |&j| values[j]))
+                .collect::<Vec<f64>>()
+        };
+        let zero = |_| 0.0;
+        Ok(WarmStart {
+            x: take(&self.columns, &from.columns, &previous.x, &|i| cold[i]),
+            multipliers: Multipliers {
+                eq_nonlin: take(&self.eq, &from.eq, &m.eq_nonlin, &zero),
+                ineq_nonlin: take(&self.ineq, &from.ineq, &m.ineq_nonlin, &zero),
+                mu_l: take(&self.rows, &from.rows, &m.mu_l, &zero),
+                mu_u: take(&self.rows, &from.rows, &m.mu_u, &zero),
+                lower: take(&self.columns, &from.columns, &m.lower, &zero),
+                upper: take(&self.columns, &from.columns, &m.upper, &zero),
+            },
+        })
     }
 }
 

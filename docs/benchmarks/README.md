@@ -32,6 +32,7 @@ change. Each record names the code, the machine and the method it used.
 | [`kkt-ordering-2026-11-17.md`](kkt-ordering-2026-11-17.md) | The matched KKT ordering for the pivoted LDLᵀ (phase O4, target 4), and the ordering study that closes O4: delays 7.4× (DC) and 22× (AC) fewer, fill 19–21% less; the DC predictor-corrector default switched by the rule written before the survey (1.14–1.30× faster), AC kept on AMD for one differing outcome. |
 | [`opf-models-2026-11-18.md`](opf-models-2026-11-18.md) | Kept OPF models (`AcOpfModel`, `DcOpfModel`), the warm starts' first stage: bit for bit what the one-shot functions give, and on their own within 4% of them on a load sweep, since a solve's work dwarfs its setup. |
 | [`opf-warm-start-2026-11-18.md`](opf-warm-start-2026-11-18.md) | Warm-started OPF sequences (`solve_from`, `OpfStart`): three warm-start defects found and fixed, then no `warm_shift` qualifying under the rule written before the survey, so the default stays provisional. MIPS at 1e-6 saves a median ×2.11 (DC) and ×3.40 (AC) with no regressions; the predictor-corrector method needs a relative shift. The survey's CSV is beside it, gzipped. |
+| [`opf-outage-warm-start-2026-11-19.md`](opf-outage-warm-start-2026-11-19.md) | Warm starts across single branch and generator outages (`map_start`, `OpfStart::Mapped`), each from the base solution: MIPS at 1e-6 ×2.05–2.24 (DC) and ×2.99–3.38 (AC) with 49 rescues, the predictor-corrector method failing where it did on one network, and a model per outage about 2% of a cold solve. The survey's CSV is beside it, gzipped. |
 
 ## Measuring
 
@@ -63,8 +64,8 @@ change. Each record names the code, the machine and the method it used.
   example on each case with costs, the model chosen by `YBUS_BENCH_MODEL` (`dc` or `ac`), and
   compares it with MATPOWER's MP-Core and legacy results, generating any that are missing.
 - **Warm-started OPF sequences:** `scripts/benchmark-opf-sequence.sh [<output.csv>]` runs the
-  `opf_sequence` example over cases, models, solvers, sequences (a load sweep and a seeded
-  random walk) and warm shifts, from the `YBUS_SEQUENCE_*` variables. Each step is solved cold,
+  `opf_sequence` example over cases, models, solvers, sequences (a load sweep, a seeded
+  random walk, and seeded samples of single branch and generator outages) and warm shifts, from the `YBUS_SEQUENCE_*` variables. Each step is solved cold,
   primal-only and warm, and the last two get the warm-start rule's verdict against the cold step.
 - **Orderings:** `scripts/benchmark-ordering.sh [<output.csv>]` factors each case's Jacobian and
   B′ under AMD and COLAMD with the `ordering_survey` example.

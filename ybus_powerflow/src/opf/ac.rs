@@ -51,7 +51,8 @@ use crate::opf::derivatives::{
     SquaredMagnitudesPlan, WeightedHessianPlan,
 };
 use crate::opf::{
-    helper_start, per_degree, reference_buses, starting_point, LinearRows, OpfSolver, OpfStart,
+    helper_start, per_degree, reference_buses, starting_point, Key, Layout, LinearRows, OpfSolver,
+    OpfStart, WarmStart,
 };
 use crate::powerflow_error::PowerflowError;
 use crate::topology::{Network, Signature};
@@ -773,6 +774,98 @@ pub struct AcOpfModel {
 }
 
 impl AcOpfModel {
+    /// `nlpopf_solver`'s starting point for `case`, with the variables' bounds and the costs
+    ///   from its `Inputs`: every angle at the first reference bus's, and each magnitude midway
+    ///   between its limits, clipped to [0.5, 1.5]
+    fn cold_point(&self, case: &Case, xmin: &[f64], xmax: &[f64], costs: &OpfCosts) -> Vec<f64> {
+        let nb = self.network.bus_rows.len();
+        let ng = self.network.gen_rows.len();
+        let (va, vm, y) = (0, nb, 2 * nb + 2 * ng);
+        let mut x0 = starting_point(xmin, xmax);
+        x0[va..vm].fill(xmin[va + self.refs[0]]);
+        for (i, &row) in self.network.bus_rows.iter().enumerate() {
+            let bus = &case.bus[row];
+            x0[vm + i] = (bus.vmax_pu.min(1.5) + bus.vmin_pu.max(0.5)) / 2.0;
+        }
+        if let Some(start) = helper_start(costs) {
+            x0[y..].fill(start);
+        }
+        x0
+    }
+
+    /// The problem's layout for `case` (see `opf::Layout`), and the `Inputs` it was read from:
+    ///   `[Va, Vm, Pg, Qg, y]`; the power balances `P`, then `Q`; the flow limits `Sf`, then
+    ///   `St`; and the rows of `A` as `Inputs::new` pushes them, power factors, angle limits,
+    ///   then the piecewise costs' segments
+    fn layout(&self, case: &Case) -> Result<(Layout, Inputs), PowerflowError> {
+        Network::new(case, check_impedance)?;
+        self.signature.check(case)?;
+        let inputs = Inputs::new(case, &self.network, &self.refs)?;
+        let network = &self.network;
+        let buses = &network.bus_rows;
+        let gens = &network.gen_rows;
+        let branch = |k: &usize| network.branch_rows[*k];
+        let mut layout = Layout::default();
+        layout.columns.extend(buses.iter().map(|&row| Key::Va(row)));
+        layout.columns.extend(buses.iter().map(|&row| Key::Vm(row)));
+        layout.columns.extend(gens.iter().map(|&row| Key::Pg(row)));
+        layout.columns.extend(gens.iter().map(|&row| Key::Qg(row)));
+        layout.eq.extend(buses.iter().map(|&row| Key::P(row)));
+        layout.eq.extend(buses.iter().map(|&row| Key::Q(row)));
+        layout
+            .ineq
+            .extend(inputs.limited.iter().map(|k| Key::Sf(branch(k))));
+        layout
+            .ineq
+            .extend(inputs.limited.iter().map(|k| Key::St(branch(k))));
+        layout.rows.extend(
+            inputs
+                .power_factor
+                .iter()
+                .map(|&k| Key::PowerFactor(gens[k])),
+        );
+        layout
+            .rows
+            .extend(inputs.angle_limited.iter().map(|k| Key::Angle(branch(k))));
+        layout.piecewise(&inputs.costs, gens);
+        Ok((layout, inputs))
+    }
+
+    /// A warm start for this model's solve of `case` ([`OpfStart::Mapped`]) from `previous`,
+    /// `from`'s solution of `from_case`: another model of the same case's tables, for example
+    /// with a branch or a generator out of service.
+    ///
+    /// Each variable and multiplier is matched by what it belongs to, by case row: a bus's
+    /// voltage and power balances, a generator's outputs, a branch's flow and angle limits, a
+    /// piecewise cost's helper and segments, a dispatchable load's power factor. A match takes
+    /// `previous`'s value, from its final iterate's multipliers
+    /// ([`Solution::iterate_multipliers`]). A variable without one, such as a generator back in
+    /// service, takes its cold start's value, and a multiplier 0, which the solver's shift
+    /// raises. Both models' `cost_mult` must be the same, as for [`OpfStart::Warm`].
+    ///
+    /// Returns `PowerflowError::CaseMismatch` if the cases' tables differ in length, `case`'s
+    /// or `from_case`'s errors as [`AcOpfModel::solve`] would return them, and
+    /// `PowerflowError::Solver` (`Dimension`) if `previous` doesn't fit `from`'s problem.
+    pub fn map_start(
+        &self,
+        case: &Case,
+        from: &AcOpfModel,
+        from_case: &Case,
+        previous: &Solution,
+    ) -> Result<WarmStart, PowerflowError> {
+        let shape = |case: &Case| (case.bus.len(), case.generator.len(), case.branch.len());
+        if shape(case) != shape(from_case) {
+            return Err(PowerflowError::CaseMismatch {
+                expected: shape(from_case),
+                found: shape(case),
+            });
+        }
+        let (ours, inputs) = self.layout(case)?;
+        let (theirs, _) = from.layout(from_case)?;
+        let cold = self.cold_point(case, &inputs.xmin, &inputs.xmax, &inputs.costs);
+        ours.map(&theirs, previous, &cold)
+    }
+
     /// Builds the model of `case`'s network, checking the case as [`ac_opf`] does.
     ///
     /// Returns the errors [`ac_opf`] returns before solving.
@@ -891,19 +984,9 @@ impl AcOpfModel {
         if cost_hessian_positions(&problem) != self.cost_hessian {
             return Err(self.cost_mismatch(&problem));
         }
-        let (va, vm, pg, qg, y) = (0, nb, 2 * nb, 2 * nb + ng, 2 * nb + 2 * ng);
+        let (va, vm, pg, qg) = (0, nb, 2 * nb, 2 * nb + ng);
 
-        // nlpopf_solver's starting point: every angle at the first reference bus's, and each
-        //   magnitude midway between its limits, clipped to [0.5, 1.5]
-        let mut x0 = starting_point(&xmin, &xmax);
-        x0[va..vm].fill(xmin[va + refs[0]]);
-        for (i, &row) in network.bus_rows.iter().enumerate() {
-            let bus = &case.bus[row];
-            x0[vm + i] = (bus.vmax_pu.min(1.5) + bus.vmin_pu.max(0.5)) / 2.0;
-        }
-        if let Some(start) = helper_start(&costs) {
-            x0[y..].fill(start);
-        }
+        let x0 = self.cold_point(case, &xmin, &xmax, &costs);
 
         let constraints = Constraints {
             a: Some(a),

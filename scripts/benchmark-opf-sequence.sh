@@ -13,7 +13,8 @@
 #   YBUS_SEQUENCE_CASES      the cases, separated by spaces (default: case9 case30 case118)
 #   YBUS_SEQUENCE_MODELS     dc, ac or both (default: dc ac)
 #   YBUS_SEQUENCE_SOLVERS    mips, mehrotra or both (default: mips mehrotra)
-#   YBUS_SEQUENCE_SEQUENCES  sweep, walk or both (default: sweep walk)
+#   YBUS_SEQUENCE_SEQUENCES  any of sweep, walk, branch-outages and generator-outages
+#                            (default: sweep walk)
 #   YBUS_SEQUENCE_SHIFTS     the warm shifts, separated by commas, one warm chain each, in one
 #                            run with the cold and primal chains (default: the solvers' own)
 #   YBUS_SEQUENCE_SKIP       runs to leave out, as case:model:solver words separated by spaces
