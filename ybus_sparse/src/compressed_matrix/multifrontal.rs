@@ -545,10 +545,11 @@ impl SymbolicLdlt {
     /// maps.
     ///
     /// **With the `rayon` feature,** independent subtrees of the front tree factor in parallel,
-    /// and so do the large fronts' trailing updates, column by column. Each front still does
-    /// exactly the serial arithmetic: it assembles its children's contribution blocks in their
-    /// index order, and each element of an update takes the same operations. So the results
-    /// are bit for bit the serial factorization's, at any thread count.
+    /// those of 2²⁰ multiply-adds or more. Each front still does exactly the serial arithmetic:
+    /// it assembles its children's contribution blocks in their index order. So the results
+    /// are bit for bit the serial factorization's, at any thread count. (The dense kernel can
+    /// also split a front's trailing update across columns, bit for bit too, but that's off:
+    /// it didn't pay on the OPF's fronts.)
     ///
     /// Returns `SparseError::PatternMismatch` if `matrix`'s shape or pattern differs from the
     /// analyzed one, `SparseError::NotSymmetric` if `A ≠ Aᴴ`, and `SparseError::SingularMatrix`
@@ -947,10 +948,13 @@ pub(crate) struct Cutoffs {
 }
 
 impl Cutoffs {
-    /// The factorization's own (set from a calibration: see `docs/benchmarks/`)
+    /// The factorization's own, from a calibration over six OPF workloads at 14 threads
+    /// (`docs/benchmarks/o5-parallel-ldlt-2026-11-20.md`): subtrees of 2²⁰ multiply-adds or
+    /// more in parallel, and no column split. The split never beat the timing noise, and from
+    /// trailing order 256 it made solves slower.
     pub(crate) const DEFAULT: Cutoffs = Cutoffs {
         subtree_work: 1 << 20,
-        node_order: 256,
+        node_order: usize::MAX,
     };
     /// Every subtree and update on the parallel paths
     #[allow(dead_code)]
