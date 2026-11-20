@@ -24,6 +24,9 @@
 #   YBUS_BENCH_TIMEOUT  the time limit per case, in seconds (default 3600)
 #   YBUS_BENCH_MEMORY   the address-space limit per case, in GiB (default 10)
 #   YBUS_BENCH_CASES    the cases to survey, separated by spaces (default: every case with costs)
+#   YBUS_BENCH_FEATURES ybus_powerflow's features to build the survey with, separated by commas
+#                       (default: none). With rayon, the LDLᵀ factors in parallel, on rayon's
+#                       pool, which RAYON_NUM_THREADS sizes; its results are the serial build's
 #
 #   MATPOWER's results (MP-Core, legacy, and its timings) are generated for any case that lacks
 #   them, one case per process under the same limits, with BLAS single-threaded, which Octave
@@ -87,8 +90,10 @@ else
     echo "warning: without Octave, results aren't compared with MATPOWER's" >&2
 fi
 
+FEATURE_ARGS=()
+[[ -n "${YBUS_BENCH_FEATURES:-}" ]] && FEATURE_ARGS=(--features "${YBUS_BENCH_FEATURES}")
 cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_powerflow \
-    --example opf_survey
+    "${FEATURE_ARGS[@]}" --example opf_survey
 SURVEY="${ROOT}/target/release/examples/opf_survey"
 
 HEADER="$("${SURVEY}" --header)"

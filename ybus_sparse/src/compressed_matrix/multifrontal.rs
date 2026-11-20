@@ -627,7 +627,13 @@ impl SymbolicLdlt {
         cutoffs: Cutoffs,
     ) -> Result<(Vec<Front<T>>, usize), SparseError> {
         use rayon::prelude::*;
-        if cutoffs.subtree_work == u64::MAX {
+        // Serially when there's nothing to gain: no subtree cutoff, a one-thread pool, or a
+        //   caller that asked (`serially`, inside a batch of parallel solves). Only the schedule
+        //   changes; the results are the same either way
+        let serial = cutoffs.subtree_work == u64::MAX
+            || (cutoffs != Cutoffs::ALWAYS
+                && (rayon::current_num_threads() == 1 || SERIALLY.with(|depth| depth.get() > 0)));
+        if serial {
             let mut workspace = Workspace::new(self.cholesky.dim());
             let (fronts, _, delayed) = self
                 .factor_range(0..self.nodes.len(), context, &mut workspace)
@@ -970,6 +976,35 @@ impl Cutoffs {
     };
 }
 
+#[cfg(feature = "rayon")]
+thread_local! {
+    /// How many `serially` scopes this thread is inside
+    static SERIALLY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Runs `f` with this thread's multifrontal LDLᵀ factorizations serial, though the `rayon`
+/// feature is on. The results are the same either way; it's for callers that already run many
+/// factorizations in parallel, such as a batch of OPF solves, where the nested parallelism only
+/// competes with theirs. Without the feature it just runs `f`.
+#[doc(hidden)]
+pub fn serially<R>(f: impl FnOnce() -> R) -> R {
+    #[cfg(feature = "rayon")]
+    {
+        SERIALLY.with(|depth| depth.set(depth.get() + 1));
+        // Decremented however f returns
+        struct Leave;
+        impl Drop for Leave {
+            fn drop(&mut self) {
+                SERIALLY.with(|depth| depth.set(depth.get() - 1));
+            }
+        }
+        let _leave = Leave;
+        f()
+    }
+    #[cfg(not(feature = "rayon"))]
+    f()
+}
+
 /// Of two failures, the one at the lower front index, the serial factorization's first
 #[cfg(feature = "rayon")]
 fn first_failure(
@@ -1294,6 +1329,29 @@ mod tests {
             // Large enough for fronts past the default cutoffs, which it runs with: forcing every
             //   pivot's update onto threads would only cost the test time
             check("large saddle point", &saddle(70, 2, 3), false);
+        }
+
+        #[test]
+        fn serially_nests_and_restores_its_count_on_a_panic() {
+            let depth = || SERIALLY.with(|depth| depth.get());
+            assert_eq!(depth(), 0);
+            serially(|| {
+                assert_eq!(depth(), 1);
+                serially(|| assert_eq!(depth(), 2));
+                assert_eq!(depth(), 1);
+            });
+            let caught = std::panic::catch_unwind(|| serially(|| panic!("inside")));
+            assert!(caught.is_err());
+            assert_eq!(depth(), 0, "restored after the panic");
+            // And the factorization inside it is the serial one
+            let a = indefinite(300, 3, 200, 1);
+            let symbolic = a.analyze_ldlt(Ordering::Amd).unwrap();
+            let options = LdltOptions::default();
+            let serial = format!("{:?}", symbolic.factor_with(&a, options, Cutoffs::NEVER));
+            assert_eq!(
+                format!("{:?}", serially(|| symbolic.factor(&a, options))),
+                serial
+            );
         }
 
         #[test]
