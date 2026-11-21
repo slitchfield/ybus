@@ -1116,7 +1116,23 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       - **The `x86-64-v3` build is slower:** the predictor-corrector method's AC solves are
         ×0.80–0.91 in repeated rounds, the dense kernel taking 1.83× as long on its short
         columns. The README documents the flag as not recommended for these OPFs.
-  - [ ] **PR 3b, parallel triangular solves** (bit for bit): next.
+  - [ ] **PR 3b, parallel triangular solves** (bit for bit):
+    - **The solves:** the front tree's independent subtrees in parallel. Forward updates past a
+      subtree are recorded and applied by its parent in the serial order, and the backward
+      sweep reads ancestors' entries once they're final.
+    - **The cutoff:** subtrees of 2²⁰ sweep multiply-adds or more, calibrated at 8 and 14
+      threads.
+      - **Below 2¹⁶ the tasks cost more than they save:** down to ×0.38 on case2383wp's DC.
+      - **The one steady gain** is case_ACTIVSg25k's AC at 2²⁰, ×1.09–1.14 in all four
+        rounds. It's gone from 2²².
+      - **The small cases' differences are noise** (±5%). By PR 2a's rule, the first
+        calibration chooses 2²⁰, and the second, on worst cases within that noise, 2²⁴.
+        2²⁰ was taken, for the steady gain.
+    - **The survey's rule, written before it runs:**
+      - **Bit for bit:** every result column, at 1, 2, 4, 8, 14 and 28 threads, and `main`'s at
+        8 and 14, matches the serial build's.
+      - **The speedups are recorded, with nothing chosen,** against the ×1.1–1.15 bound and
+        `main` the same day.
   - [ ] **PR 3c, opt-in fused arithmetic:** planned, unstarted (decided 2026-11-21). It needs
     the build flag for FMA, and that flag slows the kernel it would fuse, so it waits for a
     kernel restructured for short columns.

@@ -1310,9 +1310,12 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
 }
 
 /// The subtree solve work past which the solves go parallel (feature `rayon`), in
-/// [`FrontTree`]'s multiply-adds: fixed, not a thread count, and the results don't depend on it
+/// [`FrontTree`]'s multiply-adds: fixed, not a thread count, and the results don't depend on it.
+/// 2²⁰, from a calibration on the predictor-corrector method's DC and AC solves at 8 and 14
+/// threads (`docs/benchmarks/o5-parallel-solves-2026-11-21.md`): below 2¹⁶ the tasks' overhead
+/// costs up to ×2.6, and from 2²² the gain on the largest case is gone.
 #[cfg(feature = "rayon")]
-const SOLVE_WORK: u64 = 1 << 15;
+const SOLVE_WORK: u64 = 1 << 20;
 
 #[cfg(all(test, feature = "rayon"))]
 thread_local! {
