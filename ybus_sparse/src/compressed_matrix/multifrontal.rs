@@ -84,6 +84,9 @@ pub struct Ldlt<T: Scalar = f64> {
     /// In elimination order
     fronts: Vec<Front<T>>,
     delayed: usize,
+    /// The analysis's front tree, for the parallel solves
+    #[cfg(feature = "rayon")]
+    tree: std::sync::Arc<SolveTree>,
 }
 
 /// The fundamental supernodes: `(start, end)` column ranges in increasing order, each with the
@@ -206,6 +209,131 @@ pub struct SymbolicLdlt {
     /// fronts follow a postorder
     #[cfg_attr(not(feature = "rayon"), allow(dead_code))]
     first: Vec<usize>,
+    /// The front tree as the parallel solves walk it, shared by every factorization
+    #[cfg(feature = "rayon")]
+    solve_tree: std::sync::Arc<SolveTree>,
+}
+
+/// The front tree as the parallel solves walk it (feature `rayon`): each front's own columns,
+/// and each subtree's fronts, children and one sweep's work. A subtree is a run of fronts, from
+/// its first to its root, and of columns, from its first front's first to its root's last.
+#[cfg(feature = "rayon")]
+#[derive(Debug)]
+struct SolveTree {
+    /// Front `k`'s own columns are `start[k]..start[k + 1]`
+    start: Vec<usize>,
+    first: Vec<usize>,
+    children: Vec<Vec<usize>>,
+    roots: Vec<usize>,
+    /// Each subtree's work for one sweep, its fronts' `FrontTree` solve work
+    work: Vec<u64>,
+    /// Whether every subtree's fronts and columns are runs, with its children's subtrees side
+    ///   by side in index order, as a postorder gives. Without the default amalgamation's
+    ///   postorder they may not be, and the solves stay serial
+    contiguous: bool,
+}
+
+#[cfg(feature = "rayon")]
+impl SolveTree {
+    fn new(nodes: &[Supernode], children: &[Vec<usize>], first: &[usize]) -> SolveTree {
+        let mut start: Vec<usize> = nodes.iter().map(|node| node.start).collect();
+        start.push(nodes.last().map_or(0, |node| node.end));
+        let mut work: Vec<u64> = nodes.iter().map(|node| front_work(node).1).collect();
+        for (k, node) in nodes.iter().enumerate() {
+            if let Some(parent) = node.parent {
+                work[parent] += work[k];
+            }
+        }
+        let roots: Vec<usize> = (0..nodes.len())
+            .filter(|&k| nodes[k].parent.is_none())
+            .collect();
+        // Side by side: each of a run's subtrees starting where the last ended, and ending
+        //   where the next begins
+        let side_by_side = |run: &[usize], from: usize, to: usize| {
+            let mut at = from;
+            for &k in run {
+                if first[k] != at {
+                    return false;
+                }
+                at = k + 1;
+            }
+            at == to
+        };
+        let contiguous = nodes.windows(2).all(|pair| pair[0].end == pair[1].start)
+            && side_by_side(&roots, 0, nodes.len())
+            && (0..nodes.len()).all(|k| side_by_side(&children[k], first[k], k));
+        SolveTree {
+            start,
+            first: first.to_vec(),
+            children: children.to_vec(),
+            roots,
+            work,
+            contiguous,
+        }
+    }
+
+    /// Subtree `s`'s columns
+    fn columns(&self, s: usize) -> Range<usize> {
+        self.start[self.first[s]]..self.start[s + 1]
+    }
+
+    /// The subtrees `kids` (side by side, in index order) as the parallel solves' tasks, in
+    ///   order: each subtree whose work passes `cutoff` alone, for its own children to split
+    ///   further, and runs of the others, each run's work passing `cutoff` but its last
+    fn groups(&self, kids: &[usize], cutoff: u64) -> Vec<Group> {
+        let mut groups = Vec::new();
+        let mut run: Option<(usize, usize, u64)> = None;
+        for &k in kids {
+            if self.work[k] >= cutoff && !self.children[k].is_empty() {
+                if let Some((from, to, _)) = run.take() {
+                    groups.push(Group::Run(from..to));
+                }
+                groups.push(Group::Subtree(k));
+                continue;
+            }
+            let (from, _, work) = run.take().unwrap_or((self.first[k], k, 0));
+            let work = work + self.work[k];
+            if work >= cutoff {
+                groups.push(Group::Run(from..k + 1));
+            } else {
+                run = Some((from, k + 1, work));
+            }
+        }
+        if let Some((from, to, _)) = run {
+            groups.push(Group::Run(from..to));
+        }
+        groups
+    }
+}
+
+/// One of the parallel solves' tasks: a subtree to split further, or a run of whole subtrees'
+/// fronts, solved serially
+#[cfg(feature = "rayon")]
+enum Group {
+    Subtree(usize),
+    Run(Range<usize>),
+}
+
+/// The entries of `y` above a subtree, its ancestors' own columns, which a backward sweep
+/// reads once they're final: the nearest ancestor's first, then up the tree
+#[cfg(feature = "rayon")]
+struct Above<'a, T> {
+    lo: usize,
+    values: &'a [T],
+    up: Option<&'a Above<'a, T>>,
+}
+
+#[cfg(feature = "rayon")]
+impl<T: Copy> Above<'_, T> {
+    fn get(&self, row: usize) -> T {
+        let mut at = self;
+        loop {
+            if let Some(&value) = row.checked_sub(at.lo).and_then(|i| at.values.get(i)) {
+                return value;
+            }
+            at = at.up.expect("a row outside a subtree is an ancestor's");
+        }
+    }
 }
 
 /// A front's factorization work and one triangular sweep's, as [`FrontTree`] counts them
@@ -472,14 +600,16 @@ impl SymbolicLdlt {
         let (children, subtree_work, first) = tree_of(&nodes);
         SymbolicLdlt {
             cholesky,
-            nodes,
             c_ptr,
             c_idx,
             source,
             mirror,
-            children,
+            #[cfg(feature = "rayon")]
+            solve_tree: std::sync::Arc::new(SolveTree::new(&nodes, &children, &first)),
+            nodes,
             subtree_work,
             first,
+            children,
         }
     }
 
@@ -623,6 +753,8 @@ impl SymbolicLdlt {
             perm: symbolic.perm.clone(),
             fronts,
             delayed,
+            #[cfg(feature = "rayon")]
+            tree: self.solve_tree.clone(),
         })
     }
 
@@ -1175,11 +1307,29 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
     pub fn permutation(&self) -> &[usize] {
         &self.perm
     }
+}
 
+/// The subtree solve work past which the solves go parallel (feature `rayon`), in
+/// [`FrontTree`]'s multiply-adds: fixed, not a thread count, and the results don't depend on it
+#[cfg(feature = "rayon")]
+const SOLVE_WORK: u64 = 1 << 15;
+
+#[cfg(all(test, feature = "rayon"))]
+thread_local! {
+    /// The tests' cutoff for this thread's solves, in place of `SOLVE_WORK`: 0 puts every
+    ///   subtree on the parallel path, even on a one-thread pool, and `u64::MAX` none
+    static SOLVE_CUTOFF: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+impl<T: Scalar + ComplexFloat + Send + Sync> Ldlt<T> {
     /// Overwrites `y`, in `P A Pᵀ`'s numbering, with the solution of `P A Pᵀ y' = y`: forward
     /// substitution front by front in elimination order, `D`'s blocks, then back substitution in
-    /// reverse
+    /// reverse. With the `rayon` feature, independent subtrees in parallel, bit for bit
     fn substitute_permuted(&self, y: &mut [T]) {
+        #[cfg(feature = "rayon")]
+        if let Some(cutoff) = self.parallel_cutoff() {
+            return self.par_substitute(y, cutoff);
+        }
         for front in &self.fronts {
             let m = front.vars.len();
             for j in 0..front.eliminated {
@@ -1191,23 +1341,7 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
             }
         }
         for front in &self.fronts {
-            let mut at = 0;
-            for block in &front.blocks {
-                match *block {
-                    DBlock::One(d) => {
-                        let v = front.vars[at];
-                        y[v] = y[v] / d;
-                    }
-                    DBlock::Two { a, b, c } => {
-                        let (v0, v1) = (front.vars[at], front.vars[at + 1]);
-                        let det = a * c - b * b.conj();
-                        let (y0, y1) = (y[v0], y[v1]);
-                        y[v0] = (c * y0 - b.conj() * y1) / det;
-                        y[v1] = (a * y1 - b * y0) / det;
-                    }
-                }
-                at += block.size();
-            }
+            solve_diagonal(front, y, 0);
         }
         for front in self.fronts.iter().rev() {
             let m = front.vars.len();
@@ -1221,15 +1355,234 @@ impl<T: Scalar + ComplexFloat> Ldlt<T> {
             }
         }
     }
+
+    /// The subtree cutoff for a parallel solve, or `None` for the serial one: as for the
+    ///   factorization, on a one-thread pool, inside a `serially` scope, or when the whole tree
+    ///   is below it
+    #[cfg(feature = "rayon")]
+    fn parallel_cutoff(&self) -> Option<u64> {
+        let forced = forced_cutoff();
+        let cutoff = forced.unwrap_or(SOLVE_WORK);
+        let tree = &self.tree;
+        let total: u64 = tree.roots.iter().map(|&root| tree.work[root]).sum();
+        let idle = forced.is_none()
+            && (rayon::current_num_threads() == 1 || SERIALLY.with(|depth| depth.get() > 0));
+        (tree.contiguous && cutoff != u64::MAX && total >= cutoff && !idle).then_some(cutoff)
+    }
+
+    /// The parallel solve. Every entry of `y` sees the serial solve's operations in its order:
+    ///
+    /// - **The forward sweep:** the roots' subtrees in parallel, each splitting into its
+    ///   children's in parallel, then its own front. A task updates the entries in its own
+    ///   columns in place and records each update of an ancestor's entry, `(row, term)`, in
+    ///   order; the parent applies its children's records in index order before its front, as
+    ///   the serial sweep would have, and passes up those above it. Each front's `D` solve
+    ///   follows its forward step, which is its entries' last update.
+    /// - **The backward sweep:** top down, a subtree's front first, then its children's
+    ///   subtrees in parallel, reading their ancestors' entries, final by then, through
+    ///   [`Above`].
+    #[cfg(feature = "rayon")]
+    fn par_substitute(&self, y: &mut [T], cutoff: u64) {
+        let groups = self.tree.groups(&self.tree.roots, cutoff);
+        let records = self.forward_groups(&groups, y, 0, cutoff);
+        debug_assert!(records.iter().all(Vec::is_empty), "no row above the roots");
+        let top = Above {
+            lo: 0,
+            values: &[],
+            up: None,
+        };
+        self.backward_groups(&groups, y, 0, cutoff, &top);
+    }
+
+    /// `groups`, side by side over `y`, which holds columns `lo..` of the whole vector, in
+    ///   parallel: each one's records of its updates past its columns, in order
+    #[cfg(feature = "rayon")]
+    fn forward_groups(
+        &self,
+        groups: &[Group],
+        y: &mut [T],
+        lo: usize,
+        cutoff: u64,
+    ) -> Vec<Vec<(usize, T)>> {
+        use rayon::prelude::*;
+        self.split(groups, y, lo)
+            .into_par_iter()
+            .map(|(group, y, lo)| match *group {
+                Group::Subtree(s) => self.forward_subtree(s, y, cutoff),
+                Group::Run(ref fronts) => {
+                    let mut records = Vec::new();
+                    self.forward_run(fronts.clone(), y, lo, &mut records);
+                    records
+                }
+            })
+            .collect()
+    }
+
+    /// Subtree `s`'s forward sweep over `y`, its columns: its children's in parallel, their
+    ///   records, then its front
+    #[cfg(feature = "rayon")]
+    fn forward_subtree(&self, s: usize, y: &mut [T], cutoff: u64) -> Vec<(usize, T)> {
+        let tree = &self.tree;
+        let Range { start: lo, end: hi } = tree.columns(s);
+        let groups = tree.groups(&tree.children[s], cutoff);
+        let below = tree.start[s] - lo;
+        let records = self.forward_groups(&groups, &mut y[..below], lo, cutoff);
+        let mut outgoing = Vec::new();
+        for (row, term) in records.into_iter().flatten() {
+            if row < hi {
+                y[row - lo] = y[row - lo] - term;
+            } else {
+                outgoing.push((row, term));
+            }
+        }
+        self.forward_run(s..s + 1, y, lo, &mut outgoing);
+        outgoing
+    }
+
+    /// The forward sweep and `D` solves of `fronts`, whole subtrees side by side, over `y`,
+    ///   which holds their columns from `lo`: the updates past them recorded in `records`
+    #[cfg(feature = "rayon")]
+    fn forward_run(
+        &self,
+        fronts: Range<usize>,
+        y: &mut [T],
+        lo: usize,
+        records: &mut Vec<(usize, T)>,
+    ) {
+        let hi = lo + y.len();
+        for front in &self.fronts[fronts] {
+            let m = front.vars.len();
+            for j in 0..front.eliminated {
+                let y_j = y[front.vars[j] - lo];
+                let column = &front.l[j * m..(j + 1) * m];
+                for (&v, &l) in front.vars[j + 1..].iter().zip(&column[j + 1..]) {
+                    if v < hi {
+                        y[v - lo] = y[v - lo] - l * y_j;
+                    } else {
+                        records.push((v, l * y_j));
+                    }
+                }
+            }
+            solve_diagonal(front, y, lo);
+        }
+    }
+
+    /// `groups`, side by side over `y` (columns `lo..`), in parallel, their ancestors' entries
+    ///   in `above`
+    #[cfg(feature = "rayon")]
+    fn backward_groups(
+        &self,
+        groups: &[Group],
+        y: &mut [T],
+        lo: usize,
+        cutoff: u64,
+        above: &Above<'_, T>,
+    ) {
+        use rayon::prelude::*;
+        self.split(groups, y, lo)
+            .into_par_iter()
+            .for_each(|(group, y, lo)| match *group {
+                Group::Subtree(s) => self.backward_subtree(s, y, cutoff, above),
+                Group::Run(ref fronts) => self.backward_run(fronts.clone(), y, lo, above),
+            });
+    }
+
+    /// Subtree `s`'s backward sweep over `y`, its columns: its front, then its children's in
+    ///   parallel
+    #[cfg(feature = "rayon")]
+    fn backward_subtree(&self, s: usize, y: &mut [T], cutoff: u64, above: &Above<'_, T>) {
+        let tree = &self.tree;
+        let lo = tree.columns(s).start;
+        self.backward_run(s..s + 1, y, lo, above);
+        let (below, own) = y.split_at_mut(tree.start[s] - lo);
+        let above = Above {
+            lo: tree.start[s],
+            values: own,
+            up: Some(above),
+        };
+        let groups = tree.groups(&tree.children[s], cutoff);
+        self.backward_groups(&groups, below, lo, cutoff, &above);
+    }
+
+    /// The backward sweep of `fronts`, in reverse, over `y` (their columns from `lo`)
+    #[cfg(feature = "rayon")]
+    fn backward_run(&self, fronts: Range<usize>, y: &mut [T], lo: usize, above: &Above<'_, T>) {
+        let hi = lo + y.len();
+        for front in self.fronts[fronts].iter().rev() {
+            let m = front.vars.len();
+            for j in (0..front.eliminated).rev() {
+                let column = &front.l[j * m..(j + 1) * m];
+                let mut y_j = y[front.vars[j] - lo];
+                for (&v, &l) in front.vars[j + 1..].iter().zip(&column[j + 1..]) {
+                    let y_v = if v < hi { y[v - lo] } else { above.get(v) };
+                    y_j = y_j - l.conj() * y_v;
+                }
+                y[front.vars[j] - lo] = y_j;
+            }
+        }
+    }
+
+    /// `y`, holding columns `lo..`, split into `groups`' columns, side by side, each with its
+    ///   first column
+    #[cfg(feature = "rayon")]
+    fn split<'g, 'y>(
+        &self,
+        groups: &'g [Group],
+        mut y: &'y mut [T],
+        mut lo: usize,
+    ) -> Vec<(&'g Group, &'y mut [T], usize)> {
+        let tree = &self.tree;
+        let mut parts = Vec::with_capacity(groups.len());
+        for group in groups {
+            let hi = match *group {
+                Group::Subtree(s) => tree.start[s + 1],
+                Group::Run(ref fronts) => tree.start[fronts.end],
+            };
+            let (part, rest) = std::mem::take(&mut y).split_at_mut(hi - lo);
+            parts.push((group, part, lo));
+            (y, lo) = (rest, hi);
+        }
+        parts
+    }
 }
 
-impl<T: Scalar + ComplexFloat> Factorization<T> for Ldlt<T> {
+/// The tests' cutoff for this thread's solves, if they set one
+#[cfg(feature = "rayon")]
+fn forced_cutoff() -> Option<u64> {
+    #[cfg(test)]
+    return SOLVE_CUTOFF.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    None
+}
+
+/// Front `front`'s `D` solve, on `y` holding the vector's entries from `lo`
+fn solve_diagonal<T: Scalar + ComplexFloat>(front: &Front<T>, y: &mut [T], lo: usize) {
+    let mut at = 0;
+    for block in &front.blocks {
+        match *block {
+            DBlock::One(d) => {
+                let v = front.vars[at] - lo;
+                y[v] = y[v] / d;
+            }
+            DBlock::Two { a, b, c } => {
+                let (v0, v1) = (front.vars[at] - lo, front.vars[at + 1] - lo);
+                let det = a * c - b * b.conj();
+                let (y0, y1) = (y[v0], y[v1]);
+                y[v0] = (c * y0 - b.conj() * y1) / det;
+                y[v1] = (a * y1 - b * y0) / det;
+            }
+        }
+        at += block.size();
+    }
+}
+
+impl<T: Scalar + ComplexFloat + Send + Sync> Factorization<T> for Ldlt<T> {
     fn dim(&self) -> usize {
         self.n
     }
 }
 
-impl<T: Scalar + ComplexFloat> Substitute<T> for Ldlt<T> {
+impl<T: Scalar + ComplexFloat + Send + Sync> Substitute<T> for Ldlt<T> {
     /// `P b` into `scratch`, the substitution there in `P A Pᵀ`'s numbering, and the result
     /// back through `P`
     fn substitute(&self, x: &mut [T], scratch: &mut Vec<T>) {
@@ -1400,6 +1753,132 @@ mod tests {
             // Large enough for fronts past the default cutoffs, which it runs with: forcing every
             //   pivot's update onto threads would only cost the test time
             check("large saddle point", &saddle(70, 2, 3), false);
+        }
+
+        /// `f` with this thread's solves at `cutoff` (see `SOLVE_CUTOFF`)
+        fn at_cutoff<R>(cutoff: u64, f: impl FnOnce() -> R) -> R {
+            SOLVE_CUTOFF.with(|forced| forced.set(Some(cutoff)));
+            let result = f();
+            SOLVE_CUTOFF.with(|forced| forced.set(None));
+            result
+        }
+
+        /// Right-hand sides for `a`, random
+        fn right_hand_sides<T: Scalar>(
+            n: usize,
+            count: usize,
+            value: impl Fn(f64, f64) -> T,
+        ) -> Vec<Vec<T>> {
+            let mut random = stream(7);
+            (0..count)
+                .map(|_| {
+                    (0..n)
+                        .map(|_| value(random() - 0.5, random() - 0.5))
+                        .collect()
+                })
+                .collect()
+        }
+
+        /// The parallel solves are the serial ones bit for bit, on pools of 1, 2, 7 and 28
+        ///   threads, for each ordering: with every subtree on the parallel path, and with the
+        ///   default cutoff. Single and many right-hand sides, and the refined solve
+        fn check_solves<T>(label: &str, a: &CsrMatrix<T>, value: impl Fn(f64, f64) -> T)
+        where
+            T: Scalar + ComplexFloat + Send + Sync + std::fmt::Debug,
+            T::Real: std::fmt::Debug,
+        {
+            let b = right_hand_sides(a.shape.0, 3, value);
+            for ordering in [Ordering::Natural, Ordering::Amd] {
+                let ldlt = a
+                    .analyze_ldlt(ordering)
+                    .unwrap()
+                    .factor(a, LdltOptions::default())
+                    .unwrap();
+                let solves = || {
+                    let one = ldlt.solve(&b[0]).unwrap();
+                    let many = ldlt.solve_many(&b).unwrap();
+                    let refined = ldlt.solve_refined(a, &b[1], 3).unwrap();
+                    format!("{one:?} {many:?} {refined:?}")
+                };
+                let serial = at_cutoff(u64::MAX, || {
+                    assert_eq!(ldlt.parallel_cutoff(), None);
+                    solves()
+                });
+                for threads in [1, 2, 7, 28] {
+                    let parallel = on(threads, || {
+                        at_cutoff(0, || {
+                            assert_eq!(ldlt.parallel_cutoff(), Some(0), "{label}: parallel");
+                            solves()
+                        })
+                    });
+                    assert_eq!(parallel, serial, "{label}, {ordering:?}, {threads} threads");
+                    let defaults = on(threads, solves);
+                    assert_eq!(defaults, serial, "{label}, {ordering:?}, defaults");
+                }
+            }
+        }
+
+        #[test]
+        fn the_parallel_solves_are_the_serial_ones_bit_for_bit() {
+            let real = |re: f64, _: f64| re;
+            check_solves("indefinite", &indefinite(300, 3, 200, 1), real);
+            let kkt = saddle(30, 3, 2);
+            let ldlt = kkt
+                .analyze_ldlt(Ordering::Amd)
+                .unwrap()
+                .factor(&kkt, LdltOptions::default())
+                .unwrap();
+            assert!(
+                ldlt.two_by_two() > 0 && ldlt.delayed() > 0,
+                "2×2 pivots and delays"
+            );
+            check_solves("saddle point", &kkt, real);
+            check_solves("large saddle point", &saddle(70, 2, 3), real);
+            // Two independent blocks: two roots, side by side
+            let base = indefinite(150, 2, 80, 5);
+            let mut entries = vec![];
+            for offset in [0, 150] {
+                for i in 0..150 {
+                    let (cols, values) = base.outer(i).unwrap();
+                    for (&j, &v) in cols.iter().zip(values) {
+                        entries.push((offset + i, offset + j, v));
+                    }
+                }
+            }
+            let blocks = CsrMatrix::from_triplets(300, 300, entries).unwrap();
+            assert!(
+                blocks
+                    .analyze_ldlt(Ordering::Amd)
+                    .unwrap()
+                    .front_tree()
+                    .roots
+                    >= 2
+            );
+            check_solves("two blocks", &blocks, real);
+        }
+
+        #[test]
+        fn the_parallel_solves_are_the_serial_ones_for_a_hermitian_matrix() {
+            use num_complex::Complex64;
+            // The saddle point with an imaginary part on each off-diagonal pair, conjugate
+            //   across the diagonal, so the backward sweep's conjugates matter
+            let real = saddle(30, 3, 2);
+            let mut random = stream(9);
+            let mut entries = vec![];
+            for i in 0..real.shape.0 {
+                let (cols, values) = real.outer(i).unwrap();
+                for (&j, &v) in cols.iter().zip(values) {
+                    if i < j {
+                        let im = random() - 0.5;
+                        entries.push((i, j, Complex64::new(v, im)));
+                        entries.push((j, i, Complex64::new(v, -im)));
+                    } else if i == j {
+                        entries.push((i, j, Complex64::new(v, 0.0)));
+                    }
+                }
+            }
+            let a = CsrMatrix::from_triplets(real.shape.0, real.shape.0, entries).unwrap();
+            check_solves("hermitian", &a, Complex64::new);
         }
 
         #[test]

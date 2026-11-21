@@ -353,7 +353,7 @@ impl<T: Scalar + ComplexFloat> StaticLdlt<T> {
     }
 }
 
-impl<T: Scalar + ComplexFloat> Ldlt<T> {
+impl<T: Scalar + ComplexFloat + Send + Sync> Ldlt<T> {
     /// [`Lu::solve_refined`] with pivoted `L D Lᴴ` factors: `a` must be the matrix they came
     /// from.
     pub fn solve_refined(

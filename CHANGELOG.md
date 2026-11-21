@@ -46,6 +46,10 @@ releases.
   branch-end parts, and their parts in turn. It's bit for bit the serial evaluation, and serial
   in the same places the LDLᵀ is. The LDLᵀ factorizations now
   require `T: Send + Sync`, which every scalar type here satisfies.
+- With the `rayon` feature, the multifrontal LDLᵀ's solves run in parallel too: the front tree's
+  independent subtrees, bit for bit the serial solve at any thread count, and serial in the
+  same places the factorization is. `Ldlt`'s solves, like its factorizations, require
+  `T: Send + Sync`.
 - Conjugate gradient, and Matrix Market reading and writing.
 - Optional features: `serde`, and `rayon` for parallel products and solves.
 
