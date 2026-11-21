@@ -1094,7 +1094,8 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       arithmetic).
     - **Found in planning:** the kernel's update already auto-vectorizes at SSE2 width
       (`mulpd`, `subpd`).
-  - [ ] **PR 3a, allocation and the wider-SIMD build:**
+  - [x] **PR 3a, allocation and the wider-SIMD build**
+    ([`o5-allocation-2026-11-21.md`](benchmarks/o5-allocation-2026-11-21.md)):
     - **The allocations,** profiled first. The largest sites were in the LDLᵀ: each front's `L`
       and variables copied anew, the pivot blocks grown, and the last factorization dropped
       every iteration. `SymbolicLdlt::refactor` and the KKT solver's `recycle` reuse them. The
@@ -1108,6 +1109,17 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
         serial build.
       - **The speedups are recorded, with nothing chosen,** and the build flag is documented
         either way.
+    - **The result:**
+      - **Bit for bit:** 2,280 survey columns, and the snapshot in all three builds.
+      - **The allocation work gains nothing measurable** (×0.98–1.03 against `main`). It's kept
+        (decided 2026-11-21), since it's bit for bit and `refactor` is useful.
+      - **The `x86-64-v3` build is slower:** the predictor-corrector method's AC solves are
+        ×0.80–0.91 in repeated rounds, the dense kernel taking 1.83× as long on its short
+        columns. The README documents the flag as not recommended for these OPFs.
+  - [ ] **PR 3b, parallel triangular solves** (bit for bit): next.
+  - [ ] **PR 3c, opt-in fused arithmetic:** planned, unstarted (decided 2026-11-21). It needs
+    the build flag for FMA, and that flag slows the kernel it would fuse, so it waits for a
+    kernel restructured for short columns.
 - [ ] **A GPU KKT factorization** (O5 target 4): a cuDSS spike behind `cuda`. It's gated: only
   if the KKT factorization is still the largest stage of a large AC solve after targets 1–3,
   and O2's transfer measurements leave it room.
