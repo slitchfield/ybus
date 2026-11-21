@@ -1081,6 +1081,33 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
   - **Less allocation and copying.**
   
   Reductions that reorder are opt-in under O3's bar. Bound: ×1.14–1.23 from the kernel.
+  - **Decided (2026-11-21):**
+    - **All four parts:**
+      - wider SIMD, bit for bit
+      - parallel triangular solves
+      - less allocation and copying
+      - opt-in fused arithmetic by O3's bar
+    - **Wider SIMD by a documented build flag** (`-C target-cpu=x86-64-v3`), with no code
+      change. The default build stays portable, and every crate keeps
+      `#![forbid(unsafe_code)]`.
+    - **Three PRs:** 3a (allocation, and the build flag), 3b (the solves), and 3c (fused
+      arithmetic).
+    - **Found in planning:** the kernel's update already auto-vectorizes at SSE2 width
+      (`mulpd`, `subpd`).
+  - [ ] **PR 3a, allocation and the wider-SIMD build:**
+    - **The allocations,** profiled first. The largest sites were in the LDLᵀ: each front's `L`
+      and variables copied anew, the pivot blocks grown, and the last factorization dropped
+      every iteration. `SymbolicLdlt::refactor` and the KKT solver's `recycle` reuse them. The
+      allocation stage falls by about half (7.4% to 4.0% on case9241pegase's AC), but a quick
+      same-day timing puts the gain within run-to-run noise (about ×1.02–1.03).
+    - **The `x86-64-v3` build** is bit for bit on the 72-case snapshot, and has no fused
+      instructions.
+    - **The survey's rule, written before it runs:**
+      - **Bit for bit:** every result column of three builds (`main`, this branch, and this
+        branch with `x86-64-v3`, all with `rayon`), at 1 and 8 threads, matches `main`'s
+        serial build.
+      - **The speedups are recorded, with nothing chosen,** and the build flag is documented
+        either way.
 - [ ] **A GPU KKT factorization** (O5 target 4): a cuDSS spike behind `cuda`. It's gated: only
   if the KKT factorization is still the largest stage of a large AC solve after targets 1–3,
   and O2's transfer measurements leave it room.
