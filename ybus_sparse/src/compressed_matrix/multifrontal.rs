@@ -1005,6 +1005,27 @@ pub fn serially<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// Runs `a` and `b`, concurrently with `rayon::join` if `parallel` and the `rayon` feature is
+/// on, and in order otherwise, also on a one-thread pool and inside a [`serially`] scope. For
+/// two independent computations whose results the caller combines afterwards, which are the
+/// same either way.
+#[doc(hidden)]
+pub fn concurrently<A, B, RA, RB>(parallel: bool, a: A, b: B) -> (RA, RB)
+where
+    A: FnOnce() -> RA + Send,
+    B: FnOnce() -> RB + Send,
+    RA: Send,
+    RB: Send,
+{
+    #[cfg(feature = "rayon")]
+    if parallel && rayon::current_num_threads() > 1 && SERIALLY.with(|depth| depth.get() == 0) {
+        return rayon::join(a, b);
+    }
+    #[cfg(not(feature = "rayon"))]
+    let _ = parallel;
+    (a(), b())
+}
+
 /// Of two failures, the one at the lower front index, the serial factorization's first
 #[cfg(feature = "rayon")]
 fn first_failure(

@@ -37,7 +37,7 @@
 //! evaluates them at every iteration can keep the plans for the solve, and skip the products'
 //! hashing and sorting, the merges and the stacking.
 
-use ybus_sparse::compressed_matrix::{CsrMatrix, ProductPlan, SumPlan};
+use ybus_sparse::compressed_matrix::{concurrently, CsrMatrix, ProductPlan, SumPlan};
 use ybus_sparse::{Complex, Scalar};
 
 type C64 = Complex<f64>;
@@ -346,6 +346,8 @@ struct BilinearPlan {
     block: CsrMatrix<C64>,
     vm_va: CsrMatrix<C64>,
     vm_vm: CsrMatrix<C64>,
+    /// Whether `evaluate` computes its blocks concurrently (feature `rayon`)
+    parallel: bool,
 }
 
 impl BilinearPlan {
@@ -389,6 +391,7 @@ impl BilinearPlan {
             vm_va: pattern(&vm_va_traced),
             vm_vm: sum_pattern,
             block,
+            parallel: false,
         }
     }
 
@@ -461,10 +464,21 @@ impl BilinearPlan {
                 .map(|((d, a), b)| d * a + d.conj() * b)
                 .collect()
         };
-        let (va_va, aa) = self.add_diagonal(&self.sum(m, &mt, &d.va, &d.va), &terms(&d.va_va))?;
-        let (va_vm, av) = self.add_diagonal(&self.sum(m, &mt, &d.va, &d.vm), &terms(&d.va_vm))?;
+        // The three blocks are independent: concurrently if the plan is parallel, each the same
+        //   computation either way
+        let (va_va, (va_vm, vm_vm)) = concurrently(
+            self.parallel,
+            || self.add_diagonal(&self.sum(m, &mt, &d.va, &d.va), &terms(&d.va_va)),
+            || {
+                concurrently(
+                    self.parallel,
+                    || self.add_diagonal(&self.sum(m, &mt, &d.va, &d.vm), &terms(&d.va_vm)),
+                    || self.sum(m, &mt, &d.vm, &d.vm),
+                )
+            },
+        );
+        let ((va_va, aa), (va_vm, av)) = (va_va?, va_vm?);
         let vm_va = gather(&va_vm, &self.vm_va_sources);
-        let vm_vm = self.sum(m, &mt, &d.vm, &d.vm);
         Some(([va_va, va_vm, vm_va, vm_vm], [aa, av]))
     }
 }
@@ -491,6 +505,8 @@ pub struct WeightedHessianPlan {
     /// The joined matrix's entries from the four blocks' values, concatenated
     join_sources: Vec<usize>,
     pattern: CsrMatrix<f64>,
+    /// Whether `evaluate` computes its parts concurrently (feature `rayon`)
+    parallel: bool,
 }
 
 impl WeightedHessianPlan {
@@ -524,7 +540,16 @@ impl WeightedHessianPlan {
             bilinear,
             join_sources: sources(&traced),
             pattern: pattern(&traced),
+            parallel: false,
         }
+    }
+
+    /// The plan, evaluating its independent parts concurrently if `parallel` (feature
+    /// `rayon`): the same values bit for bit either way.
+    pub fn parallel(mut self, parallel: bool) -> Self {
+        self.parallel = parallel;
+        self.bilinear.parallel = parallel;
+        self
     }
 
     /// The Hessian's pattern, with every value zero: what `evaluate` returns holds its values.
@@ -559,8 +584,12 @@ impl WeightedHessianPlan {
         // bilinear_hessian computes the voltages' derivatives afresh for each of its calls,
         //   always to the same values
         let d = PolarDerivatives::new(v);
-        let (real, real_dropped) = self.bilinear.evaluate(&self.weighted(p), v, &d)?;
-        let (imaginary, imaginary_dropped) = self.bilinear.evaluate(&self.weighted(q), v, &d)?;
+        let (real, imaginary) = concurrently(
+            self.parallel,
+            || self.bilinear.evaluate(&self.weighted(p), v, &d),
+            || self.bilinear.evaluate(&self.weighted(q), v, &d),
+        );
+        let ((real, real_dropped), (imaginary, imaginary_dropped)) = (real?, imaginary?);
         // real[k].real().try_add(&imaginary[k].imag()): where one part's term was dropped, its
         //   DROPPED adds as try_add's copy of the other part's value
         let mut concatenated = Vec::with_capacity(self.join_sources.len());
@@ -616,6 +645,8 @@ pub struct SquaredMagnitudeHessianPlan {
     /// `dSᴴ ([2μ] dS)`
     product: ProductPlan,
     weighted: WeightedHessianPlan,
+    /// Whether `evaluate` computes its parts concurrently (feature `rayon`)
+    parallel: bool,
     /// `Re(dSᴴ [2μ] dS)`'s pattern, and its sum with the weighted Hessian
     outer: CsrMatrix<f64>,
     sum: SumPlan,
@@ -654,7 +685,16 @@ impl SquaredMagnitudeHessianPlan {
             outer,
             sum,
             pattern,
+            parallel: false,
         }
+    }
+
+    /// The plan, evaluating its independent parts concurrently if `parallel` (feature
+    /// `rayon`): the same values bit for bit either way.
+    pub fn parallel(mut self, parallel: bool) -> Self {
+        self.parallel = parallel;
+        self.weighted = self.weighted.parallel(parallel);
+        self
     }
 
     /// The Hessian's pattern, with every value zero.
@@ -706,34 +746,42 @@ impl SquaredMagnitudeHessianPlan {
             .chain(flows.ds_dvm.values())
             .copied()
             .collect();
-        let ds = gather(&concatenated, &self.ds_sources);
-        let mu_complex: Vec<C64> = mu.iter().map(|&m| C64::new(2.0 * m, 0.0)).collect();
-        let scaled: Vec<C64> = ds
-            .iter()
-            .zip(&self.ds_rows)
-            .map(|(&value, &row)| mu_complex[row] * value)
-            .collect();
-        let adjoint: Vec<C64> = gather(&ds, &self.ds_adjoint_sources)
-            .iter()
-            .map(|value| value.conj())
-            .collect();
-        let mut outer = vec![ZERO; self.product.num_stored()];
-        self.product
-            .multiply_values(&adjoint, &scaled, &mut outer)
-            .expect("the planned lengths");
-        let outer: Vec<f64> = outer.iter().map(|value| value.re).collect();
+        // The outer product and the weighted Hessian are independent: concurrently if the plan
+        //   is parallel, each the same computation either way
+        let outer = || {
+            let ds = gather(&concatenated, &self.ds_sources);
+            let mu_complex: Vec<C64> = mu.iter().map(|&m| C64::new(2.0 * m, 0.0)).collect();
+            let scaled: Vec<C64> = ds
+                .iter()
+                .zip(&self.ds_rows)
+                .map(|(&value, &row)| mu_complex[row] * value)
+                .collect();
+            let adjoint: Vec<C64> = gather(&ds, &self.ds_adjoint_sources)
+                .iter()
+                .map(|value| value.conj())
+                .collect();
+            let mut outer = vec![ZERO; self.product.num_stored()];
+            self.product
+                .multiply_values(&adjoint, &scaled, &mut outer)
+                .expect("the planned lengths");
+            outer.iter().map(|value| value.re).collect::<Vec<f64>>()
+        };
         // 2 Σ μ (Re S ∇² Re S + Im S ∇² Im S)
-        let p: Vec<f64> = mu
-            .iter()
-            .zip(&flows.s)
-            .map(|(m, s)| 2.0 * m * s.re)
-            .collect();
-        let q: Vec<f64> = mu
-            .iter()
-            .zip(&flows.s)
-            .map(|(m, s)| 2.0 * m * s.im)
-            .collect();
-        let (weighted, weighted_absent) = self.weighted.evaluate_values(v, &p, &q)?;
+        let weighted = || {
+            let p: Vec<f64> = mu
+                .iter()
+                .zip(&flows.s)
+                .map(|(m, s)| 2.0 * m * s.re)
+                .collect();
+            let q: Vec<f64> = mu
+                .iter()
+                .zip(&flows.s)
+                .map(|(m, s)| 2.0 * m * s.im)
+                .collect();
+            self.weighted.evaluate_values(v, &p, &q)
+        };
+        let (outer, weighted) = concurrently(self.parallel, outer, weighted);
+        let (weighted, weighted_absent) = weighted?;
         let mut values = vec![0.0; self.sum.num_stored()];
         self.sum
             .add_values(&outer, &weighted, &mut values)
