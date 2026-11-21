@@ -54,7 +54,7 @@ pub use cholesky::{Cholesky, SymbolicCholesky};
 pub use factorization::Factorization;
 pub use lu::{Lu, LuOptions, RefactorOutcome, SymbolicLu};
 #[doc(hidden)]
-pub use multifrontal::serially;
+pub use multifrontal::{concurrently, serially};
 pub use multifrontal::{Amalgamation, FrontTree, Ldlt, LdltOptions, SymbolicLdlt};
 pub use ordering::Ordering;
 pub use plans::{ProductPlan, SumPlan};

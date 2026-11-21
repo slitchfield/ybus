@@ -40,7 +40,7 @@ use ybus_ipm::problem::{
     same_pattern, Constraints, NonlinearConstraints, NonlinearMultipliers, Problem,
 };
 use ybus_ipm::solution::{kkt_residuals, KktResiduals, Solution, Status};
-use ybus_sparse::compressed_matrix::{AssemblyMap, CsrMatrix, SumPlan};
+use ybus_sparse::compressed_matrix::{concurrently, AssemblyMap, CsrMatrix, SumPlan};
 use ybus_sparse::Complex;
 
 use crate::ac::{check_impedance, Admittances};
@@ -208,7 +208,16 @@ struct ConstraintPlans {
     /// `widen`'s assembly of the flow limits' Jacobian: the from ends' rows, then the to ends'
     dh: CsrMatrix<f64>,
     dh_map: AssemblyMap,
+    /// Whether the independent evaluations run concurrently (feature `rayon`): see
+    /// `EVALUATION_BUSES`
+    parallel: bool,
 }
+
+/// The bus count from which an AC OPF's evaluation runs its independent parts concurrently
+/// (feature `rayon`): the bus and branch-end flows, Hessians and their parts. Fixed, not a thread
+/// count, and the results are the same either way. From a calibration at 14 threads
+/// (`docs/benchmarks/o5-parallel-evaluation-2026-11-21.md`).
+const EVALUATION_BUSES: usize = 1000;
 
 impl ConstraintPlans {
     fn new(problem: &AcOpfProblem) -> Self {
@@ -242,6 +251,7 @@ impl ConstraintPlans {
             dg_map,
             dh,
             dh_map,
+            parallel: problem.nb >= EVALUATION_BUSES,
         }
     }
 }
@@ -260,6 +270,9 @@ struct HessianPlans {
     /// (each bus's `(i, i)`, `(i, nb + i)` and `(nb + i, i)`), so that summing it in restores
     /// the position as `try_add`'s union does. It does whenever Ybus stores its diagonal.
     bus_covers_diagonals: bool,
+    /// Whether the independent evaluations run concurrently (feature `rayon`): see
+    /// `EVALUATION_BUSES`
+    parallel: bool,
 }
 
 #[derive(Clone)]
@@ -272,7 +285,8 @@ struct BranchHessianPlans {
 
 impl HessianPlans {
     fn new(problem: &AcOpfProblem) -> Self {
-        let bus = WeightedHessianPlan::new(&problem.identity, &problem.ybus);
+        let parallel = problem.nb >= EVALUATION_BUSES;
+        let bus = WeightedHessianPlan::new(&problem.identity, &problem.ybus).parallel(parallel);
         let nb = problem.nb;
         let stores = |row, col| {
             let pattern = bus.pattern();
@@ -285,8 +299,9 @@ impl HessianPlans {
             (0..nb).all(|i| stores(i, i) && stores(i, nb + i) && stores(nb + i, i));
         let mut voltage = bus.pattern().clone();
         let branches = (!problem.flow_max.is_empty()).then(|| {
-            let from = SquaredMagnitudeHessianPlan::new(&problem.cf, &problem.yf);
-            let to = SquaredMagnitudeHessianPlan::new(&problem.ct, &problem.yt);
+            let from =
+                SquaredMagnitudeHessianPlan::new(&problem.cf, &problem.yf).parallel(parallel);
+            let to = SquaredMagnitudeHessianPlan::new(&problem.ct, &problem.yt).parallel(parallel);
             let bus_from = voltage.plan_sum(from.pattern()).expect("both 2nb × 2nb");
             voltage = bus_from.add(&voltage, from.pattern()).expect("planned");
             let bus_from_to = voltage.plan_sum(to.pattern()).expect("both 2nb × 2nb");
@@ -310,6 +325,7 @@ impl HessianPlans {
             widened,
             widen,
             bus_covers_diagonals,
+            parallel,
         }
     }
 }
@@ -330,10 +346,9 @@ impl AcOpfProblem {
             .constraint_plans
             .as_ref()
             .expect("made with the problem");
-        plans
-            .branches
-            .as_ref()
-            .map(|[(from, _), (to, _)]| (from.evaluate(v), to.evaluate(v)))
+        plans.branches.as_ref().map(|[(from, _), (to, _)]| {
+            concurrently(plans.parallel, || from.evaluate(v), || to.evaluate(v))
+        })
     }
 
     /// The power balance's entries for the generators' outputs, `-1` at each generator's bus
@@ -444,8 +459,22 @@ impl Problem for AcOpfProblem {
             .as_ref()
             .expect("made with the problem");
 
+        // The bus flows and each branch end's flows and squared magnitudes are independent:
+        //   concurrently if the plans are parallel, each the same computation either way
+        let ends =
+            |plan: &(FlowsPlan, SquaredMagnitudesPlan)| plan.1.evaluate(&plan.0.evaluate(&v));
+        let (bus, ends) = concurrently(
+            plans.parallel,
+            || plans.bus.evaluate(&v),
+            || {
+                plans
+                    .branches
+                    .as_ref()
+                    .map(|[from, to]| concurrently(plans.parallel, || ends(from), || ends(to)))
+            },
+        );
+
         // The power balance and its Jacobian
-        let bus = plans.bus.evaluate(&v);
         let mut mismatch: Vec<C64> = bus.s.iter().zip(&self.load).map(|(s, d)| s + d).collect();
         for (k, &b) in self.gen_buses.iter().enumerate() {
             mismatch[b] -= C64::new(x[pg + k], x[qg + k]);
@@ -470,10 +499,8 @@ impl Problem for AcOpfProblem {
 
         // The squared apparent power limits and their Jacobian
         out.h.clear();
-        match &plans.branches {
-            Some([(from, from_magnitudes), (to, to_magnitudes)]) => {
-                let (af, daf) = from_magnitudes.evaluate(&from.evaluate(&v));
-                let (at, dat) = to_magnitudes.evaluate(&to.evaluate(&v));
+        match ends {
+            Some(((af, daf), (at, dat))) => {
                 out.h.extend(
                     af.iter()
                         .chain(&at)
@@ -561,11 +588,26 @@ impl AcOpfProblem {
         // The bus Hessian must match its plan's pattern. A branch end's may lack positions,
         //   which hold -0.0: the bus Hessian stores them, so the sums give try_add's union,
         //   with the bus Hessian's values copied there
-        let mut voltage = plans.bus.evaluate(v, lam_p, lam_q)?;
-        if let (Some(branches), Some((from, to))) = (&plans.branches, self.branch_flows(v)) {
-            let (mu_f, mu_t) = multipliers.ineq.split_at(self.flow_max.len());
-            let (hf, absent_f) = branches.from.evaluate_with_absent(v, &from, mu_f)?;
-            let (ht, absent_t) = branches.to.evaluate_with_absent(v, &to, mu_t)?;
+        // The bus Hessian and each branch end's are independent: concurrently if the plans are
+        //   parallel, each the same computation either way
+        let (voltage, ends) = concurrently(
+            plans.parallel,
+            || plans.bus.evaluate(v, lam_p, lam_q),
+            || match (&plans.branches, self.branch_flows(v)) {
+                (Some(branches), Some((from, to))) => {
+                    let (mu_f, mu_t) = multipliers.ineq.split_at(self.flow_max.len());
+                    Some(concurrently(
+                        plans.parallel,
+                        || branches.from.evaluate_with_absent(v, &from, mu_f),
+                        || branches.to.evaluate_with_absent(v, &to, mu_t),
+                    ))
+                }
+                _ => None,
+            },
+        );
+        let mut voltage = voltage?;
+        if let (Some(branches), Some((hf, ht))) = (&plans.branches, ends) {
+            let ((hf, absent_f), (ht, absent_t)) = (hf?, ht?);
             if !plans.bus_covers_diagonals && !(absent_f.is_empty() && absent_t.is_empty()) {
                 return None;
             }

@@ -491,3 +491,100 @@ fn flows_and_squared_magnitude_plans_match_the_functions_bit_for_bit() {
     }
     assert!(compared > 0);
 }
+
+/// With the rayon feature, each plan built `.parallel(true)` evaluates bit for bit as its serial
+///   self, declines included, on pools of 1, 2, 7 and 28 threads
+#[cfg(feature = "rayon")]
+mod parallel {
+    use super::*;
+
+    const THREADS: [usize; 4] = [1, 2, 7, 28];
+
+    fn on<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(f)
+    }
+
+    #[test]
+    fn a_parallel_weighted_hessian_plan_is_its_serial_self() {
+        let mut rng = Lcg(17);
+        let (mut compared, mut declined) = (0, 0);
+        for network in networks() {
+            for (end, c, y) in &network.pairs {
+                let serial = WeightedHessianPlan::new(c, y);
+                let parallel = WeightedHessianPlan::new(c, y).parallel(true);
+                for _ in 0..2 {
+                    let v = random_voltages(network.nb, &mut rng);
+                    for (p, q) in weight_sets(c.shape().0, &mut rng) {
+                        let expected = format!("{:?}", serial.evaluate(&v, &p, &q));
+                        if expected == "None" {
+                            declined += 1;
+                        } else {
+                            compared += 1;
+                        }
+                        for threads in THREADS {
+                            let got = on(threads, || parallel.evaluate(&v, &p, &q));
+                            let what = format!("{} {end}, {threads} threads", network.name);
+                            assert_eq!(format!("{got:?}"), expected, "{what}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            compared > 0 && declined > 0,
+            "{compared} compared, {declined} declined"
+        );
+    }
+
+    #[test]
+    fn a_large_ac_solve_is_its_serial_self_at_any_pool_size() {
+        // case2383wp is past EVALUATION_BUSES, so its evaluation goes parallel, and a one-thread
+        //   pool takes the serial path: the solves must agree bit for bit. The
+        //   predictor-corrector method only: MIPS's solve there is too long to repeat in a test
+        let Some(path) = common::matpower_case("case2383wp") else {
+            return;
+        };
+        let case = Case::from_path(&path).unwrap();
+        let options = ybus_powerflow::opf::ac::AcOpfOptions::mehrotra();
+        let solve = || ybus_powerflow::opf::ac::ac_opf_with_options(&case, &options).unwrap();
+        let bits = |s: &ybus_powerflow::opf::ac::AcOpfSolution| {
+            format!(
+                "{:?} {:?} {}",
+                s.solver.x, s.solver.multipliers, s.iterations
+            )
+        };
+        let serial = bits(&on(1, solve));
+        for threads in [2, 7, 28] {
+            assert_eq!(bits(&on(threads, solve)), serial, "{threads} threads");
+        }
+    }
+
+    #[test]
+    fn a_parallel_squared_magnitude_hessian_plan_is_its_serial_self() {
+        let mut rng = Lcg(19);
+        let mut compared = 0;
+        for network in networks() {
+            for (end, c, y) in network.pairs.iter().skip(1) {
+                let serial = SquaredMagnitudeHessianPlan::new(c, y);
+                let parallel = SquaredMagnitudeHessianPlan::new(c, y).parallel(true);
+                for _ in 0..3 {
+                    let v = random_voltages(network.nb, &mut rng);
+                    let flows = flows(c, y, &v);
+                    let mu: Vec<f64> = (0..c.shape().0).map(|_| 1.0 + rng.unit()).collect();
+                    let expected = format!("{:?}", serial.evaluate(&v, &flows, &mu));
+                    for threads in THREADS {
+                        let got = on(threads, || parallel.evaluate(&v, &flows, &mu));
+                        let what = format!("{} {end}, {threads} threads", network.name);
+                        assert_eq!(format!("{got:?}"), expected, "{what}");
+                    }
+                    compared += 1;
+                }
+            }
+        }
+        assert!(compared > 0);
+    }
+}

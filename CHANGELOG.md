@@ -38,7 +38,11 @@ releases.
 - With the `rayon` feature, the multifrontal LDLᵀ factors in parallel: independent subtrees of
   its front tree. It's bit for bit the serial factorization at any thread count, and `ybus_ipm`'s new `rayon` feature, forwarded by
   `ybus_powerflow`'s, gives it to the OPF's KKT factorizations. It runs serially on a
-  one-thread pool, and inside `opf::batch`'s `par_` forms, whose solves are the parallelism. The LDLᵀ factorizations now
+  one-thread pool, and inside `opf::batch`'s `par_` forms, whose solves are the parallelism.
+- With the `rayon` feature, the AC OPF's evaluation runs its independent parts concurrently on
+  networks of 1,000 buses or more: the bus and branch-end flows, the Lagrangian Hessian's bus and
+  branch-end parts, and their parts in turn. It's bit for bit the serial evaluation, and serial
+  in the same places the LDLᵀ is. The LDLᵀ factorizations now
   require `T: Send + Sync`, which every scalar type here satisfies.
 - Conjugate gradient, and Matrix Market reading and writing.
 - Optional features: `serde`, and `rayon` for parallel products and solves.
