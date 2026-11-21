@@ -216,7 +216,8 @@ struct ConstraintPlans {
 /// The bus count from which an AC OPF's evaluation runs its independent parts concurrently
 /// (feature `rayon`): the bus and branch-end flows, Hessians and their parts. Fixed, not a thread
 /// count, and the results are the same either way. From a calibration at 14 threads
-/// (`docs/benchmarks/o5-parallel-evaluation-2026-11-21.md`).
+/// (`docs/benchmarks/o5-parallel-evaluation-2026-11-21.md`): case300 was slower with it,
+/// ×0.75–0.87, and case1354pegase and every larger case faster.
 const EVALUATION_BUSES: usize = 1000;
 
 impl ConstraintPlans {

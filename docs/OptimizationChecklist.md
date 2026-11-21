@@ -1046,7 +1046,23 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       batch then matches `main`'s same-day speed, and the serial batch loop gains ×1.13.
     - **A correction:** the batch slowdown first reported (10%) compared two days. Same-day, it
       was 0–4%.
-  - [ ] PR 2b, the AC evaluation's plans
+  - [ ] **PR 2b, the AC evaluation's plans:**
+    - **Decided (2026-11-21):** coarse tasks only. The evaluation's independent parts run
+      concurrently with `rayon::join`, and the kernels aren't split.
+    - **The cutoff,** calibrated before the survey at 14 threads, each case with the
+      evaluation on and off:
+      - case300 is slower with it on (×0.75–0.87)
+      - case1354pegase and larger all gain: ×1.05–1.18 on the predictor-corrector method, and
+        ×1.01–1.02 on MIPS
+      
+      By PR 2a's rule, it goes concurrent from 1,000 buses (`EVALUATION_BUSES`). The
+      calibration's timings are beside the record.
+    - **The survey's rule, written before it runs:**
+      - **Bit for bit:** every result column matches the serial build's at every thread count.
+      - **The speedups are recorded, with nothing chosen.**
+      - **The record compares them with the bound:** the evaluation's share, about ×1.1–1.25 on
+        the AC solve. It separates this PR's gain from PR 2a's with a same-day run of PR 2a's
+        branch.
 - [ ] **SIMD and layouts** (O5 target 3):
   - **The dense kernel's rank-k update,** vectorized without reordering any element's
     operations, if it isn't auto-vectorized already.
