@@ -17,7 +17,8 @@ include = ["/src/**/*", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/AI-DI
 [features]
 # Serialize and deserialize matrices as a shape plus a list of (row, col, value) entries
 serde = ["dep:serde"]
-# Parallel versions of the heavier products, prefixed `par_`
+# Parallel versions of the heavier products, prefixed `par_`, and the multifrontal LDLᵀ's
+#   factorization in parallel, bit for bit the serial one
 rayon = ["dep:rayon"]
 
 [dependencies]

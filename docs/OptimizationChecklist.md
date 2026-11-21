@@ -1012,6 +1012,41 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
   with each child's update extended into its parent in the serial order; and the AC
   evaluation's plans split by fixed element ranges. Bound: ×1.5–3.0 on the predictor-corrector
   method.
+  - **Decided (2026-11-20):**
+    - **Two PRs:** PR 2a, the LDLᵀ, then PR 2b, the AC evaluation, each with its own survey.
+    - **Automatic with `rayon`,** by fixed work cutoffs, with no new option.
+    - **Node-level parallelism** (the large fronts' trailing update, split by columns) in PR 2a.
+  - **PR 2a's cutoffs, from a calibration** (decided 2026-11-20, before the survey):
+    - **The plan** was to calibrate on case2383wp alone. There the parallel factorization gains
+      nothing on DC and ×1.14 on AC, so that rule would have turned it off.
+    - **The large cases do gain:** at 14 threads, case_ACTIVSg25k ×1.44 (AC) and ×1.42 (DC),
+      and case9241pegase ×1.24 and ×1.11.
+    - **The choice:** over all six workloads, subtree work 2²⁰ with no column split. It has a
+      geometric-mean speedup of ×1.15, and the best worst case, ×0.97 on case2383wp's DC.
+    - **The column split** stays in the code, tested bit for bit, but off: it never beat the
+      noise, and from trailing order 256 it made solves 10–20× slower.
+    - **Calibrated on the survey's cases,** so the record's speedups on them are at tuned
+      cutoffs. The record says so.
+  - **PR 2a's survey rule, written before it runs:**
+    - **Bit for bit:** every OPF survey result column matches the serial build's, at every
+      thread count.
+    - **The speedups are recorded, with nothing chosen.**
+    - **The record compares them with the bounds:** the trees' ×4–9 for the factorization, and
+      the whole-solve ×1.5–3.0, part of which is PR 2b's.
+  - [x] **PR 2a, the parallel LDLᵀ**
+    ([`o5-parallel-ldlt-2026-11-20.md`](benchmarks/o5-parallel-ldlt-2026-11-20.md)):
+    - **Bit for bit:** 1,740 survey columns at 1–28 threads, and the 72-case snapshot in both
+      builds.
+    - **The predictor-corrector method's single solves:** AC a median ×1.22 at 4–8 threads (up
+      to ×1.34), DC about ×1.0 (×1.36 on case_ACTIVSg25k), with only 1.3–1.6 threads busy at 14.
+      The root fronts, on the critical path, hold most of the work, and the column split
+      didn't pay. A blocked kernel is target 3's.
+    - **Off inside batches and on a one-thread pool** (decided 2026-11-20): `opf::batch`'s
+      `par_` forms run each solve's factorizations serially (`ybus_sparse`'s `serially`). The
+      batch then matches `main`'s same-day speed, and the serial batch loop gains ×1.13.
+    - **A correction:** the batch slowdown first reported (10%) compared two days. Same-day, it
+      was 0–4%.
+  - [ ] PR 2b, the AC evaluation's plans
 - [ ] **SIMD and layouts** (O5 target 3):
   - **The dense kernel's rank-k update,** vectorized without reordering any element's
     operations, if it isn't auto-vectorized already.

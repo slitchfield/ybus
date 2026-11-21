@@ -237,7 +237,12 @@ fn outages<M: BatchModel>(
 #[cfg(feature = "rayon")]
 pub(crate) fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync + Send) -> Vec<R> {
     use rayon::prelude::*;
-    items.par_iter().map(f).collect()
+    // Each solve's own factorizations serially: the batch is the parallelism, and theirs would
+    //   only compete with it (docs/benchmarks/o5-parallel-ldlt-2026-11-20.md)
+    items
+        .par_iter()
+        .map(|item| ybus_sparse::compressed_matrix::serially(|| f(item)))
+        .collect()
 }
 
 #[cfg(not(feature = "rayon"))]
