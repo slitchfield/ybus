@@ -522,9 +522,12 @@ pub fn mips_from<P: Problem>(
             .map(|(lx, s)| lx + s)
             .collect();
         let rhs: Vec<f64> = n_vec.iter().chain(&e.g).map(|v| -v).collect();
-        let solved = kkt
-            .factor(nx, &m, &[], &e.jg, 0.0)
-            .and_then(|factor| factor.solve(&rhs));
+        let solved = kkt.factor(nx, &m, &[], &e.jg, 0.0).and_then(|factor| {
+            let solved = factor.solve(&rhs);
+            // The factor's storage, for the next iteration's factorization
+            kkt.recycle(factor);
+            solved
+        });
         let dxdlam = match solved {
             Ok(step) => step,
             // MATLAB's backslash returns NaN or Inf for a singular system, which MIPS treats
