@@ -1008,7 +1008,7 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       bandwidth or allocation are the likely causes, for target 3.
     - **Warm outage batches:** held to ×2–4 by their slowest outage, which was measured.
     - **Memory:** case_ACTIVSg25k's AC batches went over 12 GiB beyond 8 and 14 threads.
-- [ ] **Within one solve** (O5 target 2): the LDLᵀ's independent subtrees with `rayon::join`,
+- [x] **Within one solve** (O5 target 2): the LDLᵀ's independent subtrees with `rayon::join`,
   with each child's update extended into its parent in the serial order; and the AC
   evaluation's plans split by fixed element ranges. Bound: ×1.5–3.0 on the predictor-corrector
   method.
@@ -1046,7 +1046,8 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       batch then matches `main`'s same-day speed, and the serial batch loop gains ×1.13.
     - **A correction:** the batch slowdown first reported (10%) compared two days. Same-day, it
       was 0–4%.
-  - [ ] **PR 2b, the AC evaluation's plans:**
+  - [x] **PR 2b, the AC evaluation's plans**
+    ([`o5-parallel-evaluation-2026-11-21.md`](benchmarks/o5-parallel-evaluation-2026-11-21.md)):
     - **Decided (2026-11-21):** coarse tasks only. The evaluation's independent parts run
       concurrently with `rayon::join`, and the kernels aren't split.
     - **The cutoff,** calibrated before the survey at 14 threads, each case with the
@@ -1063,6 +1064,16 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       - **The record compares them with the bound:** the evaluation's share, about ×1.1–1.25 on
         the AC solve. It separates this PR's gain from PR 2a's with a same-day run of PR 2a's
         branch.
+    - **The result:**
+      - **Bit for bit:** 2,320 survey columns, and the 72-case snapshot in both builds.
+      - **With PR 2a,** the predictor-corrector method's AC solves reach a median ×1.50 at
+        8 threads, up to ×1.67, from PR 2a's ×1.15 alone the same day, so this PR adds
+        about ×1.3. MIPS gains ×1.03.
+      - **Batches:** unchanged, and their serial loop gains ×1.27–1.37.
+      - **The rest of the bound** is in the evaluation's largest part, the root fronts, the
+        serial triangular solves and rayon's runtime. The solves and kernel are target 3's.
+  - **Target 2 is complete:** within one solve, the predictor-corrector method's AC solves
+    reach ×1.50 at 8 threads, about half of the ×2.6–3.0 bound.
 - [ ] **SIMD and layouts** (O5 target 3):
   - **The dense kernel's rank-k update,** vectorized without reordering any element's
     operations, if it isn't auto-vectorized already.
