@@ -801,6 +801,7 @@ pub fn mehrotra_from<P: Problem>(
             if !opt.inertia_correction || factor.inertia().is_none_or(|inertia| inertia == wanted) {
                 break Some(factor);
             }
+            kkt.recycle(factor);
             corrections += 1;
             delta_w = if delta_w == 0.0 {
                 if last_delta_w == 0.0 {
@@ -912,6 +913,8 @@ pub fn mehrotra_from<P: Problem>(
                 }
             }
         };
+        // The factor's storage, for the next iteration's factorization
+        kkt.recycle(factor);
         let Some(step) = step else {
             failed = true;
             break;

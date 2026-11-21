@@ -100,6 +100,8 @@ pub(crate) struct KktSolver {
     assembly: Option<Assembly>,
     /// Totals over every factorization so far (see `KktStatistics`)
     statistics: KktStatistics,
+    /// A spent LDLᵀ factorization (`recycle`), whose storage the next one reuses
+    spare: Option<Ldlt<f64>>,
 }
 
 /// The KKT factorizations' statistics over a solve, as totals over every factorization: the
@@ -208,6 +210,15 @@ impl KktSolver {
             refinement_steps: Rc::new(Cell::new(0)),
             assembly: None,
             statistics: KktStatistics::default(),
+            spare: None,
+        }
+    }
+
+    /// Takes back a factor the caller is done with, so that the next factorization reuses its
+    /// storage (`SymbolicLdlt::refactor`): the same results, fewer allocations.
+    pub(crate) fn recycle(&mut self, factor: KktFactor) {
+        if let FactorKind::Ldlt { ldlt, .. } = factor.kind {
+            self.spare = Some(ldlt);
         }
     }
 
@@ -391,7 +402,11 @@ impl KktSolver {
             threshold: THRESHOLD,
         };
         if let Some(symbolic) = &self.ldlt {
-            match symbolic.factor(&matrix, options) {
+            let factored = match self.spare.take() {
+                Some(spare) => symbolic.refactor(&matrix, options, spare),
+                None => symbolic.factor(&matrix, options),
+            };
+            match factored {
                 Err(SparseError::PatternMismatch) => {}
                 factored => {
                     return Ok(FactorKind::Ldlt {
@@ -409,7 +424,10 @@ impl KktSolver {
         };
         self.analyses += 1;
         self.statistics.tree = symbolic.front_tree();
-        let factored = symbolic.factor(&matrix, options);
+        let factored = match self.spare.take() {
+            Some(spare) => symbolic.refactor(&matrix, options, spare),
+            None => symbolic.factor(&matrix, options),
+        };
         self.ldlt = Some(symbolic);
         Ok(FactorKind::Ldlt {
             ldlt: factored?,

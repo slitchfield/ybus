@@ -561,7 +561,22 @@ impl SymbolicLdlt {
         matrix: &CsrMatrix<T>,
         options: LdltOptions,
     ) -> Result<Ldlt<T>, SparseError> {
-        self.factor_with(matrix, options, Cutoffs::DEFAULT)
+        self.factor_with(matrix, options, Cutoffs::DEFAULT, None)
+    }
+
+    /// [`SymbolicLdlt::factor`], reusing `previous`'s storage, an earlier factorization of a
+    /// matrix with this analysis's pattern, for its fronts. The result is bit for bit
+    /// `factor`'s; only the allocations change. For a sequence of factorizations, such as an
+    /// interior-point method's, each refactoring into the last.
+    ///
+    /// Returns [`SymbolicLdlt::factor`]'s errors, and panics where it does.
+    pub fn refactor<T: Scalar + ComplexFloat + Send + Sync>(
+        &self,
+        matrix: &CsrMatrix<T>,
+        options: LdltOptions,
+        previous: Ldlt<T>,
+    ) -> Result<Ldlt<T>, SparseError> {
+        self.factor_with(matrix, options, Cutoffs::DEFAULT, Some(previous))
     }
 
     /// [`SymbolicLdlt::factor`] with the parallel paths' cutoffs given: the tests force every
@@ -572,6 +587,7 @@ impl SymbolicLdlt {
         matrix: &CsrMatrix<T>,
         options: LdltOptions,
         cutoffs: Cutoffs,
+        previous: Option<Ldlt<T>>,
     ) -> Result<Ldlt<T>, SparseError> {
         let threshold = options.threshold;
         assert!(
@@ -594,7 +610,14 @@ impl SymbolicLdlt {
             threshold,
             node_order: cutoffs.node_order,
         };
-        let (fronts, delayed) = self.factor_all(&context, cutoffs)?;
+        // The previous factorization's fronts, their storage handed out again
+        let mut seed = Workspace::new(n);
+        for front in previous.into_iter().flat_map(|ldlt| ldlt.fronts) {
+            seed.spare_l.push(front.l);
+            seed.spare_ordered.push(front.vars);
+            seed.spare_dblocks.push(front.blocks);
+        }
+        let (fronts, delayed) = self.factor_all(&context, cutoffs, seed)?;
         Ok(Ldlt {
             n,
             perm: symbolic.perm.clone(),
@@ -609,8 +632,8 @@ impl SymbolicLdlt {
         &self,
         context: &Context<'_, T>,
         _: Cutoffs,
+        mut workspace: Workspace<T>,
     ) -> Result<(Vec<Front<T>>, usize), SparseError> {
-        let mut workspace = Workspace::new(self.cholesky.dim());
         let (fronts, outgoing, delayed) = self
             .factor_range(0..self.nodes.len(), context, &mut workspace)
             .map_err(|(_, error)| error)?;
@@ -625,6 +648,7 @@ impl SymbolicLdlt {
         &self,
         context: &Context<'_, T>,
         cutoffs: Cutoffs,
+        seed: Workspace<T>,
     ) -> Result<(Vec<Front<T>>, usize), SparseError> {
         use rayon::prelude::*;
         // Serially when there's nothing to gain: no subtree cutoff, a one-thread pool, or a
@@ -634,7 +658,7 @@ impl SymbolicLdlt {
             || (cutoffs != Cutoffs::ALWAYS
                 && (rayon::current_num_threads() == 1 || SERIALLY.with(|depth| depth.get() > 0)));
         if serial {
-            let mut workspace = Workspace::new(self.cholesky.dim());
+            let mut workspace = seed;
             let (fronts, _, delayed) = self
                 .factor_range(0..self.nodes.len(), context, &mut workspace)
                 .map_err(|(_, error)| error)?;
@@ -645,7 +669,7 @@ impl SymbolicLdlt {
             .collect();
         // Workspaces shared by the tasks, each taken and given back whole: a front clears and
         //   rewrites everything it uses, so only the allocation is shared
-        let pool = std::sync::Mutex::new(Vec::new());
+        let pool = std::sync::Mutex::new(vec![seed]);
         let subtrees: Vec<_> = roots
             .par_iter()
             .map(|&root| self.par_subtree(root, context, cutoffs, &pool))
@@ -786,6 +810,10 @@ impl SymbolicLdlt {
             spare_blocks,
             spare_vars,
             position,
+            spare_l,
+            spare_ordered,
+            spare_dblocks,
+            spare_order,
         } = workspace;
         let c_data = context.c_data;
         let node = &self.nodes[s];
@@ -857,6 +885,10 @@ impl SymbolicLdlt {
             root,
             scratch,
             context.node_order,
+            (
+                spare_order.pop().unwrap_or_default(),
+                spare_dblocks.pop().unwrap_or_default(),
+            ),
         );
         for &v in vars.iter() {
             position[v] = usize::MAX;
@@ -867,7 +899,10 @@ impl SymbolicLdlt {
             },
             other => other,
         })?;
-        let ordered: Vec<usize> = factored.order.iter().map(|&p| vars[p]).collect();
+        let mut ordered = spare_ordered.pop().unwrap_or_default();
+        ordered.clear();
+        ordered.extend(factored.order.iter().map(|&p| vars[p]));
+        spare_order.push(factored.order);
         let e = factored.eliminated;
         // The contribution block, everything not eliminated, goes to the parent
         let block = (e < m).then(|| {
@@ -886,7 +921,9 @@ impl SymbolicLdlt {
             (rest_vars, block)
         });
         // L's columns, at their exact size; the front is reused
-        let mut l = front[..m * e].to_vec();
+        let mut l = spare_l.pop().unwrap_or_default();
+        l.clear();
+        l.extend_from_slice(&front[..m * e]);
         // Inside a 2×2 block, L's entry is zero (the kernel leaves D's there)
         let mut at = 0;
         for block in &factored.blocks {
@@ -929,6 +966,12 @@ struct Workspace<T> {
     spare_blocks: Vec<Vec<T>>,
     spare_vars: Vec<Vec<usize>>,
     position: Vec<usize>,
+    /// Storage for the fronts' results, from spent fronts: their `L` columns, their variables,
+    /// `D`'s blocks, and the kernel's orders
+    spare_l: Vec<Vec<T>>,
+    spare_ordered: Vec<Vec<usize>>,
+    spare_dblocks: Vec<Vec<DBlock<T>>>,
+    spare_order: Vec<Vec<usize>>,
 }
 
 impl<T> Workspace<T> {
@@ -940,6 +983,10 @@ impl<T> Workspace<T> {
             spare_blocks: Vec::new(),
             spare_vars: Vec::new(),
             position: vec![usize::MAX; n],
+            spare_l: Vec::new(),
+            spare_ordered: Vec::new(),
+            spare_dblocks: Vec::new(),
+            spare_order: Vec::new(),
         }
     }
 }
@@ -1318,11 +1365,14 @@ mod tests {
             for ordering in [Ordering::Natural, Ordering::Amd] {
                 let symbolic = a.analyze_ldlt(ordering).unwrap();
                 let options = LdltOptions::default();
-                let serial = format!("{:?}", symbolic.factor_with(a, options, Cutoffs::NEVER));
+                let serial = format!(
+                    "{:?}",
+                    symbolic.factor_with(a, options, Cutoffs::NEVER, None)
+                );
                 for threads in [1, 2, 7, 28] {
                     if always {
                         let parallel = on(threads, || {
-                            symbolic.factor_with(a, options, Cutoffs::ALWAYS)
+                            symbolic.factor_with(a, options, Cutoffs::ALWAYS, None)
                         });
                         assert_eq!(
                             format!("{parallel:?}"),
@@ -1368,7 +1418,10 @@ mod tests {
             let a = indefinite(300, 3, 200, 1);
             let symbolic = a.analyze_ldlt(Ordering::Amd).unwrap();
             let options = LdltOptions::default();
-            let serial = format!("{:?}", symbolic.factor_with(&a, options, Cutoffs::NEVER));
+            let serial = format!(
+                "{:?}",
+                symbolic.factor_with(&a, options, Cutoffs::NEVER, None)
+            );
             assert_eq!(
                 format!("{:?}", serially(|| symbolic.factor(&a, options))),
                 serial
@@ -1398,6 +1451,7 @@ mod tests {
                 &a,
                 LdltOptions::default(),
                 Cutoffs::NEVER,
+                None,
             );
             assert!(
                 matches!(serial, Err(SparseError::SingularMatrix { .. })),

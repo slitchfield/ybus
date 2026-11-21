@@ -68,6 +68,13 @@ one: optimal power flow, interior-point solvers and acceleration.
   on case2383wp and reassembling matrices through an assembly map, and `scripts/benchmark-dc.sh`
   and `scripts/benchmark-ac.sh` survey every MATPOWER case once, comparing the results with
   MATPOWER's. [`docs/benchmarks/`](docs/benchmarks/) records the results.
+- **Building for your own CPU:** `RUSTFLAGS="-C target-cpu=x86-64-v3"` (AVX2), or `native`,
+  lets the compiler use wider vector instructions. The results are bit for bit the default
+  build's, since Rust never fuses a multiply and an add unasked. But on the OPF it's slower:
+  the LDLᵀ's kernel updates short columns, which suit the default build's SSE2 better, so the
+  predictor-corrector method's AC solves took ×0.80–0.91 of the default build's time
+  ([`docs/benchmarks/o5-allocation-2026-11-21.md`](docs/benchmarks/o5-allocation-2026-11-21.md)).
+  The default build is the one to use.
 
 ## Documentation
 

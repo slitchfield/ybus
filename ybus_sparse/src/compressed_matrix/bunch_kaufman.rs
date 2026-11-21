@@ -104,7 +104,8 @@ pub(crate) struct FrontFactor<T> {
 /// the end, from it. Reading `conj(a_ji)` for `a_ij` above the diagonal gives the same values
 /// and magnitudes, so the result is bit for bit what updating both triangles gave.
 ///
-/// `scratch` is working space, reused across calls so a pivot allocates nothing.
+/// `scratch` is working space, reused across calls so a pivot allocates nothing, and `order` and
+/// `blocks` storage for the result's, emptied first.
 ///
 /// With the `rayon` feature, a pivot's trailing update splits its columns across threads when
 /// the trailing order is at least `node_order` (`usize::MAX` keeps it serial). Each column's
@@ -112,6 +113,7 @@ pub(crate) struct FrontFactor<T> {
 ///
 /// Returns `SparseError::SingularMatrix` naming the front position where no pivot was found
 /// with `complete`, or of a pivot that is zero or NaN.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn factor_front<T: Scalar + ComplexFloat + Send + Sync>(
     a: &mut [T],
     m: usize,
@@ -120,12 +122,18 @@ pub(crate) fn factor_front<T: Scalar + ComplexFloat + Send + Sync>(
     complete: bool,
     scratch: &mut Vec<T>,
     node_order: usize,
+    (mut order, mut blocks): (Vec<usize>, Vec<DBlock<T>>),
 ) -> Result<FrontFactor<T>, SparseError> {
     debug_assert_eq!(a.len(), m * m);
     debug_assert!(k <= m && (!complete || k == m));
     let zero = <T::Real as Zero>::zero();
-    let mut order: Vec<usize> = (0..m).collect();
-    let mut blocks = Vec::new();
+    // `order` and `blocks` are the caller's storage, emptied: a factorization's earlier fronts'
+    //   handed back, so a refactorization allocates little. At most one block per fully summed
+    //   column, reserved, so pushing never reallocates
+    order.clear();
+    order.extend(0..m);
+    blocks.clear();
+    blocks.reserve(k);
     let at = |i: usize, j: usize| i + j * m;
     let mut p = 0;
     while p < k {
@@ -536,7 +544,16 @@ impl<T: Scalar + ComplexFloat + Send + Sync> DenseLdlt<T> {
             }
         }
         let threshold: T::Real = NumCast::from(threshold).expect("the threshold is representable");
-        let front = factor_front(&mut a, n, n, threshold, true, &mut Vec::new(), usize::MAX)?;
+        let front = factor_front(
+            &mut a,
+            n,
+            n,
+            threshold,
+            true,
+            &mut Vec::new(),
+            usize::MAX,
+            (Vec::new(), Vec::new()),
+        )?;
         debug_assert_eq!(front.eliminated, n);
         // L: the strictly lower part, with each 2×2 block's lower-left entry (D's) cleared, and
         //   the unit diagonal
