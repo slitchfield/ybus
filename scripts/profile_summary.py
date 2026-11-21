@@ -61,7 +61,10 @@ STAGES = [
                                "cholesky::", "factor"]),
     ("triangular solves", ["Lu>::solve", "Cholesky>::solve", "solve_sparse", "triangular",
                            "lower_solve", "upper_solve", "Ldlt<", "DenseLdlt",
-                           "forward_by_rows", "back_by_rows"]),
+                           "forward_by_rows", "back_by_rows",
+                           # The multifrontal LDLᵀ's parallel sweeps, on rayon's threads, away
+                           #   from the Factorization trait's frames
+                           "multifrontal::Ldlt>::forward_", "multifrontal::Ldlt>::backward_"]),
     ("refinement residual", ["refine_normwise", "accuracy::refine", "relative_residual",
                              "componentwise_backward_error"]),
     ("outage updates", ["outage", "woodbury", "Woodbury"]),
