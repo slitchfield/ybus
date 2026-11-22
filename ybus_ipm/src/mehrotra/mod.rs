@@ -66,8 +66,10 @@
 //!
 //! - A problem with no inequalities or bounds takes plain Newton steps.
 //! - There is no merit function or line search by default, as in MIPS. An option,
-//!   `line_search`, adds Wächter and Biegler's filter line search ([`LineSearch`]), in
-//!   progress (`docs/LineSearchChecklist.md`).
+//!   `line_search` ([`LineSearch`], `docs/LineSearchChecklist.md`), adds Wächter and Biegler's
+//!   monotone barrier with their filter line search and feasibility restoration, alone or in
+//!   Nocedal, Wächter and Waltz's adaptive framework, which keeps Mehrotra's steps while the
+//!   KKT error falls.
 //! - **The inertia correction,** with the pivoted LDLᵀ (`kkt_factorization`, see [`crate::kkt`]).
 //!   On a nonconvex problem an indefinite `∇²L` can make the step a poor one, as in MIPS. LDLᵀ
 //!   reveals it: the KKT matrix's inertia must be `(nx, neq)`, which holds when `W` is positive
@@ -171,13 +173,22 @@ pub enum LineSearch {
     /// a local minimizer of the violation, ends as `NumericalFailure` with its last record in
     /// [`IterationMode::Restoration`]
     MonotoneFilter,
+    /// Nocedal, Wächter and Waltz's adaptive barrier (see `docs/LineSearchChecklist.md`): free
+    /// mode takes `Off`'s predictor-corrector steps, with Mehrotra's barrier parameter, while
+    /// the KKT error keeps falling to `0.9999` of the largest of its last five accepted values.
+    /// When it doesn't, fixed mode runs `MonotoneFilter`'s method from that point, at `0.8` of
+    /// its average complementarity, until the KKT error meets the same test, and free mode
+    /// resumes. Wherever free mode's test always holds, the solve is `Off`'s with LDLᵀ and the
+    /// inertia correction, bit for bit
+    AdaptiveFilter,
 }
 
 /// Which phase of the method an iteration belongs to (`MehrotraIteration::mode`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum IterationMode {
-    /// Mehrotra's adaptive barrier: the method's only mode with `LineSearch::Off`
+    /// Mehrotra's adaptive barrier: the method's only mode with `LineSearch::Off`, and
+    /// `LineSearch::AdaptiveFilter`'s while its progress test holds
     #[default]
     Free,
     /// A fixed barrier parameter, with the filter line search
@@ -270,6 +281,9 @@ pub struct MehrotraIteration {
     /// In a restoration record ([`IterationMode::Restoration`]), the restoration phase's
     /// iterations, which the solve's count includes (0 otherwise)
     pub restoration_iterations: usize,
+    /// With `LineSearch::AdaptiveFilter`, the original problem's KKT error `Φ` after the step,
+    /// which its progress test compares (0 otherwise)
+    pub kkt_error: f64,
 }
 
 /// The internal solve's hooks, which feasibility restoration sets for the solve of its own
@@ -625,6 +639,9 @@ fn solve_with_hooks<P: Problem + ?Sized>(
     }
     // A filter's steps must be descent directions, which the inertia correction ensures
     let inertia_correction = opt.inertia_correction || filter;
+    // The adaptive barrier starts in free mode; the monotone filter is always in fixed mode
+    let adaptive = opt.line_search == LineSearch::AdaptiveFilter;
+    let mut fixed = filter && !adaptive;
     let nx = x0.len();
     if problem.dimension() != nx {
         return Err(InteriorPointError::Dimension { what: "x0" });
@@ -870,9 +887,22 @@ fn solve_with_hooks<P: Problem + ?Sized>(
     let theta_start = theta(&e, &p).max(1.0);
     let theta_min = 1e-4 * theta_start;
     let mut line_filter = filter::Filter::new(1e4 * theta_start);
+    // The adaptive barrier's KKT error Φ, and the accepted values its progress test compares
+    //   against (the checklist's PR 3 rules)
+    let kkt_error = |rd: &[f64], e: &Evaluation, p: &Pairs| -> f64 {
+        let hz: Vec<f64> = e.h.iter().zip(&p.z).map(|(h, z)| h + z).collect();
+        filter::kkt_error(
+            rd,
+            [&e.g, &hz],
+            [(&p.z, &p.mu), (&p.s_l, &p.pi_l), (&p.s_u, &p.pi_u)],
+        )
+    };
+    let mut progress = filter::Progress::new(kkt_error(&rd, &e, &p));
 
     while !converged && i < opt.max_it {
         i += 1;
+        // This iteration's mode: the adaptive barrier's may change at its end
+        let step_fixed = fixed;
 
         // The reduced KKT matrix, [W Jgᵀ; Jg 0] with W = ∇²L + Jhᵀ Z⁻¹ M Jh + Σ_l + Σ_u
         let (jh, jg, jh_t) = (e.jh(&split), e.jg(&split), e.jh_t(&ai_t));
@@ -1013,7 +1043,7 @@ fn solve_with_hooks<P: Problem + ?Sized>(
 
         // Fixed mode's complementarity right-hand sides, centered at μ̄: kept for a second-order
         //   correction, which solves with the same ones
-        let centered = filter.then(|| {
+        let centered = fixed.then(|| {
             let centered = |s: &[f64], v: &[f64]| -> Vec<f64> {
                 s.iter().zip(v).map(|(s, v)| mu_bar - s * v).collect()
             };
@@ -1070,7 +1100,27 @@ fn solve_with_hooks<P: Problem + ?Sized>(
             // In fixed mode, a step that couldn't be computed, or that's too long, as near a
             //   point where the linearized constraints are inconsistent with the bounds, goes to
             //   feasibility restoration, as a failed line search does
-            _ if filter && !hooks.no_restoration => None,
+            _ if fixed && !hooks.no_restoration => None,
+            // In free mode, the adaptive barrier has no trial point to start fixed mode from, so
+            //   it starts from the current one
+            _ if adaptive && !fixed => {
+                mu_bar = (filter::MONOTONE_INIT_FACTOR * average(&p)).max(mu_floor);
+                line_filter.reset();
+                progress.freeze();
+                fixed = true;
+                history.push(MehrotraIteration {
+                    feascond,
+                    gradcond,
+                    compcond,
+                    costcond,
+                    mu: average(&p),
+                    obj: e.f / opt.cost_mult,
+                    theta: theta(&e, &p),
+                    kkt_error: kkt_error(&rd, &e, &p),
+                    ..MehrotraIteration::default()
+                });
+                continue;
+            }
             _ => {
                 failed = true;
                 break;
@@ -1081,7 +1131,7 @@ fn solve_with_hooks<P: Problem + ?Sized>(
         //   primal and dual lengths apart, as the paper takes them (§2.2), the primal one from the
         //   filter line search
         let tau = filter::fraction(mu_bar);
-        let (step, alphap, alphad, trial, backtracks, second_order) = if filter {
+        let (step, alphap, alphad, trial, backtracks, second_order) = if fixed {
             let theta_k = theta(&e, &p);
             let phi_k = filter::barrier(e.f, mu_bar, [&p.z, &p.s_l, &p.s_u]);
             let (found, backtracks) = match &step {
@@ -1309,6 +1359,11 @@ fn solve_with_hooks<P: Problem + ?Sized>(
                 (feascond, gradcond, compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
                 costcond = (e.f - f0).abs() / (1.0 + f0.abs());
                 f0 = e.f;
+                let phi = if adaptive {
+                    kkt_error(&rd, &e, &p)
+                } else {
+                    0.0
+                };
                 history.push(MehrotraIteration {
                     feascond,
                     gradcond,
@@ -1321,8 +1376,14 @@ fn solve_with_hooks<P: Problem + ?Sized>(
                     barrier_parameter: mu_bar,
                     filter_size: line_filter.len(),
                     restoration_iterations: r_iterations,
+                    kkt_error: phi,
                     ..MehrotraIteration::default()
                 });
+                // The adaptive barrier returns to free mode from a restored point with progress
+                if adaptive && progress.accepts(phi) {
+                    progress.push(phi);
+                    fixed = false;
+                }
                 converged = tolerances_met(feascond, gradcond, compcond, costcond);
                 continue;
             };
@@ -1337,7 +1398,7 @@ fn solve_with_hooks<P: Problem + ?Sized>(
             let step = step.expect("only fixed mode goes on without a step");
             let (alphap, alphad) = if pairs == 0 {
                 (1.0, 1.0)
-            } else if filter {
+            } else if fixed {
                 step.lengths(&split, &p, tau)
             } else {
                 let (alphap, alphad) = step.lengths(&split, &p, opt.xi);
@@ -1362,12 +1423,12 @@ fn solve_with_hooks<P: Problem + ?Sized>(
         advance(&mut p.mu, &step.dmu, alphad);
         // The equalities' multipliers take the primal length in fixed mode, as in the paper's
         //   iteration (§2.2)
-        advance(&mut lam, &step.dlam, if filter { alphap } else { alphad });
+        advance(&mut lam, &step.dlam, if fixed { alphap } else { alphad });
         advance(&mut p.pi_l, &step.dpi_l, alphad);
         advance(&mut p.pi_u, &step.dpi_u, alphad);
         (p.s_l, p.s_u) = slacks(&x);
         let step_mu_bar = mu_bar;
-        if filter {
+        if fixed {
             filter::safeguard(&mut p.mu, &p.z, mu_bar);
             filter::safeguard(&mut p.pi_l, &p.s_l, mu_bar);
             filter::safeguard(&mut p.pi_u, &p.s_u, mu_bar);
@@ -1382,7 +1443,7 @@ fn solve_with_hooks<P: Problem + ?Sized>(
         (feascond, gradcond, compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
         costcond = (e.f - f0).abs() / (1.0 + f0.abs());
         let mu_new = average(&p);
-        let barrier = if filter {
+        let barrier = if fixed {
             filter::barrier(e.f, step_mu_bar, [&p.z, &p.s_l, &p.s_u])
         } else {
             0.0
@@ -1390,7 +1451,7 @@ fn solve_with_hooks<P: Problem + ?Sized>(
         // The barrier parameter falls once the barrier problem is solved to κ_ε μ̄ (§3.1):
         //   its error is the method's feasibility and gradient measures, with complementarity
         //   measured against μ̄
-        if filter {
+        if fixed {
             loop {
                 let comp = filter::complementarity_error(
                     [(&p.z, &p.mu), (&p.s_l, &p.pi_l), (&p.s_u, &p.pi_u)],
@@ -1405,6 +1466,11 @@ fn solve_with_hooks<P: Problem + ?Sized>(
                 line_filter.reset();
             }
         }
+        let phi = if adaptive {
+            kkt_error(&rd, &e, &p)
+        } else {
+            0.0
+        };
         history.push(MehrotraIteration {
             feascond,
             gradcond,
@@ -1418,23 +1484,39 @@ fn solve_with_hooks<P: Problem + ?Sized>(
             alphad,
             delta_w,
             theta: theta(&e, &p),
-            mode: if filter {
+            mode: if fixed {
                 IterationMode::Fixed
             } else {
                 IterationMode::Free
             },
             barrier,
-            barrier_parameter: if filter { step_mu_bar } else { 0.0 },
+            barrier_parameter: if fixed { step_mu_bar } else { 0.0 },
             backtracks,
             second_order,
             filter_size: line_filter.len(),
+            kkt_error: phi,
             ..MehrotraIteration::default()
         });
+        // The adaptive barrier's progress test: in free mode, a point without progress starts
+        //   fixed mode there; in fixed mode, a point with progress returns to free mode
+        if adaptive {
+            if progress.accepts(phi) {
+                progress.push(phi);
+                fixed = false;
+            } else if !fixed {
+                mu_bar = (filter::MONOTONE_INIT_FACTOR * mu_new).max(mu_floor);
+                line_filter.reset();
+                progress.freeze();
+                fixed = true;
+            }
+        }
         if tolerances_met(feascond, gradcond, compcond, costcond) {
             converged = true;
         } else {
+            // A free step of the adaptive barrier that stalls has started fixed mode instead
             if x.iter().any(|v| v.is_nan())
                 || (pairs > 0
+                    && !(adaptive && !step_fixed)
                     && (alphap < opt.alpha_min
                         || alphad < opt.alpha_min
                         || mu_new < f64::EPSILON

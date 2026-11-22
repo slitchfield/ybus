@@ -307,9 +307,19 @@ for the defaults its papers name.
   - **Why it converges:** `Φ` falls by `κ` at least every `l_max` iterations, so every limit
     point is a first-order point (§5). Fixed mode reaches each such point by PR 1's and PR 2's
     globalization.
-- [ ] **`LineSearch::AdaptiveFilter`:**
+- [x] **`LineSearch::AdaptiveFilter`:**
   - **The free mode:** today's predictor-corrector step, accepted by the free mode's test.
   - **The fixed mode:** PR 1's filter, with PR 2's restoration.
+  - **Done** (`mehrotra/mod.rs`, `mehrotra/filter.rs`): the rules above.
+    - **One flag, set per iteration:** `fixed`, which replaced PR 1's `filter` in the
+      iteration. It is always on for `MonotoneFilter`, and starts off for `AdaptiveFilter`.
+    - **`filter::kkt_error`** computes `Φ`, and **`filter::Progress`** keeps the reference
+      window and freezes it while fixed mode runs. Both have unit tests.
+    - **The record:** the new field `kkt_error`, which is `Φ` on an adaptive iteration.
+    - **A stalled free step,** below `alpha_min` or with complementarity out of range, starts
+      fixed mode instead of failing the solve. A NaN point still fails it.
+    - **A free step that can't be computed** starts fixed mode from the current point, with a
+      record of its own.
 - [ ] **Tests:**
   - PR 1's problems
   - the small OPF cases (case9 to case300), within O3's bar of MIPS-LU
