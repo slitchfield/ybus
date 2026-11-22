@@ -162,7 +162,7 @@ for the defaults its papers name.
     - **hs71 from 1:** where `Off` stops at the iteration limit (KKT residual 0.4), the filter
       reaches the optimum in 25 iterations, with one backtrack.
     - **Elsewhere,** the outcomes match `Off`'s.
-- [ ] **Tests** (`ybus_ipm/tests/line_search_test.rs`):
+- [x] **Tests** (`ybus_ipm/tests/line_search_test.rs`):
   - **hs71 from its local-maximum start,** which must reach the minimum.
   - **The nonconvex problems:** `Nonlinear2` and `Nonlinear3`.
   - **A Maratos-effect problem,** on which full steps must be accepted near the solution.
@@ -172,6 +172,19 @@ for the defaults its papers name.
     - augmentation skipped
     - the second-order correction disabled
     - the switching condition inverted
+  - **Done.**
+    - **hs71 from 1:** the filter reaches the optimum where `Off` stalls, and its non-Armijo
+      steps grow the filter.
+    - **hs71 from 2:** a verified KKT point that isn't the local maximum (the found fourth
+      point).
+    - **`Nonlinear2` and `Nonlinear3`:** their optima, each with KKT residuals below 1e-6.
+    - **The Maratos problem** (Nocedal and Wright's Example 15.4), from the circle at angle
+      0.1: a second-order correction is taken and no step is shortened.
+  - **Each planted bug caught,** then reverted:
+    - **the Armijo test's sign:** by two unit tests of the acceptance tests
+    - **augmentation skipped:** by hs71 from 1, through the record's filter size
+    - **the second-order correction disabled:** by the Maratos test
+    - **the switching condition inverted:** by two unit tests, and hs71 from 1
 
 ## PR 2: feasibility restoration
 
