@@ -188,12 +188,23 @@ for the defaults its papers name.
 
 ## PR 2: feasibility restoration
 
-- [ ] **The restoration problem** (§3.3), as a `Problem` wrapping the original:
+- [x] **The restoration problem** (§3.3), as a `Problem` wrapping the original:
   - **Its variables:** `x`, plus `p, n ≥ 0` for every row.
   - **Its objective:** `ρ Σ (p + n) + (ζ/2) ‖D_R (x − x_R)‖²`.
   - **Its constraints:** each row's, with `p` and `n` added.
   - **Its bounds:** the original ones.
   - **Its starting point:** the paper's closed form for `p` and `n`.
+  - **Done** (`mehrotra/restoration.rs`), in this solver's form.
+    - **The variables:** `x`, then `p_g, n_g` per nonlinear equality, `p_h` per nonlinear
+      inequality (`h − p_h ≤ 0`), and `p_a, n_a` per linear row (`l ≤ A x − p_a + n_a ≤ u`).
+    - **Why one variable per inequality:** a one-sided row needs only its excess, since the
+      method's own slack takes the rest.
+    - **The Hessian:** the original's constraint curvature, through its `lagrangian_hessian`
+      with `cost_mult = 0`, plus the proximity term's.
+    - **The start:** each equality's and linear row's `p` and `n` by eq. 30, so that its row
+      holds exactly, and each inequality's `p` as its excess.
+    - **Unit tests:** the Jacobians and gradient against finite differences, the exact start,
+      and a linear row's start on its limit.
 - [ ] **Solving it** with the same method in fixed mode, without nested restoration.
   - **Its stopping rule:** `θ ≤ κ_resto θ_R`, at a point acceptable to the original filter.
   - **After it returns:** the original iteration resumes, with its multipliers reset.

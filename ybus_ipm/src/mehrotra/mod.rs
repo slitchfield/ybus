@@ -85,6 +85,8 @@
 //!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
 
 mod filter;
+#[allow(dead_code)]
+mod restoration;
 
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
