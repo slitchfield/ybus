@@ -132,5 +132,60 @@ why 0.1.0 needed the token.
 
 ## Every release after 0.1.0
 
-To be written with P5's `release-plz` setup: review the release PR, correct its version for
-behaviour breaks the semver check can't see, edit its changelog entry, and merge.
+[release-plz](https://release-plz.dev) prepares each release as a pull request, and publishes it
+when that PR merges. Its configuration is `release-plz.toml`, and its workflow
+`.github/workflows/release-plz.yml`.
+
+### Once: the GitHub App
+
+The workflow opens the release PR with a GitHub App's token, since a PR opened with the default
+`GITHUB_TOKEN` doesn't trigger CI. Then the release PR runs every CI job, like any other.
+
+1. **Make the App:** in GitHub, under Settings, Developer settings, GitHub Apps, then New
+   GitHub App.
+   - **Name:** anything, such as `ybus-release-plz`.
+   - **Webhook:** off, since the workflow only uses the App's tokens.
+   - **Repository permissions:** Contents and Pull requests, read and write. Add Administration,
+     read and write, only if tags are protected.
+   - **Where it can be installed:** only on this account.
+2. **Make a private key** on the App's page, and note its **client ID**.
+3. **Install the App** on the `ybus` repository only.
+4. **In the repository's settings,** under Secrets and variables, then Actions:
+   - **a variable** `RELEASE_PLZ_CLIENT_ID`, the client ID
+   - **a secret** `RELEASE_PLZ_PRIVATE_KEY`, the private key's whole `.pem` file
+5. **The trusted publishing environment:** if a crate's trusted publishing on crates.io was
+   configured with a GitHub environment, the workflow's `release` job needs the same
+   `environment:`. Without one, it needs nothing more.
+6. **Revoke the first release's API token,** if it isn't already (step 7 above).
+
+### Each release
+
+1. **release-plz opens the release PR** on a push to `main` that changes a crate. It updates the
+   PR as more changes merge.
+   - **The version** bumps all four crates together (their version group), to the highest next
+     version any of them needs. The PR reports cargo-semver-checks' result for each crate, and
+     a breaking change raises the bump (at 0.x, the minor version).
+   - **`CHANGELOG.md`** gets one generated section for the release, from the commits of all
+     four crates.
+2. **Review the PR.** CI runs on it like any other.
+   - **The version:** correct it by hand for a behaviour break the semver check can't see, such
+     as a function that returns different results for the same input. Remember that one break
+     in any crate bumps all four.
+   - **The changelog:** rewrite the generated section into the usual form: one subsection per
+     crate, in Keep a Changelog's headings, describing changes rather than listing commits.
+3. **Merge it.** The workflow's `release` job then:
+   - publishes the four crates through trusted publishing, in dependency order
+   - tags the release `v<version>`
+   - makes the GitHub release
+4. **Check, as for 0.1.0 (step 6):** docs.rs's builds, the crates.io pages, and a new project
+   that depends on the new version.
+
+**The first release PR is the test of this setup.** Some of release-plz's behaviour wasn't
+confirmed by its documentation:
+- **Versions:** whether it updates the version the crates inherit from `[workspace.package]`.
+- **The changelog:** where it inserts the new section in the hand-written `CHANGELOG.md`.
+- **The tokens:** whether `persist-credentials: false`, as in its quickstart, suits the App's
+  token.
+
+Read that PR's diff for each before merging, and fix `release-plz.toml` if any is wrong.
+Nothing is published until it merges.

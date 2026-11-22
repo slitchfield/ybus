@@ -362,22 +362,39 @@ anything automates it. `release-plz` is set up after them.
           configuration for a file that doesn't exist yet, which its RFC suggests but doesn't
           confirm. If it refuses, `Releasing.md`'s step 7 configures it after the `release-plz`
           PR instead.
-- [ ] A crates.io account through GitHub, and an API token scoped to publishing new crates,
+- [x] A crates.io account through GitHub, and an API token scoped to publishing new crates,
       with an expiry. The first publish of a new crate can't use trusted publishing.
-- [ ] Publish 0.1.0 with `cargo publish --workspace`, in dependency order: `ybus_sparse`,
+- [x] Publish 0.1.0 with `cargo publish --workspace`, in dependency order: `ybus_sparse`,
       `ybus_ipm`, `ybus_cuda`, `ybus_powerflow`. Tag the release and make a GitHub release
       from the changelog.
-- [ ] Trusted publishing for each crate on crates.io, linked to the repository's release
+- [x] Trusted publishing for each crate on crates.io, linked to the repository's release
       workflow, `release-plz.yml`, so later releases need no stored token. Then revoke the first
       token.
-- [ ] Check what was published:
+      - **Done by the maintainer** (2026-11-22): the account, the publish of 0.1.0, the
+        `v0.1.0` tag and GitHub release, and trusted publishing on each crate.
+- [x] Check what was published:
       - docs.rs built each crate, with the feature labels
       - each crates.io page shows its README with working links
       - a new project that depends on `ybus_powerflow` with `features = ["rayon", "cuda"]`
         builds
 
       Then the root README's crate table gets crates.io and docs.rs links.
-- [ ] `release-plz`, for every release after 0.1.0:
+      - **Checked (2026-11-22):**
+        - **docs.rs** reports all four 0.1.0 builds successful. `DcStudy`'s page shows the
+          `cuda` and `rayon` labels.
+        - **The READMEs on crates.io** have no relative links (15–17 links each, all absolute).
+        - **A new project** depending on `ybus_powerflow` 0.1.0 with `rayon` and `cuda`
+          resolved it from crates.io and built, with no CUDA toolkit needed.
+        - **The README's crate table** links each crate's crates.io and docs.rs pages.
+- [ ] `release-plz`, for every release after 0.1.0. Configured (2026-11-22):
+      `release-plz.toml` and the workflow, and `Releasing.md`'s routine. Decided:
+      - **Testing:** the first release PR tests it, since nothing publishes until it merges.
+        A local `release-plz update` run was blocked by the agent's permissions.
+      - **The token:** a GitHub App's, so CI runs on the release PR.
+      - **The changelog:** one generated section per release, rewritten in the PR.
+
+      Left: the maintainer makes and installs the App (`Releasing.md`, "Once: the GitHub
+      App"), and the first release PR confirms the configuration. The item is checked then.
       - **Its configuration:** `release-plz.toml`, with the four crates in one version group and
         the changelog's layout.
       - **A workflow with its two jobs,** in `.github/workflows/release-plz.yml`, the name
