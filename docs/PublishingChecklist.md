@@ -254,6 +254,11 @@ and the root README notes the renames once.
         and on any warning but two accepted kinds. Each is matched in full, as cargo 1.99 words it:
         - `ignoring test|example|benchmark … not included in the published package`, P3's 58
         - `aborting upload due to dry run`, once for each crate
+        - **Added after 0.1.0's publish (2026-11-22):** `crate ybus_<name>@<version> already
+          exists on crates.io index`, once for each crate. `main` keeps the published version
+          until the next release bumps it, so the job failed on every crate once 0.1.0 was out.
+          The dry run still packages and builds each crate; a real publish refuses an existing
+          version anyway.
 
         Anything else, such as `manifest has no description`, fails it.
       - **Found:**
