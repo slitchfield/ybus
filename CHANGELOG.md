@@ -11,7 +11,7 @@ version bump (0.1 to 0.2) may break the API, and a patch bump doesn't.
 
 ## [Unreleased]
 
-## [0.1.0] - YYYY-MM-DD
+## [0.1.0] - 2026-11-22
 
 The first release on crates.io. The API is young, so expect breaking changes in the 0.x
 releases.
