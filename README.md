@@ -1,14 +1,14 @@
 # ybus
 
 Sparse linear algebra, power flow and interior-point optimization for Rust. A Cargo workspace
-with four crates:
+with five crates, four of them to be published on crates.io and the fifth the C interface:
 
 | Crate | Status | Contents |
 |---|---|---|
-| [`ybus_sparse`](ybus_sparse/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM, COLAMD), sparse Cholesky and LU (complex too, with refactoring, sparse right-hand sides and transposed solves), iterative refinement and condition estimates, conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support. Generic over the element type, including complex numbers. |
-| [`ybus_powerflow`](ybus_powerflow/) | In progress | DC and AC power flow on top of `ybus_sparse`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. It also lists a network's islands and bridges, computes PTDF and LODF from a kept factorization of B′, as MATPOWER does, and solves branch outages by rank-k updates of that factorization, matching a refactored solve, optionally in parallel (`rayon`). Also the optimal power flow, DC and AC, solved by `ybus_ipm`'s MIPS, which matches MATPOWER's `rundcopf` and `runopf` on their reference cases, in the same number of iterations; over every case with costs, recorded in [`docs/benchmarks/`](docs/benchmarks/), it ends as MATPOWER does on every AC case and all but one DC case. |
-| [`ybus_ipm`](ybus_ipm/) | In progress | Interior-point solvers on top of `ybus_sparse`. Done: MIPS, MATPOWER's primal-dual interior-point solver, reimplemented step for step from `mips.m`, with its quadratic-program wrapper. On the problems of MATPOWER's MIPS tests, it ends as MATPOWER does in the same number of iterations, and its results agree within 1.0e-13. |
-| [`ybus_cuda`](ybus_cuda/) | Experimental | The GPU path, on CUDA through `cudarc`, for phase O2's CUDA spike: a `ybus_sparse` Cholesky or LU factorization uploaded once and solved for blocks of many right-hand sides by cuSPARSE, agreeing with the CPU to within rounding. Needs a CUDA 13 driver and cuSPARSE at run time, not to build. With `ybus_ffi`, one of the two crates with `unsafe` code; the others forbid it. |
+| [`ybus_sparse`](ybus_sparse/) | Usable | Sparse matrices: a hash-map type for building and editing, and compressed (CSR/CSC) types with fixed patterns for arithmetic, products, fill-reducing orderings (AMD, RCM, COLAMD), sparse Cholesky and LU (complex too, with refactoring, sparse right-hand sides and transposed solves), a multifrontal LDLᵀ with threshold Bunch–Kaufman pivoting and its inertia, iterative refinement and condition estimates, conjugate gradient, Matrix Market I/O, optional `serde` and `rayon` support (parallel products, and the LDLᵀ's factorization and solves, bit for bit the serial ones). Generic over the element type, including complex numbers. |
+| [`ybus_powerflow`](ybus_powerflow/) | In progress | DC and AC power flow on top of `ybus_sparse`. Done: the case model, a MATPOWER case reader, DC power flow, which agrees with MATPOWER on all 78 of its cases, and AC power flow by Newton–Raphson and fast-decoupled (XB and BX), optionally enforcing generator reactive limits, which match MATPOWER's `runpf` on its reference cases. On every MATPOWER case, it converges exactly where MATPOWER does, in the same number of iterations, and with limits holds the same generators. It also lists a network's islands and bridges, computes PTDF and LODF from a kept factorization of B′, as MATPOWER does, and solves branch outages by rank-k updates of that factorization, matching a refactored solve, optionally in parallel (`rayon`). Also the optimal power flow, DC and AC, solved by `ybus_ipm`'s MIPS, which matches MATPOWER's `rundcopf` and `runopf` on their reference cases, in the same number of iterations; over every case with costs, recorded in [`docs/benchmarks/`](docs/benchmarks/), it ends as MATPOWER does on every AC case and all but one DC case. Or solved by `ybus_ipm`'s predictor-corrector method, usually in fewer iterations. OPF models solve many cases on one network, warm-started from an earlier solution, and batches solve a case's outages, optionally in parallel (`rayon`), as is the AC OPF's evaluation. |
+| [`ybus_ipm`](ybus_ipm/) | In progress | Interior-point solvers on top of `ybus_sparse`. Done: MIPS, MATPOWER's primal-dual interior-point solver, reimplemented step for step from `mips.m`, with its quadratic-program wrapper. On the problems of MATPOWER's MIPS tests, it ends as MATPOWER does in the same number of iterations, and its results agree within 1.0e-13. And a primal-dual method with Mehrotra's predictor-corrector, written from the literature. Either solver factors its KKT systems by LU or by `ybus_sparse`'s LDLᵀ, starts cold or warm, and with `rayon` factors in parallel. |
+| [`ybus_cuda`](ybus_cuda/) | Experimental | The GPU path, on CUDA through `cudarc`, from phase O2's CUDA spike: a `ybus_sparse` Cholesky or LU factorization uploaded once and solved for blocks of many right-hand sides by cuSPARSE, agreeing with the CPU to within rounding. Also `GpuLdlt`, NVIDIA cuDSS's LDLᵀ, which the solvers don't use: on their KKT matrices its results were wrong ([`docs/benchmarks/o5-cudss-spike-2026-11-22.md`](docs/benchmarks/o5-cudss-spike-2026-11-22.md)). Needs a CUDA 13 driver and cuSPARSE at run time, and cuDSS for `GpuLdlt`, not to build. With `ybus_ffi`, one of the two crates with `unsafe` code; the others forbid it. |
 | [`ybus_ffi`](ybus_ffi/) | In progress | The C interface to `ybus_powerflow`, built as the `ybus` library with a header generated by cbindgen, following [`docs/FfiChecklist.md`](docs/FfiChecklist.md). Done: the crate and its version, the generated header (checked in CI), a C test harness, the guard that turns failures and panics into status codes, a code for each `PowerflowError`, each thread's last error message, and cases: loaded from a file or bytes, their sizes and scalars, every column read and set by field code, bus names, and costs; and the DC and AC power flows, with their options, solutions read by the case's field codes, and models solved for many scenarios; and the DC and AC optimal power flows, with options for either solver, and their prices and multipliers at MATPOWER's columns; with the C tests also run under ASan and UBSan, a C example, a checked record of the exports, and the boundary's cost measured, at most 0.03% of a solve. |
 
 The name is the bus admittance matrix, Y<sub>bus</sub>: the sparse matrix every power flow
@@ -21,8 +21,8 @@ written with.
 
 See [`ybus_sparse/README.md`](ybus_sparse/README.md) for the matrix library's quick start and
 API overview, [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) for the completed power
-flow roadmap, and [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md) for the next
-one: optimal power flow, interior-point solvers and acceleration.
+flow roadmap, and [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md) for the
+completed one that followed it: optimal power flow, interior-point solvers and acceleration.
 
 ## Development
 
@@ -80,12 +80,14 @@ one: optimal power flow, interior-point solvers and acceleration.
 
 - [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md) is the completed roadmap toward
   DC/AC power flow.
-- [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md) is the roadmap that follows:
-  optimal power flow by a reimplementation of MATPOWER's MIPS, a simpler interior-point solver of
-  our own, and accelerating the power flow and both solvers.
+- [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md) is the completed roadmap that
+  followed it (phases O1 to O5): optimal power flow by a reimplementation of MATPOWER's MIPS, a
+  simpler interior-point solver of our own, and accelerating the power flow and both solvers,
+  on the GPU and in parallel.
 - [`docs/LongTermGoals.md`](docs/LongTermGoals.md) records the goals beyond these roadmaps, with
   coarse plans: foreign function interfaces to C, Python and Julia, benchmarks against other
-  power flow libraries, security-constrained OPF, and reading ARPA-E's SC-ACOPF data.
+  power flow libraries, security-constrained OPF, reading ARPA-E's SC-ACOPF data, a line search
+  for the predictor-corrector method, and KKT formulations a GPU solver can factor.
 - [`docs/FfiChecklist.md`](docs/FfiChecklist.md) is the roadmap for the first of those goals: a
   C interface to `ybus_powerflow`, then Python and Julia bindings.
 - [`docs/PublishingChecklist.md`](docs/PublishingChecklist.md) is the roadmap to a first release
@@ -154,6 +156,11 @@ first and second derivatives written from Technical Note 2's formulas (cited bel
 MATPOWER's `dSbus_dV`, `d2Sbus_dV2` and related functions. All three are reimplementations, as
 the power flows are.
 
+`ybus_ipm`'s predictor-corrector method (`ybus_ipm::mehrotra`) was written from the
+publications below: Mehrotra's method, with the inertia correction of Wächter and Biegler's
+IPOPT paper. So were the pieces both solvers share: the
+pivoted LDLᵀ they factor KKT systems with, its matched ordering, and the warm starts.
+
 MATPOWER 8.1 runs its newer MP-Core implementation by default, while `ybus_powerflow` follows the
 legacy functions named above. The committed DC and Newton reference results come from
 MP-Core; for Newton's method it agrees with the legacy code within 6.4e-12 on case118. Its
@@ -205,16 +212,34 @@ differently from the legacy `pfsoln` in 10 cases
 | `ybus_powerflow::case` (`Case::parse`) | The MATPOWER case format, as `caseformat.m` defines it | R. D. Zimmerman and C. E. Murillo-Sánchez, *MATPOWER User's Manual*, Version 8.1, 2025. [doi:10.5281/zenodo.15871661](https://doi.org/10.5281/zenodo.15871661) |
 | `ybus_powerflow::ac` (`AcModel::jacobian`, Newton's method) and `ybus_powerflow::opf::ac` | The power flow equations' derivatives in complex matrix form, `dS/dVa` and `dS/dVm`, and for the AC optimal power flow the second derivatives of the bus injections and of the branch flows' squared apparent power | R. D. Zimmerman, "AC power flows, generalized OPF costs and their derivatives using complex matrix notation," MATPOWER Technical Note 2, February 2010. [doi:10.5281/zenodo.3237866](https://doi.org/10.5281/zenodo.3237866) |
 | `ybus_powerflow::ac` (`AcMethod::FastDecoupledXb`, `FastDecoupledBx`) | Fast-decoupled power flow, XB and BX, as MATPOWER's `fdpf` and `makeB` compute it | B. Stott and O. Alsaç, "Fast decoupled load flow," *IEEE Trans. Power App. Syst.* PAS-93(3):859–869, 1974. |
+| `Ldlt`, `SymbolicLdlt` | The multifrontal LDLᵀ: dense fronts on the elimination tree, a pivot that fails the test delayed to the parent front | I. S. Duff and J. K. Reid, "The multifrontal solution of indefinite sparse symmetric linear equations," *ACM Trans. Math. Softw.* 9(3):302–325, 1983. [doi:10.1145/356044.356047](https://doi.org/10.1145/356044.356047) |
+| | | J. W. H. Liu, "The multifrontal method for sparse matrix solution: theory and practice," *SIAM Rev.* 34(1):82–109, 1992. [doi:10.1137/1034004](https://doi.org/10.1137/1034004) |
+| | | I. S. Duff, "MA57—a code for the solution of sparse symmetric definite and indefinite systems," *ACM Trans. Math. Softw.* 30(2):118–144, 2004. [doi:10.1145/992200.992202](https://doi.org/10.1145/992200.992202) |
+| `SymbolicLdlt` (`Amalgamation`) | Relaxed supernode amalgamation: small fronts merged into larger ones | C. Ashcraft and R. Grimes, "The influence of relaxed supernode partitions on the multifrontal method," *ACM Trans. Math. Softw.* 15(4):291–309, 1989. [doi:10.1145/76909.76910](https://doi.org/10.1145/76909.76910) |
+| `experimental::DenseLdlt`, and each front of `Ldlt` | Threshold Bunch–Kaufman pivoting: 1×1 and 2×2 pivots, with `L`'s entries bounded, and the inertia from `D` | J. R. Bunch and L. Kaufman, "Some stable methods for calculating inertia and solving symmetric linear systems," *Math. Comp.* 31(137):163–179, 1977. [doi:10.1090/S0025-5718-1977-0428694-0](https://doi.org/10.1090/S0025-5718-1977-0428694-0) |
+| | | C. Ashcraft, R. G. Grimes and J. G. Lewis, "Accurate symmetric indefinite linear equation solvers," *SIAM J. Matrix Anal. Appl.* 20(2):513–561, 1998. [doi:10.1137/S0895479896296921](https://doi.org/10.1137/S0895479896296921) |
+| `experimental::StaticLdlt` (`factor_static_ldlt`, `factor_static_ldlt_replacing`) | Up-looking LDLᵀ with static pivots, on the Cholesky analysis: exact on a quasi-definite matrix, and with small pivots replaced, regularized | T. A. Davis, "Algorithm 849: a concise sparse Cholesky factorization package," *ACM Trans. Math. Softw.* 31(4):587–591, 2005. [doi:10.1145/1114268.1114277](https://doi.org/10.1145/1114268.1114277) |
+| | | R. J. Vanderbei, "Symmetric quasidefinite matrices," *SIAM J. Optim.* 5(1):100–113, 1995. [doi:10.1137/0805005](https://doi.org/10.1137/0805005) |
+| | | A. Altman and J. Gondzio, "Regularized symmetric indefinite systems in interior point methods for linear and quadratic optimization," *Optim. Methods Softw.* 11(1–4):275–302, 1999. [doi:10.1080/10556789908805754](https://doi.org/10.1080/10556789908805754) |
+| `symmetric_scaling` | Ruiz's symmetric scaling, each row's and column's largest entry brought near 1 | P. A. Knight, D. Ruiz and B. Uçar, "A symmetry preserving algorithm for matrix scaling," *SIAM J. Matrix Anal. Appl.* 35(3):931–955, 2014. [doi:10.1137/110825753](https://doi.org/10.1137/110825753) |
+| `ybus_ipm::mehrotra` (`mehrotra`, `qps_mehrotra`) | A primal-dual interior-point method with Mehrotra's predictor-corrector | S. Mehrotra, "On the implementation of a primal-dual interior point method," *SIAM J. Optim.* 2(4):575–601, 1992. [doi:10.1137/0802028](https://doi.org/10.1137/0802028) |
+| | | J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd ed., Springer, 2006. [doi:10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5) |
+| `ybus_ipm::mehrotra` (`MehrotraOptions::inertia_correction`) | Inertia correction: the Hessian shifted until the KKT matrix's inertia is right, as in Algorithm IC | A. Wächter and L. T. Biegler, "On the implementation of an interior-point filter line-search algorithm for large-scale nonlinear programming," *Math. Program.* 106(1):25–57, 2006. [doi:10.1007/s10107-004-0559-y](https://doi.org/10.1007/s10107-004-0559-y) |
+| `ybus_ipm::kkt` (`KktOrdering::Matched`) | The matched ordering: each constraint paired with a variable it touches, the pairs ordered together | I. S. Duff and S. Pralet, "Strategies for scaling and pivoting for sparse symmetric indefinite problems," *SIAM J. Matrix Anal. Appl.* 27(2):313–340, 2005. [doi:10.1137/04061043X](https://doi.org/10.1137/04061043X) |
+| `ybus_ipm::start` (`Start`, `WarmStart`) | Warm starts: a previous solution's point and multipliers, its slacks and inequality multipliers shifted away from zero | E. A. Yildirim and S. J. Wright, "Warm-start strategies in interior-point methods for linear programming," *SIAM J. Optim.* 12(3):782–810, 2002. [doi:10.1137/S1052623400369235](https://doi.org/10.1137/S1052623400369235) |
+| | | J. Gondzio and A. Grothey, "A new unblocking technique to warmstart interior point methods based on sensitivity analysis," *SIAM J. Optim.* 19(3):1184–1210, 2008. [doi:10.1137/060678129](https://doi.org/10.1137/060678129) |
 | `ybus_ipm::mips` (`mips`, `qps_mips`) | MIPS, MATPOWER's primal-dual interior-point solver, as its `mips.m` and `qps_mips.m` implement it (see above) | H. Wang, C. E. Murillo-Sánchez, R. D. Zimmerman and R. J. Thomas, "On computational issues of market-based optimal power flow," *IEEE Trans. Power Syst.* 22(3):1185–1193, 2007. [doi:10.1109/TPWRS.2007.901301](https://doi.org/10.1109/TPWRS.2007.901301) |
 | `ybus_powerflow::dc`, `ybus_powerflow::ac`, `ybus_powerflow::islands` and `ybus_powerflow::opf`, and the reference results their tests compare against | DC power flow as MATPOWER's `rundcpf` computes it, AC power flow as its `runpf` does, PTDF and LODF as its `makePTDF` and `makeLODF` do, islands and bridges as its `find_islands` and `find_bridges` find them, and generator costs and the DC and AC optimal power flows as its `opf_setup`, `makeAy`, `makeAang`, `makeAvl`, `dcopf_solver` and `nlpopf_solver` build and solve them (see above) | R. D. Zimmerman, C. E. Murillo-Sánchez and R. J. Thomas, "MATPOWER: Steady-state operations, planning, and analysis tools for power systems research and education," *IEEE Trans. Power Syst.* 26(1):12–19, 2011. [doi:10.1109/TPWRS.2010.2051168](https://doi.org/10.1109/TPWRS.2010.2051168) |
 | | | R. D. Zimmerman and C. E. Murillo-Sánchez, MATPOWER, Version 8.1 [software], 2025. <https://matpower.org>, [doi:10.5281/zenodo.15871662](https://doi.org/10.5281/zenodo.15871662) |
 
-### Planned (see [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md))
+### Planned (see [`docs/LongTermGoals.md`](docs/LongTermGoals.md))
 
 | Planned work | Reference |
 |---|---|
-| A simpler primal-dual interior-point solver of our own | J. Nocedal and S. J. Wright, *Numerical Optimization*, Springer, 2006. [doi:10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5) |
-| | S. Mehrotra, "On the implementation of a primal-dual interior point method," *SIAM J. Optim.* 2(4):575–601, 1992. [doi:10.1137/0802028](https://doi.org/10.1137/0802028) |
+| A filter line search for the predictor-corrector method (goal 5) | A. Wächter and L. T. Biegler, "On the implementation of an interior-point filter line-search algorithm for large-scale nonlinear programming," *Math. Program.* 106(1):25–57, 2006. [doi:10.1007/s10107-004-0559-y](https://doi.org/10.1007/s10107-004-0559-y) |
+| KKT formulations a GPU solver can factor: a regularized KKT matrix, and condensed forms (goal 6) | S. Shin, M. Anitescu and F. Pacaud, "Accelerating optimal power flow with GPUs: SIMD abstraction of nonlinear programs and condensed-space interior-point methods," *Electr. Power Syst. Res.* 236, article 110651, 2024. [doi:10.1016/j.epsr.2024.110651](https://doi.org/10.1016/j.epsr.2024.110651) |
+| | S. Regev, N.-Y. Chiang, E. Darve, C. G. Petra, M. A. Saunders, K. Świrydowicz and S. Peleš, "HyKKT: a hybrid direct-iterative method for solving KKT linear systems," *Optim. Methods Softw.* 38(2):332–355, 2023. [doi:10.1080/10556788.2022.2124990](https://doi.org/10.1080/10556788.2022.2124990) |
+| | F. Pacaud, S. Shin, A. Montoison, M. Schanen and M. Anitescu, "Condensed interior-point methods for scalable nonlinear programming on GPUs," *Math. Program. Comput.*, 2026. [doi:10.1007/s12532-026-00335-0](https://doi.org/10.1007/s12532-026-00335-0) |
 
 ### Licenses of related software
 
@@ -233,5 +258,13 @@ The current terms of the most relevant implementations:
   [their README](ybus_powerflow/tests/data/matpower-reference/README.md). MIPS, MATPOWER's solver,
   is under the same BSD 3-clause license; `ybus_ipm::mips` is ported from it, so it and
   the files that restate MIPS's tests keep MIPS's notice ([`LICENSE-MIPS`](LICENSE-MIPS)).
+
+- **HSL's MA57 and MA97:** under HSL's own licences, not an open-source license. Only their
+  published papers are cited, as descriptions of delayed pivoting.
+- **IPOPT:** Eclipse Public License 2.0. The inertia correction follows its paper (Wächter and
+  Biegler, cited above), not its code.
+- **NVIDIA's CUDA driver, cuSPARSE, NVRTC and cuDSS:** proprietary, under NVIDIA's license
+  terms. `ybus_cuda` loads them at run time, if installed, and neither the repository nor its
+  packages include or redistribute them.
 
 Before relying on these, check them against each project's current `LICENSE` file.
