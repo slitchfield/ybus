@@ -167,10 +167,13 @@ that the KKT factorization can run on the GPU. Recorded 2026-11-22, from phase O
   - **The formulations to weigh, from the literature:**
     - **A regularized, quasi-definite KKT matrix** (Vanderbei, 1995; Altman and Gondzio, 1999),
       factored by a static LDLᵀ: the smallest change to the solvers.
-    - **LiftedKKT** (Shin, Pacaud and Anitescu, 2023): equality constraints relaxed into
-      inequalities, so the KKT system condenses to a positive definite one.
-    - **HyKKT** (Regev et al., 2023): an augmented-Lagrangian Schur complement solved by
-      conjugate gradient, with an inner Cholesky.
+    - **LiftedKKT** (Shin, Anitescu and Pacaud, *Electr. Power Syst. Res.*, 2024): equality
+      constraints relaxed into inequalities, so the KKT system condenses to a positive definite
+      one.
+    - **HyKKT** (Regev et al., *Optim. Methods Softw.*, 2023): an augmented-Lagrangian Schur
+      complement solved by conjugate gradient, with an inner Cholesky.
+    - **The two compared on GPUs** (Pacaud et al., *Math. Program. Comput.*, 2026). The README's
+      References give all three in full.
   - **An option first,** off by default, on the CPU before the GPU, so that it's judged apart
     from the device.
   - **Surveyed under O3's bar:** speedups recorded against the CPU at 1 and 14 threads, the
