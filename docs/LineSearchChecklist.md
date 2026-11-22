@@ -141,13 +141,27 @@ for the defaults its papers name.
     named three KKT points until now. So PR 1's hs71 test asserts a verified KKT point that
     isn't the local maximum, not "the minimum": a line search guarantees progress to a KKT
     point, not to the global one.
-- [ ] **The filter line search** (§2.3–2.4):
+- [x] **The filter line search** (§2.3–2.4):
   - the switching condition, the Armijo test, sufficient decrease, the filter and its
     augmentation
   - backtracking down to `α_min`
   - the second-order correction, up to `p_max` times
   
   Until PR 2, a solve with no acceptable step fails there.
+  - **Done,** with the paper's constants (`filter.rs`):
+    - **`θ_max` and `θ_min`:** `10⁴` and `10⁻⁴` times `max(1, θ₀)`.
+    - **The filter resets** at each barrier update.
+    - **The directional derivative** `∇φᵀd` is over `x` and the inequalities' slacks.
+    - **The second-order correction** solves the same factorization with the constraints'
+      residuals accumulated, and is judged at the full step's length, as §2.4 has it.
+    - **The trial's evaluation** becomes the next iterate's, so an accepted first trial costs
+      nothing extra.
+  - **It also runs on a problem with no inequalities or bounds,** where `φ` is just `f`.
+  - **The record gains the filter's size,** so that a skipped augmentation is observable.
+  - **Measured on the test problems:**
+    - **hs71 from 1:** where `Off` stops at the iteration limit (KKT residual 0.4), the filter
+      reaches the optimum in 25 iterations, with one backtrack.
+    - **Elsewhere,** the outcomes match `Off`'s.
 - [ ] **Tests** (`ybus_ipm/tests/line_search_test.rs`):
   - **hs71 from its local-maximum start,** which must reach the minimum.
   - **The nonconvex problems:** `Nonlinear2` and `Nonlinear3`.
