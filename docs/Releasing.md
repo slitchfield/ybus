@@ -32,8 +32,8 @@ up, this guide also gains the routine for every release after 0.1.0.
 - In `CHANGELOG.md`, replace `YYYY-MM-DD` in the 0.1.0 heading with the release date, then
   commit that through a PR as usual.
 - **Check that each name is still free:** `https://crates.io/crates/<name>` for each of
-  `ybus_sparse`, `ybus_ipm`, `ybus_cuda` and `ybus_powerflow` should show no crate. A search for
-  `ybus` on 2026-11-16 found none of them taken.
+  `ybus_sparse`, `ybus_ipm`, `ybus_cuda` and `ybus_powerflow` should show no crate. None was
+  taken on 2026-11-22, checked through crates.io's API.
 
 ### 2. The account and the token
 
@@ -119,7 +119,13 @@ why 0.1.0 needed the token.
 1. **On each crate's crates.io page,** under Settings, then Trusted Publishing, add a GitHub
    configuration:
    - the repository owner and name, `slitchfield` and `ybus`
-   - the release workflow's file name, which P5 decides when it sets up `release-plz`
+   - the release workflow's file name, `release-plz.yml` (decided 2026-11-22), the bare name of
+     a file in `.github/workflows/`. The file comes later, in P5's `release-plz` PR.
+     - **Before the file exists:** crates.io's RFC (3691) describes matching the workflow's
+       token against the configuration at publish time, which suggests a configuration can be
+       saved first, but it doesn't say so, and this wasn't confirmed.
+     - **If the form refuses it:** keep the token, merge the `release-plz` PR, then configure
+       trusted publishing and revoke the token.
    - optionally, a GitHub environment the workflow must run in
 2. **Revoke the token** from step 2 under Account Settings, then API Tokens, and run
    `cargo logout`.

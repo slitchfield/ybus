@@ -3,7 +3,7 @@
 The roadmap to a first release of the workspace's Rust crates on crates.io, at 0.1.0. Each
 unchecked item in phases P1 to P5 is sized to be one commit, except P5's first four, which are the
 release's own steps, done by hand. Phase P0's decisions were made with the maintainer on
-2026-11-10, and the release tool on 2026-11-11.
+2026-11-10, the release tool on 2026-11-11, and the release workflow's name on 2026-11-22.
 
 ## Goals
 
@@ -36,17 +36,23 @@ branches, with the PR's description as its report.
 
 ## Where the crates stand
 
-As of `main` at `1570570`:
+As of `main` at `cc1990e` (2026-11-22), after P0 to P4 and the documentation pass (#96):
 
-| Crate | Name on crates.io | State |
-|---|---|---|
-| `sparse_mat` | free | Publishable now: `cargo publish --dry-run` passes, 48 files, 156 KiB compressed. It has a README, keywords, categories and links to the license files. Its README is also its crate documentation, and three of its links are relative (`../docs/…`, `../README.md`), which break on docs.rs and crates.io. |
-| `interior_point` | **taken**, by an unrelated `interior-point` 1.0.0 | `publish = false`, a description only. Its MIPS port is under MIPS's BSD 3-clause license, which its `license` doesn't say yet, and `LICENSE-MIPS` isn't in its package. |
-| `powerflow` | free, but an unrelated `power_flow` exists | `publish = false`, a description only. Its package is 182 files, 1.1 MiB (322 KiB compressed, far below the limit), with 704 KB of MATPOWER reference results in `tests/data`, plus benchmarks and survey examples that need the repository's fetched cases. It re-exports `interior_point`'s types in `powerflow::opf`, and its `cuda` feature needs `ybus_cuda` published. |
-| `ybus_cuda` | free | `publish = false`, a description only. It builds anywhere, since CUDA is loaded at run time, so docs.rs can build it. |
-| `ybus_ffi` | free | Stays unpublished. |
+| Crate | Name on crates.io | Package | State |
+|---|---|---|---|
+| `ybus_sparse` | free | 36 files, 426.6 KiB (113.5 KiB compressed) | Ready: the dry run packages it and builds it from its package |
+| `ybus_ipm` | free | 19 files, 190.3 KiB (56.1 KiB compressed), with `LICENSE-MIPS` | Ready |
+| `ybus_cuda` | free | 15 files, 126.9 KiB (36.3 KiB compressed) | Ready, experimental |
+| `ybus_powerflow` | free | 26 files, 454.8 KiB (120.8 KiB compressed) | Ready |
+| `ybus_ffi` | free | none | Stays unpublished (`publish = false`) |
 
-Path dependencies have no `version` yet, and no crate has docs.rs metadata.
+- **Each package** holds its sources, README, license texts, `AI-DISCLAIMER.md` and Cargo's
+  generated files, and nothing else.
+- **The names** were checked through crates.io's API on 2026-11-22, `ybus` included.
+- **Everything is at 0.1.0,** from `[workspace.package]`, and every path dependency gives that
+  `version`.
+- **The state before P0** (the crates' old names, a taken `interior-point`, and no manifests,
+  READMEs or docs.rs metadata) is in this file's history.
 
 ## Phase P0: Decisions
 
@@ -323,17 +329,42 @@ and the root README notes the renames once.
 
 ## Phase P5: The first release
 
-The maintainer does the first four items by hand, following
-[`docs/Releasing.md`](Releasing.md), as the first-time workflow to learn before anything
-automates it. `release-plz` is set up after them.
+The maintainer does the account, publish, trusted-publishing and checking items by hand,
+following [`docs/Releasing.md`](Releasing.md), as the first-time workflow to learn before
+anything automates it. `release-plz` is set up after them.
 
+- [x] **Re-checked before the release** (2026-11-22), against `main` at `cc1990e`:
+      - **The names** are all still free ("Where the crates stand").
+      - **The dry run** (`scripts/check-package.sh`) packages and builds all four crates.
+        Cargo 1.99 is installed, past the 1.90 that `cargo publish --workspace` needs.
+      - **CI** passed on `main`'s merges through `d338097` (#95). `cc1990e`'s run, #96's merge,
+        was still in progress; Releasing.md's step 1 requires `main` green before publishing.
+      - **Changed since P4,** and covered by the dry run:
+        - `ybus_cuda` gained `GpuLdlt` (cuDSS, loaded at run time), with `libloading` as a
+          direct dependency, ISC, which `deny.toml` already allows.
+        - `ybus_powerflow` gained the `cudss_kkt` example, which its package leaves out with
+          the other examples.
+      - **The documentation pass (#96)** brought the READMEs, the crates' front pages, the
+        changelog, the AI disclaimer and `LICENSE-MIPS` up to date.
+      - **Left for release day,** in `Releasing.md`'s step 1: the changelog's 0.1.0 date,
+        `YYYY-MM-DD` until then (decided 2026-11-22).
+      - **Decided (2026-11-22):** the release workflow will be
+        `.github/workflows/release-plz.yml`.
+        - **Why now:** crates.io's trusted publishing needs that name, and the workflow comes
+          after the first publish.
+        - **The effect:** trusted publishing can be configured, and the token revoked, right
+          after the publish, before the workflow file exists. That assumes crates.io saves a
+          configuration for a file that doesn't exist yet, which its RFC suggests but doesn't
+          confirm. If it refuses, `Releasing.md`'s step 7 configures it after the `release-plz`
+          PR instead.
 - [ ] A crates.io account through GitHub, and an API token scoped to publishing new crates,
       with an expiry. The first publish of a new crate can't use trusted publishing.
 - [ ] Publish 0.1.0 with `cargo publish --workspace`, in dependency order: `ybus_sparse`,
       `ybus_ipm`, `ybus_cuda`, `ybus_powerflow`. Tag the release and make a GitHub release
       from the changelog.
 - [ ] Trusted publishing for each crate on crates.io, linked to the repository's release
-      workflow, so later releases need no stored token. Then revoke the first token.
+      workflow, `release-plz.yml`, so later releases need no stored token. Then revoke the first
+      token.
 - [ ] Check what was published:
       - docs.rs built each crate, with the feature labels
       - each crates.io page shows its README with working links
@@ -344,7 +375,8 @@ automates it. `release-plz` is set up after them.
 - [ ] `release-plz`, for every release after 0.1.0:
       - **Its configuration:** `release-plz.toml`, with the four crates in one version group and
         the changelog's layout.
-      - **A workflow with its two jobs:**
+      - **A workflow with its two jobs,** in `.github/workflows/release-plz.yml`, the name
+        trusted publishing was configured with:
         - `release-pr` opens and updates the release PR.
         - `release` publishes, tags and makes the GitHub release when that PR merges, through
           trusted publishing.
