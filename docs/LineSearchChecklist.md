@@ -265,17 +265,116 @@ for the defaults its papers name.
 
 ## PR 3: the adaptive barrier
 
-- [ ] **The rules, from the paper, written here before coding:**
+- [x] **The rules, from the paper, written here before coding:**
   - the free mode's progress test
   - when to switch to fixed mode, and its μ
   - when to return
-- [ ] **`LineSearch::AdaptiveFilter`:**
+  - **Written 2026-11-22,** from §5 ("Globalization Framework") and §6 of the paper's 2005
+    report: J. Nocedal, A. Wächter and R. A. Waltz, "Adaptive barrier strategies for nonlinear
+    interior methods," IBM Research Report RC23563, February 2005, read from the copy on
+    Optimization Online (`optimization-online.org/wp-content/uploads/2005/03/1089.pdf`). The
+    2009 *SIAM J. Optim.* version wasn't available to read, so these rules are the report's.
+  - **The defaults the report leaves open** come from IPOPT's options documentation
+    (`coin-or.org/Ipopt/OPTIONS.html`), each read verbatim on 2026-11-22:
+    `adaptive_mu_kkterror_red_fact = 0.9999`, `adaptive_mu_kkterror_red_iters = 4`,
+    `adaptive_mu_kkt_norm_type = 2-norm-squared`, `fixed_mu_oracle = average_compl`,
+    `adaptive_mu_monotone_init_factor = 0.8`, and `adaptive_mu_restore_previous_iterate = no`.
+  - **The measure,** the original problem's KKT error (5.1):
+    `Φ = ‖∇L‖² + ‖c‖² + ‖ZXe‖²`. As in IPOPT (§6), each term is divided by its vector's
+    length. Here that's
+    `‖r_d‖²/nx + ‖[g; h + z]‖²/m + ‖[z∘μ; s_l∘π_l; s_u∘π_u]‖²/pairs`, with an empty term
+    left out.
+  - **Free mode's test:** a free iteration's new point is accepted if `Φ̃ ≤ κ M_k`, with
+    `M_k = max{Φ_{k−l}, …, Φ_k}` and `l = min(k, l_max)`: the KKT error falls by `κ = 0.9999`
+    against the largest of the last `l_max + 1 = 5` accepted values. The values are those of
+    accepted free points and of the points where fixed mode returns.
+  - **Free mode's step:** the report allows any rule for μ. Its own implementations also
+    line-searched each free step, with a filter reset every free iteration (§5), and dropped
+    harmful correctors (§7). Here free mode is today's predictor-corrector step, taken whole
+    (decided 2026-11-22), so that wherever `Φ` keeps falling the method is `Off`'s with LDLᵀ and
+    the inertia correction, bit for bit.
+  - **The switch:** if the test fails, fixed mode starts **from the trial point** (the report's
+    framework, and IPOPT's `restore_previous_iterate = no`).
+    - **Its barrier parameter:** `μ̄ = 0.8 ×` the average complementarity there, no lower than
+      fixed mode's floor.
+    - **The filter** is reset, and `M_k` is frozen: nothing joins the window until fixed mode
+      returns.
+    - **A free step that can't be computed, or is longer than `max_stepsize`,** has no trial
+      point, so fixed mode starts from the current point.
+  - **Fixed mode:** PR 1's monotone barrier and filter, with PR 2's restoration.
+  - **The return:** "as soon as `Φ(x, y, z) ≤ κ M_k`", checked at every fixed-mode iterate,
+    including after a restoration phase, without first solving its barrier problem (§5). The
+    returning point's `Φ` joins the reference values.
+  - **Why it converges:** `Φ` falls by `κ` at least every `l_max` iterations, so every limit
+    point is a first-order point (§5). Fixed mode reaches each such point by PR 1's and PR 2's
+    globalization.
+- [x] **`LineSearch::AdaptiveFilter`:**
   - **The free mode:** today's predictor-corrector step, accepted by the free mode's test.
   - **The fixed mode:** PR 1's filter, with PR 2's restoration.
-- [ ] **Tests:**
+  - **Done** (`mehrotra/mod.rs`, `mehrotra/filter.rs`): the rules above.
+    - **One flag, set per iteration:** `fixed`, which replaced PR 1's `filter` in the
+      iteration. It is always on for `MonotoneFilter`, and starts off for `AdaptiveFilter`.
+    - **`filter::kkt_error`** computes `Φ`, and **`filter::Progress`** keeps the reference
+      window. Both have unit tests.
+    - **No freeze is needed:** only free points and returning points join the window, so `M_k`
+      can't change while fixed mode runs. An explicit freeze was written and then removed, once
+      its planted bug (the freeze skipped) proved it changed nothing.
+    - **The record:** the new field `kkt_error`, which is `Φ` on an adaptive iteration.
+    - **A stalled free step,** below `alpha_min` or with complementarity out of range, starts
+      fixed mode instead of failing the solve. A NaN point still fails it.
+    - **A free step that can't be computed** starts fixed mode from the current point, with a
+      record of its own.
+- [x] **Tests:**
   - PR 1's problems
   - the small OPF cases (case9 to case300), within O3's bar of MIPS-LU
   - **Planted bugs:** the switch never taken, and the return never taken
+  - **Done,** 2026-11-22.
+    - **The record replays the rules:** `replay_the_modes` (`tests/line_search_test.rs`) re-applies
+      them from the recorded KKT errors. It checks:
+      - every switch, with fixed mode's `μ̄` at 0.8 of the average complementarity
+      - every return
+      - that nothing else changes mode
+      
+      The starting record carries `Φ₀` for this.
+    - **Free mode is `Off`, bit for bit,** with LDLᵀ and the inertia correction, wherever `Φ` keeps
+      falling: hs71 from `(1, 5, 5, 1)`, Nonlinear2 and Nonlinear3 never switch, and they end at
+      the same `x` in the same iterations.
+    - **hs71 from 2:** `Off` fails, even with the inertia correction. The adaptive barrier switches
+      and returns at least twice each, and converges to PR 1's local KKT point, `f = 27.146`.
+    - **hs71 from 1:** 9 iterations (free, then three fixed, then five free), against `Off`'s 13
+      and `MonotoneFilter`'s 25.
+    - **The Maratos problem and the counterexample** from `(−0.5, 1, 1)`: both converge. On the
+      counterexample, fixed mode's first iteration is already a restoration.
+    - **The small AC OPF cases,** against MIPS-LU run in the same test
+      (`mehrotra_opf_test.rs`): O3's bar on the objective and the KKT residuals, wherever MIPS
+      converges.
+
+      | Case | Iterations | MIPS's | Modes |
+      |---|---|---|---|
+      | case9 | 9 | 11 | one fixed iteration |
+      | case14 | 9 | 11 | free throughout |
+      | case24_ieee_rts | 13 | 13 | two fixed |
+      | case30 | 11 | 15 | free throughout |
+      | case39 | 14 | 16 | two fixed |
+      | case57 | 9 | 10 | free throughout |
+      | case89pegase | 16 | 25 | six fixed |
+      | case118 | 11 | 14 | free throughout |
+      | case300 | 15 | 19 | one fixed; `Off` takes 23 |
+
+      - **Objectives:** within 1.6e-7 of MIPS's.
+      - **case145:** MIPS doesn't converge, and neither does this solver with any line search.
+      - **The prices are reported, not barred.** `Off` itself misses the 1e-3 price bar against
+        MIPS on case57 (LAM_Q 1.7e-3, the same here) and case300 (7.3e-3, against 4.3e-3 here).
+        That bar was measured on the committed cases only.
+    - **`ybus_powerflow::opf` now re-exports `LineSearch` and `IterationMode`.** Before,
+      `MehrotraOptions::line_search` couldn't be set without depending on `ybus_ipm` directly
+      (found 2026-11-22; that gap shipped in 0.2.0).
+    - **Planted bugs, each caught, then reverted:**
+      - the switch never taken
+      - the return never taken
+      - fixed mode's `μ̄` from `μ₀`
+      
+      The fourth, the reference not frozen, changed nothing, so the freeze was removed (above).
 
 ## PR 4: the survey and the default
 

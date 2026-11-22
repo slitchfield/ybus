@@ -31,7 +31,7 @@ use std::f64::consts::PI;
 //   direct dependency on ybus_ipm
 pub use ybus_ipm::interior_point_error::InteriorPointError;
 pub use ybus_ipm::kkt::{KktFactorization, KktOrdering, KktStatistics};
-pub use ybus_ipm::mehrotra::{MehrotraIteration, MehrotraOptions};
+pub use ybus_ipm::mehrotra::{IterationMode, LineSearch, MehrotraIteration, MehrotraOptions};
 pub use ybus_ipm::mips::{MipsIteration, MipsOptions};
 pub use ybus_ipm::solution::{History, KktResiduals, Multipliers, Solution, Status};
 use ybus_ipm::start::Start;

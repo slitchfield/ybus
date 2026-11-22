@@ -23,7 +23,7 @@ use ybus_powerflow::case::Case;
 use ybus_powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use ybus_powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
 use ybus_powerflow::opf::KktResiduals;
-use ybus_powerflow::opf::{KktFactorization, KktOrdering, OpfSolver};
+use ybus_powerflow::opf::{KktFactorization, KktOrdering, LineSearch, OpfSolver};
 
 /// The objective's bar, relative to its magnitude (at least 1)
 const OBJECTIVE: f64 = 1e-6;
@@ -434,4 +434,59 @@ fn committed_cases_meet_the_bar_with_ldlt() {
     //   skip; YBUS_REQUIRE_CASES makes that a failure in matpower_case itself
     assert!(solved == 0 || (refinement_steps.0 > 0 && refinement_steps.1 > 0));
     assert!(found.is_empty(), "{}", found.join("\n"));
+}
+
+/// The small AC cases the adaptive barrier is tested on (docs/LineSearchChecklist.md, PR 3)
+const SMALL_AC: [&str; 10] = [
+    "case9",
+    "case14",
+    "case24_ieee_rts",
+    "case30",
+    "case39",
+    "case57",
+    "case89pegase",
+    "case118",
+    "case145",
+    "case300",
+];
+
+#[test]
+fn the_adaptive_barrier_meets_o3s_bar_against_mips_on_the_small_ac_cases() {
+    // O3's bar, against MIPS-LU run here: wherever MIPS converges, converge, with the
+    //   objective and prices as close and the KKT residuals no worse (RESIDUAL_FACTOR). MIPS
+    //   doesn't converge on case145 (checked 2026-11-22), nor does this solver with any line
+    //   search, so the bar asks nothing there.
+    // The prices are reported, not held to PRICE: that bar was measured on the committed cases
+    //   only, and Off itself misses it against MIPS on case57 (LAM_Q 1.7e-3, the same as here,
+    //   where free mode is Off) and case300 (LAM_Q 7.3e-3, against 4.3e-3 here), 2026-11-22
+    let mut found = vec![];
+    for name in SMALL_AC {
+        let Some(path) = common::normalized_case(name) else {
+            continue;
+        };
+        let case = Case::from_path(&path).unwrap();
+        let mips = ac_opf_with_options(&case, &AcOpfOptions::default()).unwrap();
+        let mut options = AcOpfOptions::mehrotra();
+        if let OpfSolver::Mehrotra(m) = &mut options.solver {
+            m.line_search = LineSearch::AdaptiveFilter;
+        }
+        let s = ac_opf_with_options(&case, &options).unwrap();
+        let c = Comparison {
+            iterations: s.iterations,
+            matpower_iterations: mips.iterations,
+            objective: (s.objective - mips.objective).abs() / mips.objective.abs().max(1.0),
+            lam_p: relative_difference(&s.lam_p, &mips.lam_p),
+            lam_q: relative_difference(&s.lam_q, &mips.lam_q),
+            residuals: s.residuals,
+            mips_residuals: mips.residuals,
+            floors: Floors::new(&s.solver.x, largest_multiplier(&s.solver.multipliers), 1e-4),
+        };
+        report(name, "AC, adaptive barrier, against MIPS", &c);
+        found.extend(
+            problems(name, "AC", s.converged(), mips.converged(), &c)
+                .into_iter()
+                .filter(|p| !p.contains("LAM_")),
+        );
+    }
+    assert!(found.is_empty(), "{found:#?}");
 }

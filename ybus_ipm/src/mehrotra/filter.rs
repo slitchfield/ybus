@@ -51,6 +51,73 @@ pub(super) const KAPPA_RESTO: f64 = 0.9;
 ///   ones are reset to zero
 pub(super) const LAMBDA_MAX: f64 = 1e3;
 
+/// The adaptive barrier's progress test (Nocedal, Wächter and Waltz, 2005 report, §5, with
+///   IPOPT's documented defaults): the KKT error must fall to `κ` of the largest of the last
+///   `l_max + 1` accepted values
+pub(super) const KAPPA_PHI: f64 = 0.9999;
+pub(super) const L_MAX: usize = 4;
+/// Fixed mode's first barrier parameter, as a fraction of the average complementarity where it
+///   starts
+pub(super) const MONOTONE_INIT_FACTOR: f64 = 0.8;
+
+/// The original problem's KKT error `Φ` (§5, eq. 5.1), each squared 2-norm divided by its
+///   vector's length (§6, as IPOPT takes it), an empty term left out: dual infeasibility `rd`,
+///   the constraint residuals `[g; h + z]`, and the complementarity products of `pairs`
+pub(super) fn kkt_error(rd: &[f64], residuals: [&[f64]; 2], pairs: [(&[f64], &[f64]); 3]) -> f64 {
+    let mean_square = |values: &mut dyn Iterator<Item = f64>| -> f64 {
+        let (sum, n) = values.fold((0.0, 0usize), |(sum, n), v| (sum + v * v, n + 1));
+        if n == 0 {
+            0.0
+        } else {
+            sum / n as f64
+        }
+    };
+    mean_square(&mut rd.iter().copied())
+        + mean_square(&mut residuals.iter().flat_map(|r| r.iter().copied()))
+        + mean_square(
+            &mut pairs
+                .iter()
+                .flat_map(|(s, v)| s.iter().zip(v.iter()).map(|(s, v)| s * v)),
+        )
+}
+
+/// The KKT errors the progress test compares against: the last `l_max + 1` accepted ones.
+///   Only free points and the points where fixed mode returns are accepted, so while fixed mode
+///   runs its reference `M_k` stays the one it started with, as the paper's framework has it
+pub(super) struct Progress {
+    accepted: std::collections::VecDeque<f64>,
+}
+
+impl Progress {
+    /// From the starting point's KKT error
+    pub(super) fn new(phi: f64) -> Progress {
+        Progress {
+            accepted: std::collections::VecDeque::from([phi]),
+        }
+    }
+
+    /// `M_k`: the largest accepted value kept
+    pub(super) fn reference(&self) -> f64 {
+        self.accepted
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max)
+    }
+
+    /// Whether `phi` is progress: `Φ ≤ κ M_k`
+    pub(super) fn accepts(&self, phi: f64) -> bool {
+        phi <= KAPPA_PHI * self.reference()
+    }
+
+    /// Accepts `phi`, a free point's or the point where fixed mode returns
+    pub(super) fn push(&mut self, phi: f64) {
+        self.accepted.push_back(phi);
+        while self.accepted.len() > L_MAX + 1 {
+            self.accepted.pop_front();
+        }
+    }
+}
+
 /// The filter: the `(θ, φ)` pairs a trial point must not be dominated by, with the bound
 ///   `θ < θ_max` every trial point must meet
 pub(super) struct Filter {
@@ -213,6 +280,40 @@ mod tests {
             "the filter's entry dominates it"
         );
         assert!(restored(&f, 0.4, 2.0, 1.0), "a better θ than the entry's");
+    }
+
+    #[test]
+    fn the_kkt_error_averages_each_squared_term() {
+        // (1 + 9)/2 + (4)/1 + ((2·3)²)/1, with the empty pairs left out
+        let phi = kkt_error(
+            &[1.0, 3.0],
+            [&[2.0], &[]],
+            [(&[2.0], &[3.0]), (&[], &[]), (&[], &[])],
+        );
+        assert_eq!(phi, 5.0 + 4.0 + 36.0);
+        assert_eq!(
+            kkt_error(&[], [&[], &[]], [(&[], &[]), (&[], &[]), (&[], &[])]),
+            0.0
+        );
+    }
+
+    #[test]
+    fn progress_compares_against_the_largest_of_the_last_five() {
+        let mut p = Progress::new(10.0);
+        assert!(p.accepts(9.999) && !p.accepts(10.0));
+        for phi in [9.0, 8.0, 7.0, 6.0] {
+            p.push(phi);
+        }
+        assert_eq!(p.reference(), 10.0, "five values kept: 10, 9, 8, 7, 6");
+        p.push(5.0);
+        assert_eq!(p.reference(), 9.0, "the oldest, 10, dropped");
+        assert!(
+            p.accepts(8.5),
+            "nonmonotone: worse than the last, better than the largest"
+        );
+        p.push(1.0);
+        assert_eq!(p.reference(), 8.0, "8, 7, 6, 5, 1");
+        assert!(!p.accepts(8.0) && p.accepts(7.9));
     }
 
     #[test]
