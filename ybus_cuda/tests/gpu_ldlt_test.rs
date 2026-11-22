@@ -196,6 +196,36 @@ fn refactoring_repeats_exactly_and_solves_as_a_fresh_factorization() {
 }
 
 #[test]
+fn a_given_ordering_is_used_and_solves_as_cudss_own() {
+    let test = "a_given_ordering_is_used_and_solves_as_cudss_own";
+    let Some(gpu) = gpu(test) else { return };
+    let a = saddle(20, 3, 5, 1.0);
+    let n = a.shape().0;
+    let b = rhs(n, 17);
+    // ybus_sparse's AMD ordering, as the CPU LDLᵀ uses it
+    let symbolic = a
+        .analyze_ldlt(ybus_sparse::compressed_matrix::Ordering::Amd)
+        .unwrap();
+    let ordering = symbolic.cholesky().permutation().to_vec();
+    let Some(mut ordered) = GpuLdlt::with_ordering(&gpu, &a, &ordering).unwrap() else {
+        return;
+    };
+    ordered.factor(&a).unwrap();
+    assert_eq!(ordered.inertia().unwrap(), a.ldlt().unwrap().inertia());
+    let x = refine(&mut ordered, &a, &b, 3);
+    assert!(residual(&a, &x, &b) < 1e-11);
+    let mut own = GpuLdlt::new(&gpu, &a).unwrap().unwrap();
+    own.factor(&a).unwrap();
+    // Different orderings, different factors: the fill differs, and so does the arithmetic
+    assert!(ordered.factor_entries().unwrap() > 0 && own.factor_entries().unwrap() > 0);
+    assert_ne!(ordered.solve(&b).unwrap(), own.solve(&b).unwrap());
+    assert!(matches!(
+        GpuLdlt::with_ordering(&gpu, &a, &ordering[1..]),
+        Err(CudaError::ShapeMismatch { .. })
+    ));
+}
+
+#[test]
 fn the_errors() {
     let test = "the_errors";
     let Some(gpu) = gpu(test) else { return };

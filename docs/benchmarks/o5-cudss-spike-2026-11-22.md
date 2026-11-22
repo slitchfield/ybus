@@ -226,6 +226,77 @@ The evidence, step by step, all measured on the dumped matrices unless said othe
   - **In supernodes:** whether a variable and its constraint would land in the same supernode
     for a 2×2 pivot is up to cuDSS's symbolic analysis.
 
+## Our orderings for cuDSS
+
+Measured after the explanation, to see whether another ordering mitigates the zero block. Each
+ordering `ybus_sparse` and `ybus_ipm` support was given to cuDSS as its elimination order, on
+all 9 matrices, with the new `GpuLdlt::with_ordering` (`CUDSS_DATA_USER_PERM`, which turns
+cuDSS's matching off).
+- **The orderings:**
+  - our AMD, as the CPU's AC solves use it
+  - `ybus_ipm`'s matched ordering, as the DC solves use it, which places each constraint after
+    a coupled variable (reached through a temporary export, not committed)
+  - RCM
+  - natural, which puts every constraint after every variable: skipped, at 425 million
+    predicted factor entries on case9241pegase
+- **The comparisons:** each against cuDSS's own ordering, and the CPU at 1 and 14 threads on
+  the same ordering. All 72 rows are in
+  [`o5-cudss-orderings-2026-11-22.csv`](o5-cudss-orderings-2026-11-22.csv).
+
+**Mitigation: partial, and not enough.**
+
+| Ordering | Exact zero pivots at elimination | cuDSS's perturbed pivots | Correct (inertia, and refined to the tolerance) |
+|---|---|---|---|
+| cuDSS's own | n/a | 7,755–36,786 | 0 of 9 |
+| our AMD | 3,956–21,606 | 120–12,249 | 1 of 9 |
+| matched | 0 | 5,521–14,188 | 0 of 9 |
+| RCM | 2,588–8,335 | 4,464–12,812 | 0 of 9 |
+
+- **Our AMD does best:** on 6 matrices it cuts the perturbed pivots by 91–99% (13,090 to 120
+  on case9241pegase's middle matrix, 36,786 to 453 on case_ACTIVSg25k's). The likely reason is
+  that its supernodes keep a constraint beside a coupled variable, where cuDSS's local 2×2
+  pivots can take it.
+  - **One matrix becomes correct:** case_ACTIVSg25k's middle one, at a residual of 5e-11
+    after three corrections, with the CPU's inertia.
+  - **The rest stay wrong,** at residuals of 1e0–4e5 after refinement. A hundred perturbed
+    pivots are still enough to spoil a solve.
+- **The matched ordering removes every exact zero,** yet 5,521–14,188 pivots are still
+  perturbed. They're tiny rather than zero: most likely variable pivots on W's zero or
+  near-zero diagonal, taken before the constraint they'd pair with. That's inferred, not
+  traced. The CPU on the same ordering still delays 9–2,619 pivots.
+- **RCM** changes little, at 2.5–6 times AMD's fill.
+
+**Speed: cuDSS is fast only on its own ordering, which is the one that's wrong.** One
+iteration's work (a factorization and two refined solves) against the CPU's best, the matched
+ordering:
+
+| | cuDSS, own ordering | cuDSS, our AMD | cuDSS, matched | CPU 1 thread, matched | CPU 14 threads, matched |
+|---|---|---|---|---|---|
+| case9241pegase | 4.8–5.6 ms | 36–47 ms | 41–45 ms | 14.5–19.2 ms | 10.2–12.2 ms |
+| case_ACTIVSg10k | 4.6–4.9 ms | 50–56 ms | 42–45 ms | 16.2–19.0 ms | 11.5–11.8 ms |
+| case_ACTIVSg25k | 10.2–11.4 ms | 124–141 ms | 106–111 ms | 49.3–58.3 ms | 24.4–37.5 ms |
+
+- **On our orderings, cuDSS's factorization is 10–25× slower than on its own:** 96 ms against
+  4.8 ms on case_ACTIVSg25k's middle matrix.
+- **It's also slower than the CPU,** at ×0.33–0.59 of the CPU's speed at one thread and
+  ×0.21–0.37 at 14.
+- **The one correct case** (case_ACTIVSg25k's middle matrix, our AMD) took 140.7 ms on the
+  GPU. That's against 74.0 ms for the CPU on the same ordering at one thread (×0.53) and
+  33.2 ms at 14 threads (×0.23).
+- **The likely reason,** stated by cuDSS's documentation but not measured: its speed comes from
+  its nested-dissection ordering and the partition tree that goes with it, which a supplied
+  permutation doesn't have. cuDSS's own AMD (`CUDSS_REORDERING_ALG_AMD`), tried earlier, was
+  ten times slower too.
+- **Fill doesn't explain it all:** on the same ordering, cuDSS's factors hold 1.5–2.8 times the
+  CPU's entries on AMD, but 0.8–1.3 times on the matched ordering and 0.9 times on RCM, and
+  the matched ordering is as slow. So the slowness is more than the fill.
+
+**So no ordering we support makes cuDSS worth using, at 1 thread or at 14.**
+- **Accuracy:** the orderings that bring the perturbations down cost the speed.
+- **Speed:** the ordering that's fast leaves the perturbations.
+- **Even setting accuracy aside:** a GPU path on our orderings is slower than the CPU it would
+  replace.
+
 ## The gate
 
 Written into the checklist before measuring:

@@ -24,8 +24,10 @@ type Opaque = *mut c_void;
 const CONFIG_DETERMINISTIC_MODE: c_int = 24;
 /// `cudssDataParam_t`'s error indicator and inertia
 const DATA_INFO: c_int = 0;
+const DATA_LU_NNZ: c_int = 1;
 const DATA_NPIVOTS: c_int = 2;
 const DATA_INERTIA: c_int = 3;
+const DATA_USER_PERM: c_int = 9;
 /// `cudssPhase_t`
 const PHASE_ANALYSIS: c_int = 0b11;
 const PHASE_FACTORIZATION: c_int = 1 << 2;
@@ -48,6 +50,7 @@ struct Api {
     data_create: unsafe extern "C" fn(Opaque, *mut Opaque) -> Status,
     data_destroy: unsafe extern "C" fn(Opaque, Opaque) -> Status,
     data_get: unsafe extern "C" fn(Opaque, Opaque, c_int, *mut c_void, usize, *mut usize) -> Status,
+    data_set: unsafe extern "C" fn(Opaque, Opaque, c_int, *const c_void, usize) -> Status,
     execute: unsafe extern "C" fn(Opaque, c_int, Opaque, Opaque, Opaque, Opaque, Opaque) -> Status,
     #[allow(clippy::type_complexity)]
     matrix_create_csr: unsafe extern "C" fn(
@@ -95,6 +98,7 @@ impl Api {
                 data_create: *library.get(b"cudssDataCreate\0")?,
                 data_destroy: *library.get(b"cudssDataDestroy\0")?,
                 data_get: *library.get(b"cudssDataGet\0")?,
+                data_set: *library.get(b"cudssDataSet\0")?,
                 execute: *library.get(b"cudssExecute\0")?,
                 matrix_create_csr: *library.get(b"cudssMatrixCreateCsr\0")?,
                 matrix_create_dn: *library.get(b"cudssMatrixCreateDn\0")?,
@@ -162,7 +166,9 @@ pub struct LdltTimings {
 /// same rule), and the rounding in later updates swamps the matrix: the inertia is wrong, and
 /// refinement doesn't reduce the solves' residuals
 /// (`docs/benchmarks/o5-cudss-spike-2026-11-22.md`). [`GpuLdlt::perturbed_pivots`] reports it.
-/// Regularizing the matrix enough to be quasi-definite removes the perturbations.
+/// Regularizing the matrix enough to be quasi-definite removes the perturbations. Supplying
+/// `ybus_sparse`'s AMD ordering ([`GpuLdlt::with_ordering`]) cuts them by up to 99%, but makes
+/// the factorization 10–25 times slower than on cuDSS's own ordering.
 ///
 /// [`Ldlt`]: ybus_sparse::compressed_matrix::Ldlt
 pub struct GpuLdlt<'g> {
@@ -203,6 +209,43 @@ impl<'g> GpuLdlt<'g> {
     /// Returns `CudaError::ShapeMismatch` for a non-square matrix, `CudaError::TooLarge` past
     /// 32-bit indices, and cuDSS's or the driver's errors.
     pub fn new(gpu: &'g Gpu, a: &CsrMatrix<f64>) -> Result<Option<GpuLdlt<'g>>, CudaError> {
+        GpuLdlt::analyze(gpu, a, None)
+    }
+
+    /// [`GpuLdlt::new`] with the elimination order given: row and column `i` of `P A Pᵀ` are
+    /// row and column `ordering[i]` of `A`, as [`SymbolicLdlt`]'s permutation is, in place of
+    /// cuDSS's own reordering (`CUDSS_DATA_USER_PERM`). cuDSS's matching is off then, as its
+    /// documentation says of a user permutation.
+    ///
+    /// Returns [`GpuLdlt::new`]'s errors, and `CudaError::ShapeMismatch` unless `ordering` has
+    /// one entry per row. Panics unless it's a permutation.
+    ///
+    /// [`SymbolicLdlt`]: ybus_sparse::compressed_matrix::SymbolicLdlt
+    pub fn with_ordering(
+        gpu: &'g Gpu,
+        a: &CsrMatrix<f64>,
+        ordering: &[usize],
+    ) -> Result<Option<GpuLdlt<'g>>, CudaError> {
+        let n = a.shape().0;
+        if ordering.len() != n {
+            return Err(CudaError::ShapeMismatch {
+                expected: n,
+                found: ordering.len(),
+            });
+        }
+        let mut seen = vec![false; n];
+        for &i in ordering {
+            assert!(i < n && !seen[i], "the ordering is a permutation");
+            seen[i] = true;
+        }
+        GpuLdlt::analyze(gpu, a, Some(ordering))
+    }
+
+    fn analyze(
+        gpu: &'g Gpu,
+        a: &CsrMatrix<f64>,
+        ordering: Option<&[usize]>,
+    ) -> Result<Option<GpuLdlt<'g>>, CudaError> {
         let Some(api) = Api::get() else {
             return Ok(None);
         };
@@ -299,6 +342,20 @@ impl<'g> GpuLdlt<'g> {
                 "cudssDataCreate",
                 (api.data_create)(ldlt.handle, &mut ldlt.data),
             )?;
+            if let Some(ordering) = ordering {
+                // Checked a permutation of `n < 2³¹` above
+                let ordering: Vec<c_int> = ordering.iter().map(|&i| i as c_int).collect();
+                check(
+                    "cudssDataSet",
+                    (api.data_set)(
+                        ldlt.handle,
+                        ldlt.data,
+                        DATA_USER_PERM,
+                        ordering.as_ptr().cast(),
+                        std::mem::size_of_val(ordering.as_slice()),
+                    ),
+                )?;
+            }
         }
         ldlt.describe(lower_ptr.len())?;
         // `a`'s values before the analysis: cuDSS 1.0's default matching (`AUTO`) computes its
@@ -533,6 +590,29 @@ impl<'g> GpuLdlt<'g> {
         }
         let [count] = self.data_ints::<1>(DATA_NPIVOTS)?;
         Ok(count.max(0) as usize)
+    }
+
+    /// The entries of cuDSS's factors (`CUDSS_DATA_LU_NNZ`), as its analysis counts them: the
+    /// fill its ordering gives.
+    pub fn factor_entries(&self) -> Result<usize, CudaError> {
+        self.gpu.stream.synchronize()?;
+        let mut value: i64 = 0;
+        let mut written = 0usize;
+        // SAFETY: `value` is a host `int64_t`, the size passed
+        unsafe {
+            check(
+                "cudssDataGet",
+                (self.api.data_get)(
+                    self.handle,
+                    self.data,
+                    DATA_LU_NNZ,
+                    (&mut value as *mut i64).cast(),
+                    std::mem::size_of::<i64>(),
+                    &mut written,
+                ),
+            )?;
+        }
+        Ok(value.max(0) as usize)
     }
 
     /// The time spent so far, by stage.

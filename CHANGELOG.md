@@ -91,7 +91,8 @@ releases.
 - `GpuLdlt`: a sparse symmetric indefinite `L D Lᵀ` on the device through cuDSS 1.0, with its
   inertia, analyzed once and refactored for new values. cuDSS is loaded at run time too, and
   `GpuLdlt::new` returns `Ok(None)` without it. Its solves need refinement, since cuDSS
-  perturbs small pivots, and `GpuLdlt::perturbed_pivots` counts them. On the OPF's KKT matrices
+  perturbs small pivots, and `GpuLdlt::perturbed_pivots` counts them. `GpuLdlt::with_ordering` takes the
+  elimination order, and `GpuLdlt::factor_entries` reports the fill. On the OPF's KKT matrices
   its inertia and solves were wrong, since their zero constraint block needs pivots cuDSS can't
   choose, so the interior-point solvers don't use it.
 

@@ -1222,11 +1222,15 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
     - **So:** the solvers don't get cuDSS, and PRs 4b and 4c aren't built.
     - **The bindings stay** in `ybus_cuda` as `GpuLdlt`, with `perturbed_pivots()` and the
       finding in their docs.
-    - **Not tried:**
-      - a user ordering that eliminates each constraint after a coupled variable (`ybus_ipm`'s
-        matched ordering)
-      - regularizing the solver's KKT matrix for cuDSS, which is a solver change under O3's
-        bar
+    - **Our orderings given to cuDSS (2026-11-22): partial mitigation, and slower than the CPU.**
+      - **AMD:** perturbed pivots fall by up to 99%, but only 1 of 9 matrices comes out
+        correct.
+      - **Matched:** it removes the exact zeros, but 5,521–14,188 tiny pivots are still
+        perturbed.
+      - **Speed:** on any supplied ordering, cuDSS's factorization is 10–25× slower than on its
+        own, so the GPU runs at ×0.21–0.59 of the CPU's speed at 1 and 14 threads.
+    - **Not tried:** regularizing the solver's KKT matrix for cuDSS, which is a solver change
+      under O3's bar.
 
 **Phase O5 is complete** (PRs #88–#94 and this one, 2026-11-22). Next is the publishing plan, P5
 (`docs/PublishingChecklist.md`).
