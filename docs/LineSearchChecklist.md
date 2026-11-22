@@ -111,14 +111,18 @@ for the defaults its papers name.
 
 ## PR 1: the monotone filter line search
 
-- [ ] **This checklist,** and goal 5's entry in `LongTermGoals.md` pointing to it.
-- [ ] **The option, the record and the setup error:**
+- [x] **This checklist,** and goal 5's entry in `LongTermGoals.md` pointing to it.
+- [x] **The option, the record and the setup error:**
   - `LineSearch`, with `Off` as the default
   - `MehrotraIteration`'s new fields, and `#[non_exhaustive]`
   - the LU-with-filter error
   - `mehrotra.rs` moved to `mehrotra/mod.rs`, unchanged
   
   `Off` must be bit for bit.
+  - **Done:** `θ` is recorded on every iteration, since it costs a norm and changes no iterate.
+    The filter's other fields stay at their defaults until the filter fills them.
+  - **Until the next two items,** `MonotoneFilter` only turns the inertia correction on.
+  - **`Off` checked bit for bit:** the 72-case snapshot, in the default and `rayon` builds.
 - [ ] **The monotone barrier** (§3.1):
   - **The barrier:** a fixed `μ_j`, with `τ_j = max(τ_min, 1 − μ_j)`.
   - **Its update:** `μ_{j+1} = max(ε/10, min(κ_μ μ_j, μ_j^{θ_μ}))` once the barrier problem's

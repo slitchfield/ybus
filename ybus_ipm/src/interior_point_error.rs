@@ -22,6 +22,10 @@ pub enum InteriorPointError {
     /// A linear program (no objective Hessian) has no constraints or bounds, which MATPOWER's
     /// `qps_mips` refuses.
     UnboundedLinearProgram,
+    /// The predictor-corrector method's line search was asked for with the KKT systems factored
+    /// by LU: a filter needs LDLᵀ, whose inertia shows whether a step is a descent direction
+    /// (`MehrotraOptions::line_search`, `kkt_factorization`).
+    LineSearchNeedsLdlt,
 }
 
 impl fmt::Display for InteriorPointError {
@@ -36,6 +40,9 @@ impl fmt::Display for InteriorPointError {
                     f,
                     "a linear program must include constraints or variable bounds"
                 )
+            }
+            InteriorPointError::LineSearchNeedsLdlt => {
+                write!(f, "a line search needs the KKT systems factored by LDLᵀ")
             }
         }
     }

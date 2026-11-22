@@ -144,6 +144,36 @@ pub struct MehrotraOptions {
     /// cost iterations (`docs/benchmarks/ldlt-opf-2026-11-08.md`); with LU there's no inertia,
     /// and this has no effect
     pub inertia_correction: bool,
+    /// The step's globalization (see [`LineSearch`]): none by default, today's method. A filter
+    /// needs `kkt_factorization` to be LDLᵀ, and turns `inertia_correction` on
+    pub line_search: LineSearch,
+}
+
+/// How the predictor-corrector method accepts a step (`MehrotraOptions::line_search`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineSearch {
+    /// Every step is taken whole, at the fraction-to-the-boundary length: the method as it was
+    /// before the line search, bit for bit
+    #[default]
+    Off,
+    /// Wächter and Biegler's monotone barrier with their filter line search (see
+    /// `docs/LineSearchChecklist.md`). In progress: so far it turns the inertia correction on and
+    /// records the barrier problem's measures, and the line search itself follows
+    MonotoneFilter,
+}
+
+/// Which phase of the method an iteration belongs to (`MehrotraIteration::mode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IterationMode {
+    /// Mehrotra's adaptive barrier: the method's only mode with `LineSearch::Off`
+    #[default]
+    Free,
+    /// A fixed barrier parameter, with the filter line search
+    Fixed,
+    /// Feasibility restoration
+    Restoration,
 }
 
 impl Default for MehrotraOptions {
@@ -166,6 +196,7 @@ impl Default for MehrotraOptions {
             kkt_factorization: KktFactorization::Lu,
             kkt_ordering: KktOrdering::Amd,
             inertia_correction: false,
+            line_search: LineSearch::Off,
         }
     }
 }
@@ -184,6 +215,7 @@ const DELTA_W_INCREASE: f64 = 8.0;
 /// One iteration's record: the termination measures, the average complementarity and the
 /// centering it chose, the step's 2-norm, the objective and the step lengths.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct MehrotraIteration {
     /// The feasibility measure
     pub feascond: f64,
@@ -208,6 +240,18 @@ pub struct MehrotraIteration {
     /// The inertia correction's shift of `W`, `δ_w` (0 when the inertia was right, and always
     /// with LU)
     pub delta_w: f64,
+    /// The iteration's phase: always [`IterationMode::Free`] with `LineSearch::Off`
+    pub mode: IterationMode,
+    /// The constraint violation after the step, `θ = ‖[g; h + z]‖₁`, over the nonlinear and
+    /// linear rows, the inequalities with their slacks
+    pub theta: f64,
+    /// The barrier function after the step, `φ_μ = f − μ (Σ ln z + Σ ln s_l + Σ ln s_u)`, with
+    /// `f` times `cost_mult`, at the fixed barrier parameter `μ` (0 without a filter)
+    pub barrier: f64,
+    /// How many times the line search halved the step (0 without a filter)
+    pub backtracks: usize,
+    /// Whether the step was a second-order correction (false without a filter)
+    pub second_order: bool,
 }
 
 /// The linear rows and bounds, split as the method uses them.
@@ -476,8 +520,9 @@ impl Evaluation {
 /// long a step, a step length below `alpha_min`, or the average complementarity outside
 /// `[ε, 1/ε]`.
 ///
-/// Returns `InteriorPointError::InvalidOption` for `xi` outside `[0.5, 1)`, and `Dimension` for
-/// inputs of the wrong length.
+/// Returns `InteriorPointError::InvalidOption` for `xi` outside `[0.5, 1)`,
+/// `LineSearchNeedsLdlt` for a line search with LU, and `Dimension` for inputs of the wrong
+/// length.
 pub fn mehrotra<P: Problem>(
     problem: &P,
     constraints: &Constraints,
@@ -516,6 +561,12 @@ pub fn mehrotra_from<P: Problem>(
     if !(0.5..1.0).contains(&opt.xi) {
         return Err(InteriorPointError::InvalidOption { name: "xi" });
     }
+    let filter = opt.line_search != LineSearch::Off;
+    if filter && opt.kkt_factorization != KktFactorization::Ldlt {
+        return Err(InteriorPointError::LineSearchNeedsLdlt);
+    }
+    // A filter's steps must be descent directions, which the inertia correction ensures
+    let inertia_correction = opt.inertia_correction || filter;
     let nx = x0.len();
     if problem.dimension() != nx {
         return Err(InteriorPointError::Dimension { what: "x0" });
@@ -717,6 +768,15 @@ pub fn mehrotra_from<P: Problem>(
     let (mut feascond, mut gradcond, mut compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
     let mut f0 = e.f;
     let mut costcond = 0.0;
+    // θ = ‖[g; h + z]‖₁, the constraint violation the filter measures
+    let theta = |e: &Evaluation, p: &Pairs| -> f64 {
+        e.g.iter().map(|g| g.abs()).sum::<f64>()
+            + e.h
+                .iter()
+                .zip(&p.z)
+                .map(|(h, z)| (h + z).abs())
+                .sum::<f64>()
+    };
     let mut history = vec![MehrotraIteration {
         feascond,
         gradcond,
@@ -724,6 +784,7 @@ pub fn mehrotra_from<P: Problem>(
         costcond,
         mu: average(&p),
         obj: e.f / opt.cost_mult,
+        theta: theta(&e, &p),
         ..MehrotraIteration::default()
     }];
     let tolerances_met = |feas: f64, grad: f64, comp: f64, cost: f64| {
@@ -798,7 +859,7 @@ pub fn mehrotra_from<P: Problem>(
             let Ok(factor) = kkt.factor(nx, &w, &bounds, jg, delta_w) else {
                 break None;
             };
-            if !opt.inertia_correction || factor.inertia().is_none_or(|inertia| inertia == wanted) {
+            if !inertia_correction || factor.inertia().is_none_or(|inertia| inertia == wanted) {
                 break Some(factor);
             }
             kkt.recycle(factor);
@@ -968,6 +1029,8 @@ pub fn mehrotra_from<P: Problem>(
             alphap,
             alphad,
             delta_w,
+            theta: theta(&e, &p),
+            ..MehrotraIteration::default()
         });
         if tolerances_met(feascond, gradcond, compcond, costcond) {
             converged = true;
