@@ -3,6 +3,13 @@
 //   iteration count, and the solution, objective and multipliers close to MATPOWER's, whose
 //   results scripts/generate-mips-reference.sh records in tests/data/mips_reference.txt; and each
 //   problem's known answer to the precision t_mips checks it.
+//
+// Some problems below, with their starting points and expected answers, are restated from
+//   t_qps_mips.m (one of them the example of MATLAB's quadprog documentation, which t_qps_mips
+//   names as its source):
+//   Copyright (c) 2010-2024, Power Systems Engineering Research Center (PSERC)
+//   by Ray Zimmerman, PSERC Cornell
+//   Covered by the 3-clause BSD License; see LICENSE-MIPS at the repository's root.
 
 mod common;
 

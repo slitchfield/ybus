@@ -35,7 +35,8 @@ ybus_sparse = "0.1"
 ```
 
 A quadratic program: minimize `½ xᵀ H x + cᵀ x` subject to three linear constraints and
-`x ≥ 0`.
+`x ≥ 0`. It's the example of MATLAB's `quadprog` documentation, which MIPS's own tests
+(`t_qps_mips.m`) also solve.
 
 ```rust
 use ybus_ipm::mips::{qps_mips, MipsOptions};
