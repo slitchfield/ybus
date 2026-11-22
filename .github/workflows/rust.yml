@@ -7,7 +7,7 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -15,7 +15,7 @@ jobs:
       # MATPOWER's case files aren't committed, so fetch the pinned release. The cache key
       #   hashes the fetch script, which holds the version and its SHA-256, so bumping either
       #   fetches afresh. On a cache hit the script finds its .ybus-verified marker and exits.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           # The normalized cases below have their own cache and key
           path: |
@@ -28,7 +28,7 @@ jobs:
       #   Octave is only installed on a cache miss; on a hit the script finds its complete,
       #   same-source output and exits.
       - id: normalized
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: testdata/matpower/*-normalized
           key: normalized-${{ hashFiles('scripts/fetch-matpower.sh', 'scripts/normalize-cases.sh', 'scripts/normalize_cases.m') }}
@@ -55,7 +55,7 @@ jobs:
     name: MSRV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Keep in sync with rust-version in the root Cargo.toml
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -70,7 +70,7 @@ jobs:
     name: Dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # RustSec advisories, licenses, banned crates and sources, configured in deny.toml.
       #   Advisories can appear without any change here, so this job can start failing on
       #   an unchanged branch; that is the point of running it.
@@ -80,7 +80,7 @@ jobs:
     name: Package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # The publish dry run: each publishable crate is packaged, then built from its package as
@@ -96,7 +96,7 @@ jobs:
     #   nothing waits on it.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
