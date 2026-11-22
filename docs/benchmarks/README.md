@@ -39,6 +39,7 @@ change. Each record names the code, the machine and the method it used.
 | [`o5-parallel-evaluation-2026-11-21.md`](o5-parallel-evaluation-2026-11-21.md) | The AC OPF's evaluation run as concurrent independent parts (O5 target 2, PR 2b), bit for bit: with PR 2a, the predictor-corrector method's AC solves a median ×1.50 at 8 threads (up to ×1.67), from PR 2a's ×1.15 alone the same day; MIPS ×1.03; batches unchanged. Closes target 2. The survey's and the cutoff calibration's CSVs are beside it. |
 | [`o5-allocation-2026-11-21.md`](o5-allocation-2026-11-21.md) | Fewer allocations in the LDLᵀ (O5 target 3, PR 3a: `SymbolicLdlt::refactor`, the KKT solver recycling its factors), bit for bit but no measurable speedup; and the `x86-64-v3` build, bit for bit but slower (AC ×0.80–0.91), its dense kernel 1.83× as long on short columns. The survey's CSV is beside it. |
 | [`o5-parallel-solves-2026-11-21.md`](o5-parallel-solves-2026-11-21.md) | The multifrontal LDLᵀ's solves in parallel (O5 target 3, PR 3b), bit for bit: case_ACTIVSg25k's AC ×1.11–1.12 over `main` (×1.74 at 8 threads), the smaller cases unchanged, their sweeps below the cutoff. The survey's and the cutoff calibration's CSVs are beside it. |
+| [`o5-fused-spike-2026-11-22.md`](o5-fused-spike-2026-11-22.md) | Fused multiply-add in the LDLᵀ, measured before building it (O5 target 3, PR 3c): every fused build slower (`+fma`: kernel ×1.24 as long, AC solves ×0.94–0.96), so no go and no option built. The CSV is beside it. |
 
 ## Measuring
 
