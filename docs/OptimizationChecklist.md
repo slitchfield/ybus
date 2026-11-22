@@ -1074,7 +1074,7 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
         serial triangular solves and rayon's runtime. The solves and kernel are target 3's.
   - **Target 2 is complete:** within one solve, the predictor-corrector method's AC solves
     reach ×1.50 at 8 threads, about half of the ×2.6–3.0 bound.
-- [ ] **SIMD and layouts** (O5 target 3):
+- [x] **SIMD and layouts** (O5 target 3, closed 2026-11-22):
   - **The dense kernel's rank-k update,** vectorized without reordering any element's
     operations, if it isn't auto-vectorized already.
   - **Supernodal or blocked triangular solves.**
@@ -1140,9 +1140,39 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
         threads, at the bound.
       - **Everything else is `main`'s speed** (×0.96–1.02): the smaller trees' sweeps are below
         the cutoff, so their solves stay serial.
-  - [ ] **PR 3c, opt-in fused arithmetic:** planned, unstarted (decided 2026-11-21). It needs
-    the build flag for FMA, and that flag slows the kernel it would fuse, so it waits for a
-    kernel restructured for short columns.
+  - [x] **PR 3c, opt-in fused arithmetic:** measured before it's built (decided 2026-11-22), and
+    not built ([`o5-fused-spike-2026-11-22.md`](benchmarks/o5-fused-spike-2026-11-22.md)).
+    - **Why a spike first:**
+      - **No runtime dispatch:** `forbid(unsafe_code)` rules it out, so fused instructions need
+        a build flag. Without one, `mul_add` calls the C library's `fma`, which is correctly
+        rounded but slow.
+      - **The narrower flag:** `-C target-feature=+fma` keeps the default build's SSE2 width,
+        avoiding PR 3a's AVX2 slowdown.
+      - **The kernel may be memory-bound:** it updates the whole trailing triangle once per
+        pivot, so fusing may save little.
+    - **The spike:** a throwaway patch fusing the dense kernel's updates and the solves'
+      multiply-subtracts (real types), timed in the default build, and in the patch built
+      without a flag, with `+fma`, and with `x86-64-v3`.
+    - **The gate, written before measuring.** Go only if both:
+      - **The kernel:** the `+fma` patch cuts the dense kernel's profile time by at least 10%
+        against the default build, on case_ACTIVSg10k's AC at one thread.
+      - **The solve:** it makes the predictor-corrector method's AC solves at least ×1.05
+        faster, as a median over case9241pegase, case_ACTIVSg10k and case_ACTIVSg25k, at 1 and
+        at 8 threads, in two same-day rounds alternating the builds.
+      
+      Otherwise, no go: the spike is recorded and PR 3c closes with no option built. Also
+      recorded, not gating: `x86-64-v3`, and O3's bar on the three cases.
+    - **On a go:** a runtime option, `LdltOptions::fused` (off by default), threaded through the
+      solvers' options. Its results are the same in every build; only its speed depends on the
+      flag. Then a survey under O3's bar.
+    - **The result: no go.** Every fused build was slower.
+      - **The dense kernel:** ×1.24 as long with `+fma`.
+      - **The AC solves:** a median ×0.94 at one thread and ×0.96 at eight.
+      - **The plan's premise didn't hold:** `+fma` doesn't keep SSE2's width, since FMA3 needs
+        AVX. A 128-bit variant (`-C llvm-args=-force-vector-width=2`) lost more (kernel ×1.54),
+        so the loss is the fused kernel's own.
+      - **Accuracy:** unchanged outcomes and iterations, with differences in the last digits.
+      - **No option was built,** and target 3 closes.
 - [ ] **A GPU KKT factorization** (O5 target 4): a cuDSS spike behind `cuda`. It's gated: only
   if the KKT factorization is still the largest stage of a large AC solve after targets 1–3,
   and O2's transfer measurements leave it room.
