@@ -85,6 +85,7 @@
 //!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
 
 mod filter;
+mod restoration;
 
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
@@ -164,8 +165,11 @@ pub enum LineSearch {
     /// Wächter and Biegler's monotone barrier with their filter line search (see
     /// `docs/LineSearchChecklist.md`): centered Newton steps at a fixed barrier parameter,
     /// lowered as each barrier problem is solved, each accepted or shortened by the filter, with
-    /// second-order corrections and the inertia correction on. In progress: a solve with no
-    /// acceptable step fails, until feasibility restoration is added
+    /// second-order corrections and the inertia correction on. Where no step is acceptable, or
+    /// none can be computed, feasibility restoration (§3.3) minimizes the constraint violation
+    /// until the filter accepts a point with less of it; a solve whose restoration can't, as at
+    /// a local minimizer of the violation, ends as `NumericalFailure` with its last record in
+    /// [`IterationMode::Restoration`]
     MonotoneFilter,
 }
 
@@ -178,7 +182,8 @@ pub enum IterationMode {
     Free,
     /// A fixed barrier parameter, with the filter line search
     Fixed,
-    /// Feasibility restoration
+    /// Feasibility restoration: one record for the whole phase, after it, with its
+    /// iterations in `restoration_iterations`
     Restoration,
 }
 
@@ -262,7 +267,25 @@ pub struct MehrotraIteration {
     pub barrier_parameter: f64,
     /// The filter's entries after the step (0 without a filter)
     pub filter_size: usize,
+    /// In a restoration record ([`IterationMode::Restoration`]), the restoration phase's
+    /// iterations, which the solve's count includes (0 otherwise)
+    pub restoration_iterations: usize,
 }
+
+/// The internal solve's hooks, which feasibility restoration sets for the solve of its own
+///   problem: none for a solve the caller asked for
+#[derive(Default)]
+struct Hooks<'h> {
+    /// Fixed mode's first barrier parameter, in place of `μ₀`
+    mu_start: Option<f64>,
+    /// Whether restoration may not be entered: inside restoration, so that it can't recurse
+    no_restoration: bool,
+    /// Ends the solve, as converged, after an iteration whose point it accepts
+    stop: Option<&'h Stop<'h>>,
+}
+
+/// A solve's early end: whether to stop at a point
+type Stop<'h> = dyn Fn(&[f64]) -> bool + 'h;
 
 /// A trial point of fixed mode's line search: its evaluation and slacks, and its constraint
 /// violation `θ` and barrier function `φ`
@@ -566,6 +589,22 @@ pub fn mehrotra_from<P: Problem>(
     start: Start<'_>,
     options: &MehrotraOptions,
 ) -> Result<Solution, InteriorPointError> {
+    solve_with_hooks(problem, constraints, start, options, &Hooks::default())
+}
+
+/// [`mehrotra_from`] with `hooks`. Generic over `?Sized` problems, so that restoration's solve
+///   runs as `solve_with_hooks::<dyn Problem>`, one instantiation however deeply it would
+//   otherwise nest
+fn solve_with_hooks<P: Problem + ?Sized>(
+    problem: &P,
+    constraints: &Constraints,
+    start: Start<'_>,
+    options: &MehrotraOptions,
+    hooks: &Hooks<'_>,
+) -> Result<Solution, InteriorPointError> {
+    // The linear rows and bounds as given, for restoration's problem, before `constraints` is
+    //   the nonlinear constraints' buffer below
+    let linear = constraints;
     // The warm start, if any, named apart from the cold start's own `start` below
     let (x0, warm_start): (&[f64], _) = match start {
         Start::Cold(x0) => (x0, None),
@@ -822,10 +861,10 @@ pub fn mehrotra_from<P: Problem>(
     //   convergence test reachable: that test sums complementarity over every pair, as MIPS's
     //   does, where the paper's floor, ε/10, bounds each pair's
     let mu_floor = opt.comptol / (10.0 * pairs.max(1) as f64);
-    let mut mu_bar = match warm_start {
+    let mut mu_bar = hooks.mu_start.unwrap_or(match warm_start {
         None => filter::MU_INIT,
         Some(_) => average(&p).max(mu_floor),
-    };
+    });
     // The filter, and the bounds on θ it works between, from the start's (§2.3, with the
     //   paper's defaults)
     let theta_start = theta(&e, &p).max(1.0);
@@ -1025,15 +1064,18 @@ pub fn mehrotra_from<P: Problem>(
                 }
             }
         };
-        let Some(step) = step else {
-            failed = true;
-            break;
+        let length = |s: &Step| (dot(&s.dx, &s.dx) + dot(&s.dlam, &s.dlam)).sqrt();
+        let step = match step {
+            Some(step) if length(&step) <= opt.max_stepsize => Some(step),
+            // In fixed mode, a step that couldn't be computed, or that's too long, as near a
+            //   point where the linearized constraints are inconsistent with the bounds, goes to
+            //   feasibility restoration, as a failed line search does
+            _ if filter && !hooks.no_restoration => None,
+            _ => {
+                failed = true;
+                break;
+            }
         };
-        let stepsize = (dot(&step.dx, &step.dx) + dot(&step.dlam, &step.dlam)).sqrt();
-        if stepsize > opt.max_stepsize {
-            failed = true;
-            break;
-        }
 
         // The step, at most xi of the way to the boundary; in fixed mode, τ of the way, with the
         //   primal and dual lengths apart, as the paper takes them (§2.2), the primal one from the
@@ -1042,130 +1084,257 @@ pub fn mehrotra_from<P: Problem>(
         let (step, alphap, alphad, trial, backtracks, second_order) = if filter {
             let theta_k = theta(&e, &p);
             let phi_k = filter::barrier(e.f, mu_bar, [&p.z, &p.s_l, &p.s_u]);
-            // ∇φ_μᵀd over x and z: ∇fᵀdx − μ̄ (Σ dx/s_l − Σ dx/s_u + Σ dz/z)
-            let grad_phi_d = {
-                let mut d = dot(&e.df, &step.dx);
-                for (j, &k) in split.lo.iter().enumerate() {
-                    d -= mu_bar * step.dx[k] / p.s_l[j];
-                }
-                for (j, &k) in split.up.iter().enumerate() {
-                    d += mu_bar * step.dx[k] / p.s_u[j];
-                }
-                for (dz, z) in step.dz.iter().zip(&p.z) {
-                    d -= mu_bar * dz / z;
-                }
-                d
-            };
-            let alpha_min = filter::alpha_min(theta_k, grad_phi_d, theta_min);
-            // The trial point at primal length `alpha` along a step, if it's strictly interior
-            //   and its measures are finite
-            let trial_at = |s: &Step, alpha: f64| -> Option<Trial> {
-                let x_t: Vec<f64> = x.iter().zip(&s.dx).map(|(x, d)| x + alpha * d).collect();
-                let z_t: Vec<f64> = p.z.iter().zip(&s.dz).map(|(z, d)| z + alpha * d).collect();
-                let (s_l, s_u) = slacks(&x_t);
-                if z_t
-                    .iter()
-                    .chain(&s_l)
-                    .chain(&s_u)
-                    .any(|v| v.is_nan() || *v <= 0.0)
-                {
-                    return None;
-                }
-                let e_t = evaluate(&x_t);
-                let theta_t = e_t.g.iter().map(|g| g.abs()).sum::<f64>()
-                    + e_t
-                        .h
-                        .iter()
-                        .zip(&z_t)
-                        .map(|(h, z)| (h + z).abs())
-                        .sum::<f64>();
-                let phi_t = filter::barrier(e_t.f, mu_bar, [&z_t, &s_l, &s_u]);
-                (theta_t.is_finite() && phi_t.is_finite()).then_some(Trial {
-                    e: e_t,
-                    z: z_t,
-                    theta: theta_t,
-                    phi: phi_t,
-                })
-            };
-            // Whether a trial at length `alpha` is accepted (§2.3), and if so whether by the
-            //   Armijo condition, which leaves the filter as it is
-            let accept = |alpha: f64, t: &Trial| -> Option<bool> {
-                if !line_filter.acceptable(t.theta, t.phi) {
-                    return None;
-                }
-                if theta_k <= theta_min && filter::switching(alpha, grad_phi_d, theta_k) {
-                    filter::armijo(t.phi, phi_k, alpha, grad_phi_d).then_some(true)
-                } else {
-                    filter::sufficient_decrease(t.theta, t.phi, theta_k, phi_k).then_some(false)
-                }
-            };
-            let (alpha_max, _) = step.lengths(&split, &p, tau);
-            let mut alpha = alpha_max;
-            let mut backtracks = 0;
-            let mut found: Option<(Option<Step>, f64, Trial, bool)> = None;
-            while alpha >= alpha_min {
-                if let Some(t) = trial_at(&step, alpha) {
-                    if let Some(armijo) = accept(alpha, &t) {
-                        found = Some((None, alpha, t, armijo));
-                        break;
-                    }
-                    // The second-order correction (§2.4), when the first trial raises θ: the
-                    //   same system with the constraints' residuals accumulated
-                    if backtracks == 0 && t.theta >= theta_k {
-                        let (r_z, r_l, r_u) = centered.as_ref().expect("fixed mode");
-                        let mut c_g: Vec<f64> =
-                            e.g.iter()
-                                .zip(&t.e.g)
-                                .map(|(g, gt)| alpha * g + gt)
-                                .collect();
-                        let mut c_h: Vec<f64> = (hz.iter().zip(&t.e.h).zip(&t.z))
-                            .map(|((hz, h), z)| alpha * hz + h + z)
-                            .collect();
-                        let mut theta_old = t.theta;
-                        for _ in 0..filter::P_MAX {
-                            let Some(soc) = solve_for(r_z, r_l, r_u, &c_h, &c_g) else {
-                                break;
-                            };
-                            let (alpha_soc, _) = soc.lengths(&split, &p, tau);
-                            let Some(ts) = trial_at(&soc, alpha_soc) else {
-                                break;
-                            };
-                            if let Some(armijo) = accept(alpha_max, &ts) {
-                                found = Some((Some(soc), alpha_soc, ts, armijo));
+            let (found, backtracks) = match &step {
+                None => (None, 0),
+                Some(step) => {
+                    // ∇φ_μᵀd over x and z: ∇fᵀdx − μ̄ (Σ dx/s_l − Σ dx/s_u + Σ dz/z)
+                    let grad_phi_d = {
+                        let mut d = dot(&e.df, &step.dx);
+                        for (j, &k) in split.lo.iter().enumerate() {
+                            d -= mu_bar * step.dx[k] / p.s_l[j];
+                        }
+                        for (j, &k) in split.up.iter().enumerate() {
+                            d += mu_bar * step.dx[k] / p.s_u[j];
+                        }
+                        for (dz, z) in step.dz.iter().zip(&p.z) {
+                            d -= mu_bar * dz / z;
+                        }
+                        d
+                    };
+                    let alpha_min = filter::alpha_min(theta_k, grad_phi_d, theta_min);
+                    // The trial point at primal length `alpha` along a step, if it's strictly interior
+                    //   and its measures are finite
+                    let trial_at = |s: &Step, alpha: f64| -> Option<Trial> {
+                        let x_t: Vec<f64> =
+                            x.iter().zip(&s.dx).map(|(x, d)| x + alpha * d).collect();
+                        let z_t: Vec<f64> =
+                            p.z.iter().zip(&s.dz).map(|(z, d)| z + alpha * d).collect();
+                        let (s_l, s_u) = slacks(&x_t);
+                        if z_t
+                            .iter()
+                            .chain(&s_l)
+                            .chain(&s_u)
+                            .any(|v| v.is_nan() || *v <= 0.0)
+                        {
+                            return None;
+                        }
+                        let e_t = evaluate(&x_t);
+                        let theta_t = e_t.g.iter().map(|g| g.abs()).sum::<f64>()
+                            + e_t
+                                .h
+                                .iter()
+                                .zip(&z_t)
+                                .map(|(h, z)| (h + z).abs())
+                                .sum::<f64>();
+                        let phi_t = filter::barrier(e_t.f, mu_bar, [&z_t, &s_l, &s_u]);
+                        (theta_t.is_finite() && phi_t.is_finite()).then_some(Trial {
+                            e: e_t,
+                            z: z_t,
+                            theta: theta_t,
+                            phi: phi_t,
+                        })
+                    };
+                    // Whether a trial at length `alpha` is accepted (§2.3), and if so whether by the
+                    //   Armijo condition, which leaves the filter as it is
+                    let accept = |alpha: f64, t: &Trial| -> Option<bool> {
+                        if !line_filter.acceptable(t.theta, t.phi) {
+                            return None;
+                        }
+                        if theta_k <= theta_min && filter::switching(alpha, grad_phi_d, theta_k) {
+                            filter::armijo(t.phi, phi_k, alpha, grad_phi_d).then_some(true)
+                        } else {
+                            filter::sufficient_decrease(t.theta, t.phi, theta_k, phi_k)
+                                .then_some(false)
+                        }
+                    };
+                    let (alpha_max, _) = step.lengths(&split, &p, tau);
+                    let mut alpha = alpha_max;
+                    let mut backtracks = 0;
+                    let mut found: Option<(Option<Step>, f64, Trial, bool)> = None;
+                    while alpha >= alpha_min {
+                        if let Some(t) = trial_at(step, alpha) {
+                            if let Some(armijo) = accept(alpha, &t) {
+                                found = Some((None, alpha, t, armijo));
                                 break;
                             }
-                            if ts.theta > filter::KAPPA_SOC * theta_old {
-                                break;
-                            }
-                            theta_old = ts.theta;
-                            for (c, g) in c_g.iter_mut().zip(&ts.e.g) {
-                                *c = alpha_soc * *c + g;
-                            }
-                            for ((c, h), z) in c_h.iter_mut().zip(&ts.e.h).zip(&ts.z) {
-                                *c = alpha_soc * *c + h + z;
+                            // The second-order correction (§2.4), when the first trial raises θ: the
+                            //   same system with the constraints' residuals accumulated
+                            if backtracks == 0 && t.theta >= theta_k {
+                                let (r_z, r_l, r_u) = centered.as_ref().expect("fixed mode");
+                                let mut c_g: Vec<f64> =
+                                    e.g.iter()
+                                        .zip(&t.e.g)
+                                        .map(|(g, gt)| alpha * g + gt)
+                                        .collect();
+                                let mut c_h: Vec<f64> = (hz.iter().zip(&t.e.h).zip(&t.z))
+                                    .map(|((hz, h), z)| alpha * hz + h + z)
+                                    .collect();
+                                let mut theta_old = t.theta;
+                                for _ in 0..filter::P_MAX {
+                                    let Some(soc) = solve_for(r_z, r_l, r_u, &c_h, &c_g) else {
+                                        break;
+                                    };
+                                    let (alpha_soc, _) = soc.lengths(&split, &p, tau);
+                                    let Some(ts) = trial_at(&soc, alpha_soc) else {
+                                        break;
+                                    };
+                                    if let Some(armijo) = accept(alpha_max, &ts) {
+                                        found = Some((Some(soc), alpha_soc, ts, armijo));
+                                        break;
+                                    }
+                                    if ts.theta > filter::KAPPA_SOC * theta_old {
+                                        break;
+                                    }
+                                    theta_old = ts.theta;
+                                    for (c, g) in c_g.iter_mut().zip(&ts.e.g) {
+                                        *c = alpha_soc * *c + g;
+                                    }
+                                    for ((c, h), z) in c_h.iter_mut().zip(&ts.e.h).zip(&ts.z) {
+                                        *c = alpha_soc * *c + h + z;
+                                    }
+                                }
+                                if found.is_some() {
+                                    break;
+                                }
                             }
                         }
-                        if found.is_some() {
-                            break;
-                        }
+                        alpha *= 0.5;
+                        backtracks += 1;
                     }
+                    (found, backtracks)
                 }
-                alpha *= 0.5;
-                backtracks += 1;
-            }
-            // No acceptable step: where feasibility restoration takes over (the checklist's PR 2)
+            };
+            // No acceptable step: feasibility restoration (§3.3), unless this is restoration's own
+            //   solve
             let Some((correction, alphap, t, armijo)) = found else {
-                failed = true;
-                break;
+                if hooks.no_restoration {
+                    failed = true;
+                    break;
+                }
+                // The current point's margin first, so that restoration can't return to it
+                line_filter.augment(theta_k, phi_k);
+                let violation = (e.g.iter().chain(&hz)).map(|v| v.abs()).fold(0.0, f64::max);
+                let mu_r = mu_bar.max(violation);
+                let nlin = linear.a.as_ref().map_or(0, |a| a.shape().0);
+                let restoration =
+                    restoration::Restoration::new(problem, &x, mu_bar, (neqnln, niqnln, nlin));
+                let linear_values = linear
+                    .a
+                    .as_ref()
+                    .map_or_else(Vec::new, |a| a.mul_vec(&x).expect("A has nx columns"));
+                let (r_constraints, y0) = restoration.start(
+                    linear,
+                    (&e.g[..neqnln], &e.h[..niqnln], &linear_values),
+                    mu_r,
+                );
+                // The same method in fixed mode, from restoration's own start, left where it is
+                let mut r_options = *opt;
+                r_options.line_search = LineSearch::MonotoneFilter;
+                r_options.kkt_factorization = KktFactorization::Ldlt;
+                r_options.cost_mult = 1.0;
+                r_options.bound_push = 1e-10;
+                r_options.bound_frac = 1e-10;
+                r_options.max_it = opt.max_it.saturating_sub(i).max(1);
+                // The original problem at restoration's x: each slack max(−h, μ̄), and the
+                //   point's evaluation, slacks, θ and φ
+                let mapped = |x_t: &[f64]| -> Option<(Evaluation, Vec<f64>, f64, f64)> {
+                    let (s_l, s_u) = slacks(x_t);
+                    if s_l.iter().chain(&s_u).any(|s| s.is_nan() || *s <= 0.0) {
+                        return None;
+                    }
+                    let e_t = evaluate(x_t);
+                    let z_t: Vec<f64> = e_t.h.iter().map(|h| (-h).max(mu_bar)).collect();
+                    let theta_t = e_t.g.iter().map(|g| g.abs()).sum::<f64>()
+                        + e_t
+                            .h
+                            .iter()
+                            .zip(&z_t)
+                            .map(|(h, z)| (h + z).abs())
+                            .sum::<f64>();
+                    let phi_t = filter::barrier(e_t.f, mu_bar, [&z_t, &s_l, &s_u]);
+                    Some((e_t, z_t, theta_t, phi_t))
+                };
+                // Restoration's end (§3.3): less violation, at a point the filter accepts
+                let restored = |y: &[f64]| {
+                    mapped(restoration.x(y)).is_some_and(|(_, _, theta_t, phi_t)| {
+                        filter::restored(&line_filter, theta_t, phi_t, theta_k)
+                    })
+                };
+                let outcome = solve_with_hooks(
+                    &restoration as &dyn Problem,
+                    &r_constraints,
+                    Start::Cold(&y0),
+                    &r_options,
+                    &Hooks {
+                        mu_start: Some(mu_r),
+                        no_restoration: true,
+                        stop: Some(&restored),
+                    },
+                );
+                let r_iterations = outcome.as_ref().map_or(0, |s| s.iterations);
+                i += r_iterations;
+                let back = outcome.ok().filter(|s| restored(&s.x)).and_then(|s| {
+                    let x_t = restoration.x(&s.x).to_vec();
+                    mapped(&x_t).map(|m| (x_t, m))
+                });
+                // Restoration ended without less violation: a local minimizer of it, so locally
+                //   infeasible, or restoration failed
+                let Some((x_new, (e_new, z_new, theta_new, _))) = back else {
+                    history.push(MehrotraIteration {
+                        mode: IterationMode::Restoration,
+                        restoration_iterations: r_iterations,
+                        barrier_parameter: mu_bar,
+                        ..MehrotraIteration::default()
+                    });
+                    failed = true;
+                    break;
+                };
+                // Resuming at the restored point: the slacks and bound multipliers centered at
+                //   μ̄, and λ by least squares (§3.6), or zero if that's too large
+                x = x_new;
+                e = e_new;
+                p.z = z_new;
+                (p.s_l, p.s_u) = slacks(&x);
+                let centered = |s: &[f64]| -> Vec<f64> { s.iter().map(|s| mu_bar / s).collect() };
+                (p.mu, p.pi_l, p.pi_u) = (centered(&p.z), centered(&p.s_l), centered(&p.s_u));
+                filter::safeguard(&mut p.mu, &p.z, mu_bar);
+                filter::safeguard(&mut p.pi_l, &p.s_l, mu_bar);
+                filter::safeguard(&mut p.pi_u, &p.s_u, mu_bar);
+                lam = restoration::least_squares_multipliers(
+                    &lagrangian_gradient(&e, &vec![0.0; neq], &p),
+                    e.jg(&split),
+                    opt.kkt_ordering,
+                );
+                rd = lagrangian_gradient(&e, &lam, &p);
+                (feascond, gradcond, compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
+                costcond = (e.f - f0).abs() / (1.0 + f0.abs());
+                f0 = e.f;
+                history.push(MehrotraIteration {
+                    feascond,
+                    gradcond,
+                    compcond,
+                    costcond,
+                    mu: average(&p),
+                    obj: e.f / opt.cost_mult,
+                    theta: theta_new,
+                    mode: IterationMode::Restoration,
+                    barrier_parameter: mu_bar,
+                    filter_size: line_filter.len(),
+                    restoration_iterations: r_iterations,
+                    ..MehrotraIteration::default()
+                });
+                converged = tolerances_met(feascond, gradcond, compcond, costcond);
+                continue;
             };
             if !armijo {
                 line_filter.augment(theta_k, phi_k);
             }
             let second_order = correction.is_some();
-            let chosen = correction.unwrap_or(step);
+            let chosen = correction.or(step).expect("a line search's step");
             let (_, alphad) = chosen.lengths(&split, &p, tau);
             (chosen, alphap, alphad, Some(t.e), backtracks, second_order)
         } else {
+            let step = step.expect("only fixed mode goes on without a step");
             let (alphap, alphad) = if pairs == 0 {
                 (1.0, 1.0)
             } else if filter {
@@ -1275,6 +1444,10 @@ pub fn mehrotra_from<P: Problem>(
                 break;
             }
             f0 = e.f;
+        }
+        // Restoration's solve ends as soon as its point would do for the original problem
+        if hooks.stop.is_some_and(|stop| stop(&x)) {
+            converged = true;
         }
     }
     let status = if failed {

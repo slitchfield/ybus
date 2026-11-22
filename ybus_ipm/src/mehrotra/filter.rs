@@ -44,6 +44,13 @@ pub(super) const GAMMA_ALPHA: f64 = 0.05;
 pub(super) const KAPPA_SOC: f64 = 0.99;
 pub(super) const P_MAX: usize = 4;
 
+/// Restoration ends once the violation falls below `κ_resto` of the reference point's, at a point
+///   the original filter accepts (§3.3)
+pub(super) const KAPPA_RESTO: f64 = 0.9;
+/// The largest least-squares equality multiplier kept after restoration, `λ_max` (§3.6); larger
+///   ones are reset to zero
+pub(super) const LAMBDA_MAX: f64 = 1e3;
+
 /// The filter: the `(θ, φ)` pairs a trial point must not be dominated by, with the bound
 ///   `θ < θ_max` every trial point must meet
 pub(super) struct Filter {
@@ -83,6 +90,12 @@ impl Filter {
     pub(super) fn len(&self) -> usize {
         self.entries.len()
     }
+}
+
+/// Whether restoration may end at a point with measures `(θ, φ)` (§3.3): with less violation than
+///   its reference point's `θ_R`, by `κ_resto`, and acceptable to the original filter
+pub(super) fn restored(filter: &Filter, theta: f64, phi: f64, theta_r: f64) -> bool {
+    theta <= KAPPA_RESTO * theta_r && filter.acceptable(theta, phi)
 }
 
 /// The switching condition (eq. 19): the step is a descent direction for `φ`, by enough
@@ -184,6 +197,22 @@ mod tests {
         assert_eq!(f.len(), 1, "the margin around (1, 1) dominates both");
         f.reset();
         assert!(f.acceptable(5.0, 4.0));
+    }
+
+    #[test]
+    fn restoration_ends_with_less_violation_at_a_point_the_filter_accepts() {
+        let mut f = Filter::new(10.0);
+        f.augment(0.5, 1.0);
+        assert!(
+            restored(&f, 0.8, 0.5, 1.0),
+            "less violation, and a better φ"
+        );
+        assert!(!restored(&f, 0.95, 0.5, 1.0), "not 0.9 of θ_R");
+        assert!(
+            !restored(&f, 0.8, 2.0, 1.0),
+            "the filter's entry dominates it"
+        );
+        assert!(restored(&f, 0.4, 2.0, 1.0), "a better θ than the entry's");
     }
 
     #[test]

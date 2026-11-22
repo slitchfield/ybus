@@ -147,7 +147,7 @@ for the defaults its papers name.
   - backtracking down to `α_min`
   - the second-order correction, up to `p_max` times
   
-  Until PR 2, a solve with no acceptable step fails there.
+  Until PR 2, a solve with no acceptable step failed there.
   - **Done,** with the paper's constants (`filter.rs`):
     - **`θ_max` and `θ_min`:** `10⁴` and `10⁻⁴` times `max(1, θ₀)`.
     - **The filter resets** at each barrier update.
@@ -188,20 +188,80 @@ for the defaults its papers name.
 
 ## PR 2: feasibility restoration
 
-- [ ] **The restoration problem** (§3.3), as a `Problem` wrapping the original:
+- [x] **The restoration problem** (§3.3), as a `Problem` wrapping the original:
   - **Its variables:** `x`, plus `p, n ≥ 0` for every row.
   - **Its objective:** `ρ Σ (p + n) + (ζ/2) ‖D_R (x − x_R)‖²`.
   - **Its constraints:** each row's, with `p` and `n` added.
   - **Its bounds:** the original ones.
   - **Its starting point:** the paper's closed form for `p` and `n`.
-- [ ] **Solving it** with the same method in fixed mode, without nested restoration.
+  - **Done** (`mehrotra/restoration.rs`), in this solver's form.
+    - **The variables:** `x`, then `p_g, n_g` per nonlinear equality, `p_h` per nonlinear
+      inequality (`h − p_h ≤ 0`), and `p_a, n_a` per linear row (`l ≤ A x − p_a + n_a ≤ u`).
+    - **Why one variable per inequality:** a one-sided row needs only its excess, since the
+      method's own slack takes the rest.
+    - **The Hessian:** the original's constraint curvature, through its `lagrangian_hessian`
+      with `cost_mult = 0`, plus the proximity term's.
+    - **The start:** each equality's and linear row's `p` and `n` by eq. 30, so that its row
+      holds exactly, and each inequality's `p` as its excess.
+    - **Unit tests:** the Jacobians and gradient against finite differences, the exact start,
+      and a linear row's start on its limit.
+- [x] **Solving it** with the same method in fixed mode, without nested restoration.
   - **Its stopping rule:** `θ ≤ κ_resto θ_R`, at a point acceptable to the original filter.
   - **After it returns:** the original iteration resumes, with its multipliers reset.
   - **If it fails:** the solve ends as `NumericalFailure`, recorded as local infeasibility.
-- [ ] **Tests:**
+  - **Done** (`mehrotra/mod.rs`), through an internal entry point with hooks: the starting
+    barrier parameter, no nested restoration, and the stopping predicate. Restoration's solve
+    runs as `dyn Problem`, so it is one instantiation.
+    - **Entering:** the current point's margin goes into the filter first. The restoration
+      problem starts at `μ_R = max(μ̄, ‖c‖∞)`, `ζ = √μ̄`, with what's left of `max_it`.
+    - **Also entered when no step can be computed,** or the step is longer than
+      `max_stepsize`, which ended the solve before (found 2026-11-22). On Wächter and
+      Biegler's counterexample the step's multipliers blow up before the line search runs,
+      where the linearized constraints meet the bounds; IPOPT likewise restores when its step
+      computation fails.
+    - **The predicate:** the restoration point's `x`, with each slack `max(−h, μ̄)`, must have
+      `θ ≤ 0.9 θ_R` and be acceptable to the original filter.
+    - **Resuming:** each slack's multiplier `μ̄ / slack`, then the safeguard; `λ` by least
+      squares (§3.6) from `[I Jgᵀ; Jg 0]`, or zero if larger than `λ_max = 10³`.
+    - **The record:** one entry per restoration phase, `mode: Restoration`, with its
+      iterations in `restoration_iterations`. `Solution.iterations` counts them too.
+- [x] **Tests:**
   - a problem that must restore, then converge
   - a locally infeasible problem
   - **Planted bugs:** the original filter's exit test skipped, and `p` or `n` dropped from a row
+  - **Done** (`tests/line_search_test.rs`), on Wächter and Biegler's counterexample ("Failure of
+    global convergence for a class of interior point methods for nonlinear programming,"
+    *Math. Program.* 88(3):565–574, 2000, doi:10.1007/pl00011386, checked against Crossref
+    2026-11-22): `min x₀` subject to `x₀² − x₁ − 1 = 0`, `x₀ − x₂ = 0.5` and `x₁, x₂ ≥ 0`.
+    - **From `(−0.5, 1, 1)`:** `Off` fails, and the filter restores once, then converges to the
+      solution `(1, 0, 0.5)`.
+    - **From `(−2, 1, 1)`, the paper's start:** the filter restores three times. The last
+      restoration ends at `(−1, 0, 0)`, so the solve ends as locally infeasible (found
+      2026-11-22).
+      - **Why that's right:** with `x₁, x₂ ≥ 0`, the ℓ1 violation along `x₁ = x₂ = 0` is
+        `1.5 − x₀ − x₀²` on `(−1, 0.5)`, and the equality's violation is zero below `−1`, so
+        `(−1, 0, 0)` is a strict local minimizer of it. The barrier between it and the solution
+        peaks at `x₀ = −0.5`.
+      - **Starts tried:** the method converges only from starts with `x₀ ≥ −0.5`, past that
+        peak.
+    - **A locally infeasible problem:** `x₀² + x₁² + 1 = 0` with `x₀ ≥ 0`, which ends in
+      restoration mode near the origin.
+    - **hs71, from the three starts PR 1 tests:** never restores, and its count is its records'.
+    - **Planted bugs, each caught, then reverted:**
+      - the margin not added on entering, caught by the counterexample's filter count
+      - `n` dropped from the equality rows, caught by the unit tests of the restoration problem
+      - the predicate's filter test skipped, and the least-squares `λ` set to zero or solved with
+        the wrong sign, each caught only once the predicate (`filter::restored`) and the
+        estimate (`restoration::least_squares_multipliers`) became functions with unit tests
+    - **Why the end-to-end tests didn't catch them:**
+      - **The filter test:** on these problems, every point with 10% less violation is also
+        acceptable to the filter.
+      - **The estimate:** after restoration, the bound multipliers `μ̄ / s`, at slacks near
+        `10⁻⁶`, put entries of about `2·10⁴` into the gradient. The fitted `λ` then exceeds
+        `λ_max`, so it's zero either way.
+    - **Not tried:** the plan's "restoration's own multipliers in place of the estimate."
+      Restoration's solution isn't kept past the predicate, so there was nothing to swap in;
+      the zero and the wrong sign were planted instead.
 
 ## PR 3: the adaptive barrier
 
