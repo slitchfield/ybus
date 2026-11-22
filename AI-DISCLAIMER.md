@@ -22,10 +22,19 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
 
   and the whole of `ybus_powerflow`: the case model and MATPOWER reader, the DC power flow, and the
   AC power flow by Newton's method and fast-decoupled (Phases 1.5 and 4.5), with their tests,
-  survey tools and benchmark records. [`docs/PowerFlowChecklist.md`](docs/PowerFlowChecklist.md)
-  records each phase. Likewise the whole of `ybus_ipm` (MIPS) and the optimal power flow
-  in `ybus_powerflow` (phase O1 of
-  [`docs/OptimizationChecklist.md`](docs/OptimizationChecklist.md)).
+  survey tools and benchmark records. [`docs/PowerFlowChecklist.md`](https://github.com/slitchfield/ybus/blob/main/docs/PowerFlowChecklist.md)
+  records each phase. Likewise the whole of `ybus_ipm` and the optimal power flow in
+  `ybus_powerflow`, and the rest of
+  [`docs/OptimizationChecklist.md`](https://github.com/slitchfield/ybus/blob/main/docs/OptimizationChecklist.md):
+  - MIPS (phase O1)
+  - the GPU path, `ybus_cuda` (phases O2 and O5)
+  - the predictor-corrector method (phase O3)
+  - the multifrontal LDLᵀ (phase O4)
+  - warm starts and batches of OPF solves
+  - the parallel factorization, evaluation and solves (phase O5)
+
+  Also the C interface, `ybus_ffi` ([`docs/FfiChecklist.md`](https://github.com/slitchfield/ybus/blob/main/docs/FfiChecklist.md)), and the
+  preparation for publishing ([`docs/PublishingChecklist.md`](https://github.com/slitchfield/ybus/blob/main/docs/PublishingChecklist.md)).
 - **Commits:** commits produced with AI assistance carry a `Co-Authored-By: Claude …` trailer.
   Some of them also contain code the maintainer wrote and the AI committed. The trailer marks
   AI involvement, not exclusive AI authorship.
@@ -39,10 +48,11 @@ missing or incomplete, and how the licensing relates to AI-assisted development.
 ### How AI-generated code was checked
 
 AI-generated code can be plausible and still wrong, so it was not accepted on trust:
-- **Tests:** numerical routines (products, orderings, LU, Cholesky, conjugate gradient,
+- **Tests:** numerical routines (products, orderings, LU, Cholesky, LDLᵀ, conjugate gradient,
   Kronecker products) are tested against independent dense reference implementations and
   algebraic identities, such as P A Q = L U, P A Pᵀ = L Lᴴ, (AB)ᵀ = BᵀAᵀ and solution residuals,
-  for real and complex element types.
+  for real and complex element types. The parallel paths are tested bit for bit against the
+  serial ones, on several thread counts.
 - **Old algorithms kept as references:** when an algorithm was replaced, the old one was kept in
   the tests, and the new one was required to reproduce its results bit for bit where they should
   agree (for example the ordered Cholesky without an ordering, and the new LU's pivots under true
@@ -50,14 +60,22 @@ AI-generated code can be plausible and still wrong, so it was not accepted on tr
 - **Validation against MATPOWER:** the power flows are compared with MATPOWER's own results.
   Committed reference cases must agree within 1e-9 and, for the AC power flow, take MATPOWER's
   number of iterations. Surveys of all 78 MATPOWER cases, recorded in
-  [`docs/benchmarks/`](docs/benchmarks/), check every case against MATPOWER, and differences
+  [`docs/benchmarks/`](https://github.com/slitchfield/ybus/tree/main/docs/benchmarks/), check every case against MATPOWER, and differences
   were investigated rather than tolerated. A backward-error test checks that the DC solve is
   backward stable.
 - **Regressions:** bugs were reproduced with a failing test before they were fixed.
-- **CI:** every change runs three jobs: `./check.sh` (formatting, clippy with warnings as errors,
-  and tests with each feature combination, with the MATPOWER cases fetched and required, so the
-  comparisons with MATPOWER always run), the tests on the minimum supported Rust version, and
-  `cargo deny` over the dependencies (advisories, licenses, banned crates and sources).
+- **CI:** every change runs five jobs:
+  - **Check:** `./check.sh`: formatting, clippy with warnings as errors, and the tests with each
+    feature combination, with the MATPOWER cases fetched and required, so the comparisons with
+    MATPOWER always run.
+  - **MSRV:** the tests on the minimum supported Rust version.
+  - **Dependencies:** `cargo deny` over the dependencies (advisories, licenses, banned crates
+    and sources).
+  - **Package:** a dry run of publishing each crate.
+  - **Docs:** the documentation built as docs.rs builds it, advisory.
+
+  CI has no GPU, so the GPU tests skip there; they're run on a machine with one before a GPU
+  change is merged.
 - **Review:** the maintainer reviewed each pull request before merging it.
 
 None of this guarantees the absence of errors. Please report any you find.
@@ -71,13 +89,13 @@ Considerable care went into attributing the ideas this code is built on:
   the island and bridge listing, and the optimal power flow's generator costs and DC and AC models reproduce
   MATPOWER's results, and were written with reference to MATPOWER's BSD-licensed source code as
   well as its documentation and technical notes. They are reimplementations in Rust, not
-  translations; the README's [References](README.md#references) section names the MATPOWER
+  translations; the README's [References](https://github.com/slitchfield/ybus/blob/main/README.md#references) section names the MATPOWER
   files consulted, and the parts written from published formulas instead. MIPS is the
   exception: `ybus_ipm::mips` is ported step for step from MIPS's `mips.m` and
   `qps_mips.m`, and `scripts/generate_mips_reference.m` copies the problem functions of MIPS's
   tests. Those files, and the Rust tests that restate the same problems, carry MIPS's copyright
-  notice, and [`LICENSE-MIPS`](LICENSE-MIPS) holds its BSD license.
-- **References:** the [References](README.md#references) section of the README lists the
+  notice, and [`LICENSE-MIPS`](https://github.com/slitchfield/ybus/blob/main/LICENSE-MIPS) holds its BSD license.
+- **References:** the [References](https://github.com/slitchfield/ybus/blob/main/README.md#references) section of the README lists the
   publication behind each implemented algorithm, and behind each planned one.
 - **Checked citations:** each citation's details (authors, venue, pages, DOI) were checked against
   online records rather than taken from the AI model's memory. Where a record could not be
@@ -110,29 +128,38 @@ that is wrong.
 ## Licensing and AI-assisted development
 
 This repository is dual-licensed under the MIT license or the Apache License, Version 2.0, at
-your option (see [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE)). This
+your option (see [`LICENSE-MIT`](https://github.com/slitchfield/ybus/blob/main/LICENSE-MIT) and [`LICENSE-APACHE`](https://github.com/slitchfield/ybus/blob/main/LICENSE-APACHE)). This
 licensing follows current best practices for AI-assisted software development:
 
 - **A standard permissive license:** the same dual license as Rust itself and most of its
   ecosystem, applied to the whole repository, including AI-assisted portions.
 - **Third-party code, under its own notice:** the only source code from another project is
   derived from MIPS (see above), under its 3-clause BSD license, which asks that its copyright
-  notice, conditions and disclaimer stay with the code. [`LICENSE-MIPS`](LICENSE-MIPS) reproduces
+  notice, conditions and disclaimer stay with the code. [`LICENSE-MIPS`](https://github.com/slitchfield/ybus/blob/main/LICENSE-MIPS) reproduces
   them and lists the files, and each of those files names it. The license permits this use and
   is compatible with the repository's own.
 - **Third-party test data:** MATPOWER's case files are not included; a script downloads them
-  for testing. The repository does include power flow results that MATPOWER computed from three
-  public test cases (DC, and AC by Newton's method and fast-decoupled), as expected values for
-  tests, MIPS's results on the test problems of MATPOWER's own MIPS tests
-  (`ybus_ipm/tests/data/mips_reference.txt`, which contains no case data), and benchmark records that hold only case names and measurements. The results' sources
-  are credited in
-  [`ybus_powerflow/tests/data/matpower-reference/README.md`](ybus_powerflow/tests/data/matpower-reference/README.md).
+  for testing. The repository does include results that MATPOWER computed on three public test
+  cases (case14, case30 and case118), as expected values for tests:
+  - the DC and AC power flows (Newton's method and fast-decoupled, also with reactive limits)
+  - islands and bridges
+  - PTDF and LODF
+  - the DC and AC optimal power flows
+
+  It also includes MIPS's results on the test problems of MATPOWER's own MIPS tests
+  (`ybus_ipm/tests/data/mips_reference.txt`, which contains no case data), and benchmark
+  records that hold only case names and measurements. The results' sources are credited in
+  [`ybus_powerflow/tests/data/matpower-reference/README.md`](https://github.com/slitchfield/ybus/blob/main/ybus_powerflow/tests/data/matpower-reference/README.md).
 - **Compatible dependencies:** every dependency, including transitive and development ones, is
   available under the MIT or Apache-2.0 license (one also under Unicode-3.0, which it requires
-  alongside them), except libloading, which the GPU path (`ybus_cuda`, and ybus_powerflow's optional
-  `cuda` feature) uses through cudarc and which is under ISC, a permissive license equivalent
-  to MIT; some offer the Unlicense or BSD-2-Clause as further alternatives. `cargo deny`
+  alongside them), except libloading, which the GPU path (`ybus_cuda`, and ybus_powerflow's
+  optional `cuda` feature) uses, directly and through cudarc, and which is under ISC, a
+  permissive license equivalent to MIT; some offer the Unlicense or BSD-2-Clause as further alternatives. `cargo deny`
   enforces this in CI, allowing only MIT, Apache-2.0, Unicode-3.0 and ISC.
+- **Proprietary runtime libraries, not distributed:** the GPU path loads NVIDIA's CUDA driver,
+  cuSPARSE, NVRTC and cuDSS at run time, if they're installed. None of them is included in or
+  redistributed by the repository or its packages, and using them is under NVIDIA's own
+  license terms.
 - **Transparency:** AI involvement is disclosed in this document, in commit trailers and in the
   pull requests' implementation reports, and sources are attributed as described above.
 
