@@ -1140,9 +1140,30 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
         threads, at the bound.
       - **Everything else is `main`'s speed** (×0.96–1.02): the smaller trees' sweeps are below
         the cutoff, so their solves stay serial.
-  - [ ] **PR 3c, opt-in fused arithmetic:** planned, unstarted (decided 2026-11-21). It needs
-    the build flag for FMA, and that flag slows the kernel it would fuse, so it waits for a
-    kernel restructured for short columns.
+  - [ ] **PR 3c, opt-in fused arithmetic:** measured before it's built (decided 2026-11-22).
+    - **Why a spike first:**
+      - **No runtime dispatch:** `forbid(unsafe_code)` rules it out, so fused instructions need
+        a build flag. Without one, `mul_add` calls the C library's `fma`, which is correctly
+        rounded but slow.
+      - **The narrower flag:** `-C target-feature=+fma` keeps the default build's SSE2 width,
+        avoiding PR 3a's AVX2 slowdown.
+      - **The kernel may be memory-bound:** it updates the whole trailing triangle once per
+        pivot, so fusing may save little.
+    - **The spike:** a throwaway patch fusing the dense kernel's updates and the solves'
+      multiply-subtracts (real types), timed in the default build, and in the patch built
+      without a flag, with `+fma`, and with `x86-64-v3`.
+    - **The gate, written before measuring.** Go only if both:
+      - **The kernel:** the `+fma` patch cuts the dense kernel's profile time by at least 10%
+        against the default build, on case_ACTIVSg10k's AC at one thread.
+      - **The solve:** it makes the predictor-corrector method's AC solves at least ×1.05
+        faster, as a median over case9241pegase, case_ACTIVSg10k and case_ACTIVSg25k, at 1 and
+        at 8 threads, in two same-day rounds alternating the builds.
+      
+      Otherwise, no go: the spike is recorded and PR 3c closes with no option built. Also
+      recorded, not gating: `x86-64-v3`, and O3's bar on the three cases.
+    - **On a go:** a runtime option, `LdltOptions::fused` (off by default), threaded through the
+      solvers' options. Its results are the same in every build; only its speed depends on the
+      flag. Then a survey under O3's bar.
 - [ ] **A GPU KKT factorization** (O5 target 4): a cuDSS spike behind `cuda`. It's gated: only
   if the KKT factorization is still the largest stage of a large AC solve after targets 1–3,
   and O2's transfer measurements leave it room.
