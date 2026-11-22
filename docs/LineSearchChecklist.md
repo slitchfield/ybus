@@ -147,7 +147,7 @@ for the defaults its papers name.
   - backtracking down to `α_min`
   - the second-order correction, up to `p_max` times
   
-  Until PR 2, a solve with no acceptable step fails there.
+  Until PR 2, a solve with no acceptable step failed there.
   - **Done,** with the paper's constants (`filter.rs`):
     - **`θ_max` and `θ_min`:** `10⁴` and `10⁻⁴` times `max(1, θ₀)`.
     - **The filter resets** at each barrier update.
@@ -205,10 +205,26 @@ for the defaults its papers name.
       holds exactly, and each inequality's `p` as its excess.
     - **Unit tests:** the Jacobians and gradient against finite differences, the exact start,
       and a linear row's start on its limit.
-- [ ] **Solving it** with the same method in fixed mode, without nested restoration.
+- [x] **Solving it** with the same method in fixed mode, without nested restoration.
   - **Its stopping rule:** `θ ≤ κ_resto θ_R`, at a point acceptable to the original filter.
   - **After it returns:** the original iteration resumes, with its multipliers reset.
   - **If it fails:** the solve ends as `NumericalFailure`, recorded as local infeasibility.
+  - **Done** (`mehrotra/mod.rs`), through an internal entry point with hooks: the starting
+    barrier parameter, no nested restoration, and the stopping predicate. Restoration's solve
+    runs as `dyn Problem`, so it is one instantiation.
+    - **Entering:** the current point's margin goes into the filter first. The restoration
+      problem starts at `μ_R = max(μ̄, ‖c‖∞)`, `ζ = √μ̄`, with what's left of `max_it`.
+    - **Also entered when no step can be computed,** or the step is longer than
+      `max_stepsize`, which ended the solve before (found 2026-11-22). On Wächter and
+      Biegler's counterexample the step's multipliers blow up before the line search runs,
+      where the linearized constraints meet the bounds; IPOPT likewise restores when its step
+      computation fails.
+    - **The predicate:** the restoration point's `x`, with each slack `max(−h, μ̄)`, must have
+      `θ ≤ 0.9 θ_R` and be acceptable to the original filter.
+    - **Resuming:** each slack's multiplier `μ̄ / slack`, then the safeguard; `λ` by least
+      squares (§3.6) from `[I Jgᵀ; Jg 0]`, or zero if larger than `λ_max = 10³`.
+    - **The record:** one entry per restoration phase, `mode: Restoration`, with its
+      iterations in `restoration_iterations`. `Solution.iterations` counts them too.
 - [ ] **Tests:**
   - a problem that must restore, then converge
   - a locally infeasible problem

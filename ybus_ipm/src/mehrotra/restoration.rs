@@ -21,7 +21,7 @@ use crate::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Pr
 pub(super) const RHO: f64 = 1000.0;
 
 /// The restoration problem for `problem`, at the reference point `x_r`
-pub(super) struct Restoration<'a, P: Problem> {
+pub(super) struct Restoration<'a, P: Problem + ?Sized> {
     problem: &'a P,
     nx: usize,
     /// The nonlinear equalities and inequalities, and the linear rows
@@ -33,7 +33,7 @@ pub(super) struct Restoration<'a, P: Problem> {
     weights: Vec<f64>,
 }
 
-impl<'a, P: Problem> Restoration<'a, P> {
+impl<'a, P: Problem + ?Sized> Restoration<'a, P> {
     /// At `x_r` and barrier parameter `mu`, for a problem with `neq` nonlinear equalities, `niq`
     ///   nonlinear inequalities and `nlin` linear rows
     pub(super) fn new(
@@ -159,7 +159,7 @@ impl<'a, P: Problem> Restoration<'a, P> {
     }
 }
 
-impl<P: Problem> Problem for Restoration<'_, P> {
+impl<P: Problem + ?Sized> Problem for Restoration<'_, P> {
     fn dimension(&self) -> usize {
         self.linear_start() + 2 * self.nlin
     }

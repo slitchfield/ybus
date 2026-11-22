@@ -44,6 +44,13 @@ pub(super) const GAMMA_ALPHA: f64 = 0.05;
 pub(super) const KAPPA_SOC: f64 = 0.99;
 pub(super) const P_MAX: usize = 4;
 
+/// Restoration ends once the violation falls below `κ_resto` of the reference point's, at a point
+///   the original filter accepts (§3.3)
+pub(super) const KAPPA_RESTO: f64 = 0.9;
+/// The largest least-squares equality multiplier kept after restoration, `λ_max` (§3.6); larger
+///   ones are reset to zero
+pub(super) const LAMBDA_MAX: f64 = 1e3;
+
 /// The filter: the `(θ, φ)` pairs a trial point must not be dominated by, with the bound
 ///   `θ < θ_max` every trial point must meet
 pub(super) struct Filter {
