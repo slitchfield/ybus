@@ -90,6 +90,12 @@ or shortens each step by whether it makes progress, so that the method converges
 starting points and on nonconvex problems. Recorded 2026-11-18, from phase O4's records, where it
 was the last open item of #59's "left for later".
 
+**Planned (2026-11-22)** in [`LineSearchChecklist.md`](LineSearchChecklist.md): the
+adaptive-barrier filter of Nocedal, Wächter and Waltz (2009), with Wächter and Biegler's filter
+line search and full feasibility restoration, for the predictor-corrector method only. That
+answers the open questions below: how a line search fits Mehrotra's predictor-corrector (its
+free and fixed modes), and MIPS (left as it is).
+
 - **Why it's needed:**
   - **Today the method takes every step** it computes, at the fraction-to-the-boundary length.
     It has no merit function or line search, as MIPS by default has none (MIPS's optional

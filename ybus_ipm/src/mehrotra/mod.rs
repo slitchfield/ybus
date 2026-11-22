@@ -65,7 +65,9 @@
 //! **Otherwise:**
 //!
 //! - A problem with no inequalities or bounds takes plain Newton steps.
-//! - There is no merit function or line search, as in MIPS.
+//! - There is no merit function or line search by default, as in MIPS. An option,
+//!   `line_search`, adds Wächter and Biegler's filter line search ([`LineSearch`]), in
+//!   progress (`docs/LineSearchChecklist.md`).
 //! - **The inertia correction,** with the pivoted LDLᵀ (`kkt_factorization`, see [`crate::kkt`]).
 //!   On a nonconvex problem an indefinite `∇²L` can make the step a poor one, as in MIPS. LDLᵀ
 //!   reveals it: the KKT matrix's inertia must be `(nx, neq)`, which holds when `W` is positive
@@ -81,6 +83,8 @@
 //!   OPF survey favoured. With LU there's no inertia and no correction.
 //! - It converges by MIPS's four measures, defined alike, with the bounds' slacks and
 //!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
+
+mod filter;
 
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
@@ -144,6 +148,38 @@ pub struct MehrotraOptions {
     /// cost iterations (`docs/benchmarks/ldlt-opf-2026-11-08.md`); with LU there's no inertia,
     /// and this has no effect
     pub inertia_correction: bool,
+    /// The step's globalization (see [`LineSearch`]): none by default, today's method. A filter
+    /// needs `kkt_factorization` to be LDLᵀ, and turns `inertia_correction` on
+    pub line_search: LineSearch,
+}
+
+/// How the predictor-corrector method accepts a step (`MehrotraOptions::line_search`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineSearch {
+    /// Every step is taken whole, at the fraction-to-the-boundary length: the method as it was
+    /// before the line search, bit for bit
+    #[default]
+    Off,
+    /// Wächter and Biegler's monotone barrier with their filter line search (see
+    /// `docs/LineSearchChecklist.md`): centered Newton steps at a fixed barrier parameter,
+    /// lowered as each barrier problem is solved, each accepted or shortened by the filter, with
+    /// second-order corrections and the inertia correction on. In progress: a solve with no
+    /// acceptable step fails, until feasibility restoration is added
+    MonotoneFilter,
+}
+
+/// Which phase of the method an iteration belongs to (`MehrotraIteration::mode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IterationMode {
+    /// Mehrotra's adaptive barrier: the method's only mode with `LineSearch::Off`
+    #[default]
+    Free,
+    /// A fixed barrier parameter, with the filter line search
+    Fixed,
+    /// Feasibility restoration
+    Restoration,
 }
 
 impl Default for MehrotraOptions {
@@ -166,6 +202,7 @@ impl Default for MehrotraOptions {
             kkt_factorization: KktFactorization::Lu,
             kkt_ordering: KktOrdering::Amd,
             inertia_correction: false,
+            line_search: LineSearch::Off,
         }
     }
 }
@@ -184,6 +221,7 @@ const DELTA_W_INCREASE: f64 = 8.0;
 /// One iteration's record: the termination measures, the average complementarity and the
 /// centering it chose, the step's 2-norm, the objective and the step lengths.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct MehrotraIteration {
     /// The feasibility measure
     pub feascond: f64,
@@ -208,6 +246,31 @@ pub struct MehrotraIteration {
     /// The inertia correction's shift of `W`, `δ_w` (0 when the inertia was right, and always
     /// with LU)
     pub delta_w: f64,
+    /// The iteration's phase: always [`IterationMode::Free`] with `LineSearch::Off`
+    pub mode: IterationMode,
+    /// The constraint violation after the step, `θ = ‖[g; h + z]‖₁`, over the nonlinear and
+    /// linear rows, the inequalities with their slacks
+    pub theta: f64,
+    /// The barrier function after the step, `φ_μ = f − μ (Σ ln z + Σ ln s_l + Σ ln s_u)`, with
+    /// `f` times `cost_mult`, at the fixed barrier parameter `μ` (0 without a filter)
+    pub barrier: f64,
+    /// How many times the line search halved the step (0 without a filter)
+    pub backtracks: usize,
+    /// Whether the step was a second-order correction (false without a filter)
+    pub second_order: bool,
+    /// The fixed barrier parameter the step aimed at, in fixed mode (0 in free mode)
+    pub barrier_parameter: f64,
+    /// The filter's entries after the step (0 without a filter)
+    pub filter_size: usize,
+}
+
+/// A trial point of fixed mode's line search: its evaluation and slacks, and its constraint
+/// violation `θ` and barrier function `φ`
+struct Trial {
+    e: Evaluation,
+    z: Vec<f64>,
+    theta: f64,
+    phi: f64,
 }
 
 /// The linear rows and bounds, split as the method uses them.
@@ -476,8 +539,9 @@ impl Evaluation {
 /// long a step, a step length below `alpha_min`, or the average complementarity outside
 /// `[ε, 1/ε]`.
 ///
-/// Returns `InteriorPointError::InvalidOption` for `xi` outside `[0.5, 1)`, and `Dimension` for
-/// inputs of the wrong length.
+/// Returns `InteriorPointError::InvalidOption` for `xi` outside `[0.5, 1)`,
+/// `LineSearchNeedsLdlt` for a line search with LU, and `Dimension` for inputs of the wrong
+/// length.
 pub fn mehrotra<P: Problem>(
     problem: &P,
     constraints: &Constraints,
@@ -516,6 +580,12 @@ pub fn mehrotra_from<P: Problem>(
     if !(0.5..1.0).contains(&opt.xi) {
         return Err(InteriorPointError::InvalidOption { name: "xi" });
     }
+    let filter = opt.line_search != LineSearch::Off;
+    if filter && opt.kkt_factorization != KktFactorization::Ldlt {
+        return Err(InteriorPointError::LineSearchNeedsLdlt);
+    }
+    // A filter's steps must be descent directions, which the inertia correction ensures
+    let inertia_correction = opt.inertia_correction || filter;
     let nx = x0.len();
     if problem.dimension() != nx {
         return Err(InteriorPointError::Dimension { what: "x0" });
@@ -717,6 +787,15 @@ pub fn mehrotra_from<P: Problem>(
     let (mut feascond, mut gradcond, mut compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
     let mut f0 = e.f;
     let mut costcond = 0.0;
+    // θ = ‖[g; h + z]‖₁, the constraint violation the filter measures
+    let theta = |e: &Evaluation, p: &Pairs| -> f64 {
+        e.g.iter().map(|g| g.abs()).sum::<f64>()
+            + e.h
+                .iter()
+                .zip(&p.z)
+                .map(|(h, z)| (h + z).abs())
+                .sum::<f64>()
+    };
     let mut history = vec![MehrotraIteration {
         feascond,
         gradcond,
@@ -724,6 +803,7 @@ pub fn mehrotra_from<P: Problem>(
         costcond,
         mu: average(&p),
         obj: e.f / opt.cost_mult,
+        theta: theta(&e, &p),
         ..MehrotraIteration::default()
     }];
     let tolerances_met = |feas: f64, grad: f64, comp: f64, cost: f64| {
@@ -738,6 +818,19 @@ pub fn mehrotra_from<P: Problem>(
     // The inertia correction's last shift, and how many refactorizations it took
     let mut last_delta_w = 0.0;
     let mut corrections = 0;
+    // With a filter, the fixed barrier parameter μ̄ (filter.rs). Its floor keeps the method's
+    //   convergence test reachable: that test sums complementarity over every pair, as MIPS's
+    //   does, where the paper's floor, ε/10, bounds each pair's
+    let mu_floor = opt.comptol / (10.0 * pairs.max(1) as f64);
+    let mut mu_bar = match warm_start {
+        None => filter::MU_INIT,
+        Some(_) => average(&p).max(mu_floor),
+    };
+    // The filter, and the bounds on θ it works between, from the start's (§2.3, with the
+    //   paper's defaults)
+    let theta_start = theta(&e, &p).max(1.0);
+    let theta_min = 1e-4 * theta_start;
+    let mut line_filter = filter::Filter::new(1e4 * theta_start);
 
     while !converged && i < opt.max_it {
         i += 1;
@@ -798,7 +891,7 @@ pub fn mehrotra_from<P: Problem>(
             let Ok(factor) = kkt.factor(nx, &w, &bounds, jg, delta_w) else {
                 break None;
             };
-            if !opt.inertia_correction || factor.inertia().is_none_or(|inertia| inertia == wanted) {
+            if !inertia_correction || factor.inertia().is_none_or(|inertia| inertia == wanted) {
                 break Some(factor);
             }
             kkt.recycle(factor);
@@ -828,56 +921,75 @@ pub fn mehrotra_from<P: Problem>(
 
         // A step for complementarity right-hand sides r_z, r_l and r_u
         let hz: Vec<f64> = e.h.iter().zip(&p.z).map(|(h, z)| h + z).collect();
-        let solve = |r_z: &[f64], r_l: &[f64], r_u: &[f64]| -> Option<Step> {
-            // −r_d − Jhᵀ Z⁻¹ (r_z + M (h + z)) + S_l⁻¹ r_l − S_u⁻¹ r_u, then −g
-            let inner: Vec<f64> = (0..niq)
-                .map(|k| zinv[k] * (r_z[k] + p.mu[k] * hz[k]))
-                .collect();
-            let mut rhs: Vec<f64> = rd
-                .iter()
-                .zip(jh_t.mul_vec(&inner).expect("one entry per inequality"))
-                .map(|(r, a)| -r - a)
-                .collect();
-            for (j, &k) in split.lo.iter().enumerate() {
-                rhs[k] += r_l[j] / p.s_l[j];
-            }
-            for (j, &k) in split.up.iter().enumerate() {
-                rhs[k] -= r_u[j] / p.s_u[j];
-            }
-            rhs.extend(e.g.iter().map(|g| -g));
-            let solved = factor.solve(&rhs).ok()?;
-            if solved.iter().any(|v| !v.is_finite()) {
-                return None;
-            }
-            let dx = solved[..nx].to_vec();
-            let dlam = solved[nx..].to_vec();
-            let jh_dx = jh.mul_vec(&dx).expect("one entry per variable");
-            let dz: Vec<f64> = (0..niq).map(|k| -hz[k] - jh_dx[k]).collect();
-            let dmu = (0..niq)
-                .map(|k| zinv[k] * (r_z[k] - p.mu[k] * dz[k]))
-                .collect();
-            let dpi_l = (0..nlo)
-                .map(|j| (r_l[j] - p.pi_l[j] * dx[split.lo[j]]) / p.s_l[j])
-                .collect();
-            let dpi_u = (0..nup)
-                .map(|j| (r_u[j] + p.pi_u[j] * dx[split.up[j]]) / p.s_u[j])
-                .collect();
-            Some(Step {
-                dx,
-                dlam,
-                dz,
-                dmu,
-                dpi_l,
-                dpi_u,
-            })
-        };
+        // For constraint residuals `hz` (h + z) and `g`: the current point's, or a second-order
+        //   correction's
+        let solve_for =
+            |r_z: &[f64], r_l: &[f64], r_u: &[f64], hz: &[f64], g: &[f64]| -> Option<Step> {
+                // −r_d − Jhᵀ Z⁻¹ (r_z + M (h + z)) + S_l⁻¹ r_l − S_u⁻¹ r_u, then −g
+                let inner: Vec<f64> = (0..niq)
+                    .map(|k| zinv[k] * (r_z[k] + p.mu[k] * hz[k]))
+                    .collect();
+                let mut rhs: Vec<f64> = rd
+                    .iter()
+                    .zip(jh_t.mul_vec(&inner).expect("one entry per inequality"))
+                    .map(|(r, a)| -r - a)
+                    .collect();
+                for (j, &k) in split.lo.iter().enumerate() {
+                    rhs[k] += r_l[j] / p.s_l[j];
+                }
+                for (j, &k) in split.up.iter().enumerate() {
+                    rhs[k] -= r_u[j] / p.s_u[j];
+                }
+                rhs.extend(g.iter().map(|g| -g));
+                let solved = factor.solve(&rhs).ok()?;
+                if solved.iter().any(|v| !v.is_finite()) {
+                    return None;
+                }
+                let dx = solved[..nx].to_vec();
+                let dlam = solved[nx..].to_vec();
+                let jh_dx = jh.mul_vec(&dx).expect("one entry per variable");
+                let dz: Vec<f64> = (0..niq).map(|k| -hz[k] - jh_dx[k]).collect();
+                let dmu = (0..niq)
+                    .map(|k| zinv[k] * (r_z[k] - p.mu[k] * dz[k]))
+                    .collect();
+                let dpi_l = (0..nlo)
+                    .map(|j| (r_l[j] - p.pi_l[j] * dx[split.lo[j]]) / p.s_l[j])
+                    .collect();
+                let dpi_u = (0..nup)
+                    .map(|j| (r_u[j] + p.pi_u[j] * dx[split.up[j]]) / p.s_u[j])
+                    .collect();
+                Some(Step {
+                    dx,
+                    dlam,
+                    dz,
+                    dmu,
+                    dpi_l,
+                    dpi_u,
+                })
+            };
+        let solve = |r_z: &[f64], r_l: &[f64], r_u: &[f64]| solve_for(r_z, r_l, r_u, &hz, &e.g);
         // −a ∘ b
         let negated =
             |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(a, b)| -a * b).collect() };
 
+        // Fixed mode's complementarity right-hand sides, centered at μ̄: kept for a second-order
+        //   correction, which solves with the same ones
+        let centered = filter.then(|| {
+            let centered = |s: &[f64], v: &[f64]| -> Vec<f64> {
+                s.iter().zip(v).map(|(s, v)| mu_bar - s * v).collect()
+            };
+            (
+                centered(&p.z, &p.mu),
+                centered(&p.s_l, &p.pi_l),
+                centered(&p.s_u, &p.pi_u),
+            )
+        });
         let (step, sigma) = if pairs == 0 {
             // No inequalities or bounds: a plain Newton step
             (solve(&[], &[], &[]), 0.0)
+        } else if let Some((r_z, r_l, r_u)) = &centered {
+            // Fixed mode: the centered Newton step at the barrier parameter μ̄
+            (solve(r_z, r_l, r_u), 0.0)
         } else {
             // The predictor: an affine step towards zero complementarity
             let mu_now = average(&p);
@@ -913,8 +1025,6 @@ pub fn mehrotra_from<P: Problem>(
                 }
             }
         };
-        // The factor's storage, for the next iteration's factorization
-        kkt.recycle(factor);
         let Some(step) = step else {
             failed = true;
             break;
@@ -925,18 +1035,154 @@ pub fn mehrotra_from<P: Problem>(
             break;
         }
 
-        // The step, at most xi of the way to the boundary
-        let (alphap, alphad) = if pairs == 0 {
-            (1.0, 1.0)
-        } else {
-            let (alphap, alphad) = step.lengths(&split, &p, opt.xi);
-            if curved {
-                let alpha = alphap.min(alphad);
-                (alpha, alpha)
-            } else {
-                (alphap, alphad)
+        // The step, at most xi of the way to the boundary; in fixed mode, τ of the way, with the
+        //   primal and dual lengths apart, as the paper takes them (§2.2), the primal one from the
+        //   filter line search
+        let tau = filter::fraction(mu_bar);
+        let (step, alphap, alphad, trial, backtracks, second_order) = if filter {
+            let theta_k = theta(&e, &p);
+            let phi_k = filter::barrier(e.f, mu_bar, [&p.z, &p.s_l, &p.s_u]);
+            // ∇φ_μᵀd over x and z: ∇fᵀdx − μ̄ (Σ dx/s_l − Σ dx/s_u + Σ dz/z)
+            let grad_phi_d = {
+                let mut d = dot(&e.df, &step.dx);
+                for (j, &k) in split.lo.iter().enumerate() {
+                    d -= mu_bar * step.dx[k] / p.s_l[j];
+                }
+                for (j, &k) in split.up.iter().enumerate() {
+                    d += mu_bar * step.dx[k] / p.s_u[j];
+                }
+                for (dz, z) in step.dz.iter().zip(&p.z) {
+                    d -= mu_bar * dz / z;
+                }
+                d
+            };
+            let alpha_min = filter::alpha_min(theta_k, grad_phi_d, theta_min);
+            // The trial point at primal length `alpha` along a step, if it's strictly interior
+            //   and its measures are finite
+            let trial_at = |s: &Step, alpha: f64| -> Option<Trial> {
+                let x_t: Vec<f64> = x.iter().zip(&s.dx).map(|(x, d)| x + alpha * d).collect();
+                let z_t: Vec<f64> = p.z.iter().zip(&s.dz).map(|(z, d)| z + alpha * d).collect();
+                let (s_l, s_u) = slacks(&x_t);
+                if z_t
+                    .iter()
+                    .chain(&s_l)
+                    .chain(&s_u)
+                    .any(|v| v.is_nan() || *v <= 0.0)
+                {
+                    return None;
+                }
+                let e_t = evaluate(&x_t);
+                let theta_t = e_t.g.iter().map(|g| g.abs()).sum::<f64>()
+                    + e_t
+                        .h
+                        .iter()
+                        .zip(&z_t)
+                        .map(|(h, z)| (h + z).abs())
+                        .sum::<f64>();
+                let phi_t = filter::barrier(e_t.f, mu_bar, [&z_t, &s_l, &s_u]);
+                (theta_t.is_finite() && phi_t.is_finite()).then_some(Trial {
+                    e: e_t,
+                    z: z_t,
+                    theta: theta_t,
+                    phi: phi_t,
+                })
+            };
+            // Whether a trial at length `alpha` is accepted (§2.3), and if so whether by the
+            //   Armijo condition, which leaves the filter as it is
+            let accept = |alpha: f64, t: &Trial| -> Option<bool> {
+                if !line_filter.acceptable(t.theta, t.phi) {
+                    return None;
+                }
+                if theta_k <= theta_min && filter::switching(alpha, grad_phi_d, theta_k) {
+                    filter::armijo(t.phi, phi_k, alpha, grad_phi_d).then_some(true)
+                } else {
+                    filter::sufficient_decrease(t.theta, t.phi, theta_k, phi_k).then_some(false)
+                }
+            };
+            let (alpha_max, _) = step.lengths(&split, &p, tau);
+            let mut alpha = alpha_max;
+            let mut backtracks = 0;
+            let mut found: Option<(Option<Step>, f64, Trial, bool)> = None;
+            while alpha >= alpha_min {
+                if let Some(t) = trial_at(&step, alpha) {
+                    if let Some(armijo) = accept(alpha, &t) {
+                        found = Some((None, alpha, t, armijo));
+                        break;
+                    }
+                    // The second-order correction (§2.4), when the first trial raises θ: the
+                    //   same system with the constraints' residuals accumulated
+                    if backtracks == 0 && t.theta >= theta_k {
+                        let (r_z, r_l, r_u) = centered.as_ref().expect("fixed mode");
+                        let mut c_g: Vec<f64> =
+                            e.g.iter()
+                                .zip(&t.e.g)
+                                .map(|(g, gt)| alpha * g + gt)
+                                .collect();
+                        let mut c_h: Vec<f64> = (hz.iter().zip(&t.e.h).zip(&t.z))
+                            .map(|((hz, h), z)| alpha * hz + h + z)
+                            .collect();
+                        let mut theta_old = t.theta;
+                        for _ in 0..filter::P_MAX {
+                            let Some(soc) = solve_for(r_z, r_l, r_u, &c_h, &c_g) else {
+                                break;
+                            };
+                            let (alpha_soc, _) = soc.lengths(&split, &p, tau);
+                            let Some(ts) = trial_at(&soc, alpha_soc) else {
+                                break;
+                            };
+                            if let Some(armijo) = accept(alpha_max, &ts) {
+                                found = Some((Some(soc), alpha_soc, ts, armijo));
+                                break;
+                            }
+                            if ts.theta > filter::KAPPA_SOC * theta_old {
+                                break;
+                            }
+                            theta_old = ts.theta;
+                            for (c, g) in c_g.iter_mut().zip(&ts.e.g) {
+                                *c = alpha_soc * *c + g;
+                            }
+                            for ((c, h), z) in c_h.iter_mut().zip(&ts.e.h).zip(&ts.z) {
+                                *c = alpha_soc * *c + h + z;
+                            }
+                        }
+                        if found.is_some() {
+                            break;
+                        }
+                    }
+                }
+                alpha *= 0.5;
+                backtracks += 1;
             }
+            // No acceptable step: where feasibility restoration takes over (the checklist's PR 2)
+            let Some((correction, alphap, t, armijo)) = found else {
+                failed = true;
+                break;
+            };
+            if !armijo {
+                line_filter.augment(theta_k, phi_k);
+            }
+            let second_order = correction.is_some();
+            let chosen = correction.unwrap_or(step);
+            let (_, alphad) = chosen.lengths(&split, &p, tau);
+            (chosen, alphap, alphad, Some(t.e), backtracks, second_order)
+        } else {
+            let (alphap, alphad) = if pairs == 0 {
+                (1.0, 1.0)
+            } else if filter {
+                step.lengths(&split, &p, tau)
+            } else {
+                let (alphap, alphad) = step.lengths(&split, &p, opt.xi);
+                if curved {
+                    let alpha = alphap.min(alphad);
+                    (alpha, alpha)
+                } else {
+                    (alphap, alphad)
+                }
+            };
+            (step, alphap, alphad, None, 0, false)
         };
+        // The factor's storage, for the next iteration's factorization
+        kkt.recycle(factor);
         let advance = |values: &mut [f64], steps: &[f64], alpha: f64| {
             for (v, d) in values.iter_mut().zip(steps) {
                 *v += alpha * d;
@@ -945,17 +1191,51 @@ pub fn mehrotra_from<P: Problem>(
         advance(&mut x, &step.dx, alphap);
         advance(&mut p.z, &step.dz, alphap);
         advance(&mut p.mu, &step.dmu, alphad);
-        advance(&mut lam, &step.dlam, alphad);
+        // The equalities' multipliers take the primal length in fixed mode, as in the paper's
+        //   iteration (§2.2)
+        advance(&mut lam, &step.dlam, if filter { alphap } else { alphad });
         advance(&mut p.pi_l, &step.dpi_l, alphad);
         advance(&mut p.pi_u, &step.dpi_u, alphad);
         (p.s_l, p.s_u) = slacks(&x);
+        let step_mu_bar = mu_bar;
+        if filter {
+            filter::safeguard(&mut p.mu, &p.z, mu_bar);
+            filter::safeguard(&mut p.pi_l, &p.s_l, mu_bar);
+            filter::safeguard(&mut p.pi_u, &p.s_u, mu_bar);
+        }
 
-        // The new point
-        e = evaluate(&x);
+        // The new point, evaluated already if it was a line search's trial point
+        e = match trial {
+            Some(evaluated) => evaluated,
+            None => evaluate(&x),
+        };
         rd = lagrangian_gradient(&e, &lam, &p);
         (feascond, gradcond, compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
         costcond = (e.f - f0).abs() / (1.0 + f0.abs());
         let mu_new = average(&p);
+        let barrier = if filter {
+            filter::barrier(e.f, step_mu_bar, [&p.z, &p.s_l, &p.s_u])
+        } else {
+            0.0
+        };
+        // The barrier parameter falls once the barrier problem is solved to κ_ε μ̄ (§3.1):
+        //   its error is the method's feasibility and gradient measures, with complementarity
+        //   measured against μ̄
+        if filter {
+            loop {
+                let comp = filter::complementarity_error(
+                    [(&p.z, &p.mu), (&p.s_l, &p.pi_l), (&p.s_u, &p.pi_u)],
+                    mu_bar,
+                ) / (1.0 + norm_inf(&x));
+                let error = feascond.max(gradcond).max(comp);
+                if error > filter::KAPPA_EPSILON * mu_bar || mu_bar <= mu_floor {
+                    break;
+                }
+                mu_bar = filter::decrease(mu_bar, mu_floor);
+                // A new barrier problem, with a new filter (§3.1)
+                line_filter.reset();
+            }
+        }
         history.push(MehrotraIteration {
             feascond,
             gradcond,
@@ -968,6 +1248,18 @@ pub fn mehrotra_from<P: Problem>(
             alphap,
             alphad,
             delta_w,
+            theta: theta(&e, &p),
+            mode: if filter {
+                IterationMode::Fixed
+            } else {
+                IterationMode::Free
+            },
+            barrier,
+            barrier_parameter: if filter { step_mu_bar } else { 0.0 },
+            backtracks,
+            second_order,
+            filter_size: line_filter.len(),
+            ..MehrotraIteration::default()
         });
         if tolerances_met(feascond, gradcond, compcond, costcond) {
             converged = true;
