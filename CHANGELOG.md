@@ -11,6 +11,15 @@ version bump (0.1 to 0.2) may break the API, and a patch bump doesn't.
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/slitchfield/ybus/compare/v0.1.0...v0.2.0) - 2026-11-22
+
+### Other
+
+- Test the filter line search on hs71, the nonconvex problems and Maratos
+- Accept fixed mode's steps by Wächter and Biegler's filter line search
+- Take fixed mode's steps at a monotone barrier parameter
+- Add the line search's option, its record and its setup error
+
 ## [0.1.0] - 2026-11-22
 
 The first release on crates.io. The API is young, so expect breaking changes in the 0.x

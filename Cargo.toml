@@ -9,7 +9,7 @@ resolver = "3"
 # The one version the four published crates share (docs/PublishingChecklist.md, P0). ybus_ffi
 #   keeps its own, since the C library is versioned on its own terms. A release bumps this and
 #   the matching versions in [workspace.dependencies] below together.
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/slitchfield/ybus"
@@ -24,10 +24,10 @@ rust-version = "1.88"
 #   No homepage or documentation is shared: the repository is the homepage, and crates.io links
 #   each crate to its own docs.rs page when documentation is unset.
 [workspace.dependencies]
-ybus_sparse = { path = "ybus_sparse", version = "0.1.0" }
-ybus_ipm = { path = "ybus_ipm", version = "0.1.0" }
-ybus_cuda = { path = "ybus_cuda", version = "0.1.0" }
-ybus_powerflow = { path = "ybus_powerflow", version = "0.1.0" }
+ybus_sparse = { path = "ybus_sparse", version = "0.2.0" }
+ybus_ipm = { path = "ybus_ipm", version = "0.2.0" }
+ybus_cuda = { path = "ybus_cuda", version = "0.2.0" }
+ybus_powerflow = { path = "ybus_powerflow", version = "0.2.0" }
 rayon = "1"
 
 # The release build with debug line tables, for sampling profilers (samply, Nsight Systems) to
