@@ -39,6 +39,9 @@
 //!   are built on the device (`e_plus − e_minus`), optionally with a rank-one update of a base
 //!   solution per column, kept on the device as a [`GpuBlock`] for [`GpuOperator`] products and
 //!   per-column maxima, so only what's asked for is downloaded.
+//! - [`GpuLdlt`]: a sparse symmetric indefinite `L D Lᵀ` factored on the device by NVIDIA's
+//!   cuDSS, with its inertia: analyzed once, then refactored for new values on the pattern, as
+//!   an interior-point method's KKT systems are. Its solves need refinement (see its docs).
 //!
 //! Results are not bit for bit the CPU's, since the GPU orders its arithmetic differently; they
 //! agree to within rounding.
@@ -47,12 +50,13 @@
 //!
 //! Nothing to build: CUDA is loaded at run time, so the crate builds without the CUDA toolkit.
 //! To run, it needs a CUDA 13 driver, cuSPARSE and NVRTC; without them, [`Gpu::new`] returns
-//! `Ok(None)`.
+//! `Ok(None)`. [`GpuLdlt`] also needs cuDSS 1.0 (`libcudss.so.1`, for CUDA 13), and without it
+//! [`GpuLdlt::new`] returns `Ok(None)`.
 //!
 //! # Safety
 //!
 //! With `ybus_ffi`, this is one of the two crates in the workspace with `unsafe` code: cudarc
-//! exposes cuSPARSE only as raw FFI. Each `unsafe` block says why it's sound, and nothing
+//! exposes cuSPARSE only as raw FFI, and cuDSS is bound here by hand. Each `unsafe` block says why it's sound, and nothing
 //! unsafe crosses the public API.
 
 use std::fmt;
@@ -60,11 +64,13 @@ use std::fmt;
 use cudarc::cusparse::result::CusparseError;
 use cudarc::driver::DriverError;
 
+mod cudss;
 mod factor;
 mod kernels;
 mod pairs;
 mod sparse;
 
+pub use cudss::{GpuLdlt, LdltTimings};
 pub use factor::{GpuFactor, Timings};
 pub use pairs::{ColumnMax, GpuBlock, GpuOperator, Pair, PairUpdate};
 
@@ -99,6 +105,22 @@ pub enum CudaError {
         /// The length found.
         found: usize,
     },
+    /// A cuDSS call failed.
+    Cudss {
+        /// The function called.
+        call: &'static str,
+        /// cuDSS's status (`cudssStatus_t`).
+        status: i32,
+    },
+    /// cuDSS found the matrix singular, with its error indicator (`CUDSS_DATA_INFO`).
+    Singular {
+        /// cuDSS's indicator.
+        info: i32,
+    },
+    /// A matrix doesn't have the pattern [`GpuLdlt`] analyzed.
+    PatternMismatch,
+    /// A [`GpuLdlt`] solved or reported its inertia before a successful factorization.
+    NotFactored,
 }
 
 impl fmt::Display for CudaError {
@@ -115,6 +137,14 @@ impl fmt::Display for CudaError {
                 f,
                 "a right-hand side has {found} entries, but the factorization has {expected} rows"
             ),
+            CudaError::Cudss { call, status } => write!(f, "{call} failed with status {status}"),
+            CudaError::Singular { info } => {
+                write!(f, "cuDSS found the matrix singular (indicator {info})")
+            }
+            CudaError::PatternMismatch => {
+                write!(f, "the matrix doesn't have the analyzed pattern")
+            }
+            CudaError::NotFactored => write!(f, "no successful factorization yet"),
         }
     }
 }

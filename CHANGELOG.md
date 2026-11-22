@@ -88,6 +88,10 @@ releases.
 - Blocks of right-hand sides built on the device, with rank-one updates, for the DC studies'
   PTDF columns and outages.
 - CUDA is loaded at run time, so the crate builds without the CUDA toolkit.
+- `GpuLdlt`: a sparse symmetric indefinite `L D Lᵀ` on the device through cuDSS 1.0, with its
+  inertia, analyzed once and refactored for new values. cuDSS is loaded at run time too, and
+  `GpuLdlt::new` returns `Ok(None)` without it. Its solves need refinement, since cuDSS
+  perturbs small pivots.
 
 #### `ybus_powerflow`
 
