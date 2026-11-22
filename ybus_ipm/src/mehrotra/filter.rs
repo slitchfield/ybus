@@ -81,11 +81,11 @@ pub(super) fn kkt_error(rd: &[f64], residuals: [&[f64]; 2], pairs: [(&[f64], &[f
         )
 }
 
-/// The KKT errors free mode's test compares against: the last `l_max + 1` accepted ones, or,
-///   while fixed mode runs, the reference frozen when it started
+/// The KKT errors the progress test compares against: the last `l_max + 1` accepted ones.
+///   Only free points and the points where fixed mode returns are accepted, so while fixed mode
+///   runs its reference `M_k` stays the one it started with, as the paper's framework has it
 pub(super) struct Progress {
     accepted: std::collections::VecDeque<f64>,
-    frozen: Option<f64>,
 }
 
 impl Progress {
@@ -93,18 +93,15 @@ impl Progress {
     pub(super) fn new(phi: f64) -> Progress {
         Progress {
             accepted: std::collections::VecDeque::from([phi]),
-            frozen: None,
         }
     }
 
-    /// `M_k`: the frozen reference in fixed mode, otherwise the largest accepted value kept
+    /// `M_k`: the largest accepted value kept
     pub(super) fn reference(&self) -> f64 {
-        self.frozen.unwrap_or_else(|| {
-            self.accepted
-                .iter()
-                .copied()
-                .fold(f64::NEG_INFINITY, f64::max)
-        })
+        self.accepted
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max)
     }
 
     /// Whether `phi` is progress: `Φ ≤ κ M_k`
@@ -112,18 +109,12 @@ impl Progress {
         phi <= KAPPA_PHI * self.reference()
     }
 
-    /// Accepts `phi`, a free point's or the point where fixed mode returns, ending any freeze
+    /// Accepts `phi`, a free point's or the point where fixed mode returns
     pub(super) fn push(&mut self, phi: f64) {
         self.accepted.push_back(phi);
         while self.accepted.len() > L_MAX + 1 {
             self.accepted.pop_front();
         }
-        self.frozen = None;
-    }
-
-    /// Keeps the current reference while fixed mode runs
-    pub(super) fn freeze(&mut self) {
-        self.frozen = Some(self.reference());
     }
 }
 
@@ -307,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_compares_against_the_largest_of_the_last_five_until_frozen() {
+    fn progress_compares_against_the_largest_of_the_last_five() {
         let mut p = Progress::new(10.0);
         assert!(p.accepts(9.999) && !p.accepts(10.0));
         for phi in [9.0, 8.0, 7.0, 6.0] {
@@ -320,11 +311,8 @@ mod tests {
             p.accepts(8.5),
             "nonmonotone: worse than the last, better than the largest"
         );
-        p.freeze();
         p.push(1.0);
-        assert_eq!(p.reference(), 8.0, "a push ends the freeze: 8, 7, 6, 5, 1");
-        p.freeze();
-        assert_eq!(p.reference(), 8.0);
+        assert_eq!(p.reference(), 8.0, "8, 7, 6, 5, 1");
         assert!(!p.accepts(8.0) && p.accepts(7.9));
     }
 

@@ -399,3 +399,176 @@ fn problems_whose_line_search_succeeds_never_restore() {
         assert_eq!(s.iterations, records(&s).len() - 1);
     }
 }
+
+/// LDLᵀ with the adaptive barrier
+fn adaptive() -> MehrotraOptions {
+    let mut options = monotone();
+    options.line_search = LineSearch::AdaptiveFilter;
+    options
+}
+
+/// LDLᵀ and the inertia correction without a line search: the adaptive barrier's free mode
+fn off_corrected() -> MehrotraOptions {
+    let mut options = MehrotraOptions::default();
+    options.kkt_factorization = KktFactorization::Ldlt;
+    options.inertia_correction = true;
+    options
+}
+
+/// Replays the adaptive barrier's rules (docs/LineSearchChecklist.md, PR 3) over a solve's
+///   record, from the KKT errors it holds, and returns how many times fixed mode started and
+///   free mode resumed
+fn replay_the_modes(s: &Solution) -> (usize, usize) {
+    const KAPPA: f64 = 0.9999;
+    let history = records(s);
+    let mut accepted = vec![history[0].kkt_error];
+    let mut frozen: Option<f64> = None;
+    let (mut switches, mut returns) = (0, 0);
+    for k in 1..history.len() {
+        let (r, next) = (&history[k], history.get(k + 1));
+        let reference = frozen.unwrap_or_else(|| {
+            let window = &accepted[accepted.len().saturating_sub(5)..];
+            window.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        });
+        // A free iteration without a step starts fixed mode whatever its KKT error
+        let no_step = r.mode == IterationMode::Free && r.alphap == 0.0 && r.stepsize == 0.0;
+        let progress = !no_step && r.kkt_error <= KAPPA * reference;
+        if progress {
+            accepted.push(r.kkt_error);
+            if frozen.take().is_some() {
+                returns += 1;
+            }
+            if let Some(next) = next {
+                assert_eq!(
+                    next.mode,
+                    IterationMode::Free,
+                    "record {k}: progress keeps free mode"
+                );
+            }
+        } else if r.mode == IterationMode::Free {
+            switches += 1;
+            frozen = Some(reference);
+            if let Some(next) = next {
+                // Fixed mode, whose first iteration may already be a restoration
+                assert_ne!(
+                    next.mode,
+                    IterationMode::Free,
+                    "record {k}: no progress, fixed mode"
+                );
+                // Fixed mode starts at 0.8 of the average complementarity, above its floor
+                let start = 0.8 * r.mu;
+                assert!(
+                    next.barrier_parameter == start
+                        || (start < 1e-6 && next.barrier_parameter > start),
+                    "record {}: μ̄ {} from μ {}",
+                    k + 1,
+                    next.barrier_parameter,
+                    r.mu
+                );
+            }
+        } else if let Some(next) = next {
+            assert_ne!(
+                next.mode,
+                IterationMode::Free,
+                "record {k}: no return without progress"
+            );
+        }
+    }
+    (switches, returns)
+}
+
+#[test]
+fn where_the_kkt_error_keeps_falling_free_mode_is_off_bit_for_bit() {
+    let none = Constraints::default();
+    let bounds = Constraints {
+        xmin: Some(vec![0.0; 2]),
+        ..Constraints::default()
+    };
+    type Solve<'a> = &'a dyn Fn(&MehrotraOptions) -> Solution;
+    let cases: [(Solve, &str); 3] = [
+        (
+            &|o| mehrotra(&Hs71, &hs71_bounds(), &[1.0, 5.0, 5.0, 1.0], o).unwrap(),
+            "hs71",
+        ),
+        (
+            &|o| mehrotra(&Nonlinear2, &bounds, &[1.1, 0.0], o).unwrap(),
+            "Nonlinear2",
+        ),
+        (
+            &|o| mehrotra(&Nonlinear3, &none, &[1.0, 1.0, 0.0], o).unwrap(),
+            "Nonlinear3",
+        ),
+    ];
+    for (solve, name) in cases {
+        let (off, s) = (solve(&off_corrected()), solve(&adaptive()));
+        assert!(s.converged(), "{name}");
+        assert_eq!((&s.x, s.iterations), (&off.x, off.iterations), "{name}");
+        assert!(
+            records(&s).iter().all(|r| r.mode == IterationMode::Free),
+            "{name}"
+        );
+        assert_eq!(replay_the_modes(&s), (0, 0), "{name}");
+    }
+}
+
+#[test]
+fn from_2_fixed_mode_takes_over_and_hands_back_until_hs71_converges() {
+    // Without a line search the method fails from 2, even with the inertia correction
+    let alone = mehrotra(&Hs71, &hs71_bounds(), &[2.0; 4], &off_corrected()).unwrap();
+    assert!(!alone.converged());
+    let s = mehrotra(&Hs71, &hs71_bounds(), &[2.0; 4], &adaptive()).unwrap();
+    assert!(s.converged(), "{:?}", s.status);
+    // The local KKT point PR 1 found from 2, as fixed mode alone reaches
+    assert!((s.f - 27.146).abs() < 1e-3, "{}", s.f);
+    assert!(kkt(&Hs71, &hs71_bounds(), &s) < 1e-6);
+    let (switches, returns) = replay_the_modes(&s);
+    assert!(
+        switches >= 2 && returns >= 2,
+        "{switches} switches, {returns} returns"
+    );
+}
+
+#[test]
+fn from_1_the_adaptive_barrier_reaches_hs71s_optimum_in_fewer_iterations() {
+    let s = mehrotra(&Hs71, &hs71_bounds(), &[1.0; 4], &adaptive()).unwrap();
+    assert!(s.converged(), "{:?}", s.status);
+    assert!((s.f - 17.014_017_3).abs() < 1e-6 * 17.0, "{}", s.f);
+    assert!(kkt(&Hs71, &hs71_bounds(), &s) < 1e-6);
+    let (switches, returns) = replay_the_modes(&s);
+    assert!(switches >= 1 && returns >= 1);
+    for (name, options) in [("Off", off_corrected()), ("MonotoneFilter", monotone())] {
+        let other = mehrotra(&Hs71, &hs71_bounds(), &[1.0; 4], &options).unwrap();
+        assert!(
+            s.iterations < other.iterations,
+            "{} against {name}'s {}",
+            s.iterations,
+            other.iterations
+        );
+    }
+}
+
+#[test]
+fn the_adaptive_barrier_solves_maratos_and_the_counterexample() {
+    let none = Constraints::default();
+    let angle: f64 = 0.1;
+    let s = mehrotra(&Maratos, &none, &[angle.cos(), angle.sin()], &adaptive()).unwrap();
+    assert!(s.converged(), "{:?}", s.status);
+    assert!(
+        (s.x[0] - 1.0).abs() < 1e-6 && s.x[1].abs() < 1e-6,
+        "{:?}",
+        s.x
+    );
+    replay_the_modes(&s);
+    let s = mehrotra(
+        &Counterexample,
+        &counterexample_constraints(),
+        &[-0.5, 1.0, 1.0],
+        &adaptive(),
+    )
+    .unwrap();
+    assert!(s.converged(), "{:?} at {:?}", s.status, s.x);
+    for (x, solution) in s.x.iter().zip([1.0, 0.0, 0.5]) {
+        assert!((x - solution).abs() < 1e-6, "{:?}", s.x);
+    }
+    replay_the_modes(&s);
+}

@@ -898,6 +898,9 @@ fn solve_with_hooks<P: Problem + ?Sized>(
         )
     };
     let mut progress = filter::Progress::new(kkt_error(&rd, &e, &p));
+    if adaptive {
+        history[0].kkt_error = progress.reference();
+    }
 
     while !converged && i < opt.max_it {
         i += 1;
@@ -1106,7 +1109,6 @@ fn solve_with_hooks<P: Problem + ?Sized>(
             _ if adaptive && !fixed => {
                 mu_bar = (filter::MONOTONE_INIT_FACTOR * average(&p)).max(mu_floor);
                 line_filter.reset();
-                progress.freeze();
                 fixed = true;
                 history.push(MehrotraIteration {
                     feascond,
@@ -1506,7 +1508,6 @@ fn solve_with_hooks<P: Problem + ?Sized>(
             } else if !fixed {
                 mu_bar = (filter::MONOTONE_INIT_FACTOR * mu_new).max(mu_floor);
                 line_filter.reset();
-                progress.freeze();
                 fixed = true;
             }
         }
