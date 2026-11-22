@@ -43,6 +43,10 @@ name = "cuda_dc_survey"
 required-features = ["cuda", "rayon"]
 
 [[example]]
+name = "cudss_kkt"
+required-features = ["cuda", "rayon"]
+
+[[example]]
 name = "opf_batch"
 required-features = ["rayon"]
 

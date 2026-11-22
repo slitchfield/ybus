@@ -1173,7 +1173,7 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
         so the loss is the fused kernel's own.
       - **Accuracy:** unchanged outcomes and iterations, with differences in the last digits.
       - **No option was built,** and target 3 closes.
-- [ ] **A GPU KKT factorization** (O5 target 4): a cuDSS spike behind `cuda`. It's gated: only
+- [x] **A GPU KKT factorization** (O5 target 4, closed 2026-11-22, no go): a cuDSS spike behind `cuda`. It's gated: only
   if the KKT factorization is still the largest stage of a large AC solve after targets 1–3,
   and O2's transfer measurements leave it room.
   - **The gate, decided 2026-11-22:** measured at 1 and 14 threads, and passing at either is
@@ -1201,6 +1201,22 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       depends on it.
   - **Then:** a `KktFactorization::Cudss` option for both solvers, behind a new `cuda` feature in
     `ybus_ipm`. It's opt-in and judged by O3's bar.
+  - **The second gate's result: no go**
+    ([`o5-cudss-spike-2026-11-22.md`](benchmarks/o5-cudss-spike-2026-11-22.md)).
+    - **Fast, nominally:** an iteration's refactorization and two refined solves were ×2.4–6.2
+      faster than the CPU LDLᵀ.
+    - **But wrong:** the inertia was wrong on all 9 dumped KKT matrices, and the solves'
+      residuals were 5 × 10⁴ to 10⁷, which refinement didn't reduce. cuDSS perturbs small
+      pivots instead of delaying them.
+    - **No setting fixed it:** matching, Bunch–Kaufman pivoting, the scaled epsilon, AMD
+      ordering, equilibration, and general mode.
+    - **So:** the solvers don't get cuDSS, and PRs 4b and 4c aren't built.
+    - **The bindings stay** in `ybus_cuda` as `GpuLdlt`, with the finding in their docs.
+    - **Not tried:** regularizing the KKT matrix so cuDSS sees a quasi-definite one. That's a
+      solver change under O3's bar, left for later.
+
+**Phase O5 is complete** (PRs #88–#94 and this one, 2026-11-22). Next is the publishing plan, P5
+(`docs/PublishingChecklist.md`).
 
 ## Warm starts for OPF sequences
 

@@ -152,6 +152,12 @@ pub struct LdltTimings {
 ///   inertia is a nearby nonsingular matrix's. Don't rely on [`GpuLdlt::factor`] to detect
 ///   singularity.
 ///
+/// **Not for interior-point KKT matrices yet:** on the OPF's real KKT matrices (O5 target 4's
+/// spike, `docs/benchmarks/o5-cudss-spike-2026-11-22.md`), its inertia was wrong on every one,
+/// and its solves' relative residuals were 10⁴–10⁷, which refinement didn't reduce. Matching,
+/// Bunch–Kaufman pivoting, the scaled epsilon, AMD ordering and symmetric equilibration didn't
+/// help, and cuDSS's general mode gave NaNs.
+///
 /// [`Ldlt`]: ybus_sparse::compressed_matrix::Ldlt
 pub struct GpuLdlt<'g> {
     gpu: &'g Gpu,
