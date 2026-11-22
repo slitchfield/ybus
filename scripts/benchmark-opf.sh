@@ -7,7 +7,7 @@
 #
 # Usage: scripts/benchmark-opf.sh [<output.csv>]
 #   Writes one CSV line per case, smallest case file first, to <output.csv> (default
-#   target/opf-survey-<model>-<solver>-<kkt>-<ordering>.csv) and to stdout as it goes. Needs GNU time (/usr/bin/time) and the
+#   target/opf-survey-<model>-<solver>-<kkt>-<ordering>-<line search>.csv) and to stdout as it goes. Needs GNU time (/usr/bin/time) and the
 #   normalized cases (scripts/normalize-cases.sh, which needs Octave unless they're already made).
 #   MATPOWER's results are generated into testdata/ by scripts/generate-reference.sh, which needs
 #   Octave; without it, the comparison columns stay empty. Never commit those results
@@ -21,6 +21,9 @@
 #                       method's inertia correction
 #   YBUS_BENCH_KKT_ORDERING  amd or matched (default amd): how LDLᵀ orders the KKT matrix
 #                       (KktOrdering); LU ignores it
+#   YBUS_BENCH_LINE_SEARCH  off, monotone or adaptive (default off): the predictor-corrector
+#                       method's line search (LineSearch); MIPS ignores it. Either filter needs
+#                       LDLᵀ and turns the inertia correction on
 #   YBUS_BENCH_TIMEOUT  the time limit per case, in seconds (default 3600)
 #   YBUS_BENCH_MEMORY   the address-space limit per case, in GiB (default 10)
 #   YBUS_BENCH_CASES    the cases to survey, separated by spaces (default: every case with costs)
@@ -52,7 +55,12 @@ case "${ORDERING}" in
     amd|matched) ;;
     *) echo "error: YBUS_BENCH_KKT_ORDERING must be amd or matched" >&2; exit 2 ;;
 esac
-OUT="${1:-${ROOT}/target/opf-survey-${MODEL}-${SOLVER}-${KKT}-${ORDERING}.csv}"
+LINE_SEARCH="${YBUS_BENCH_LINE_SEARCH:-off}"
+case "${LINE_SEARCH}" in
+    off|monotone|adaptive) ;;
+    *) echo "error: YBUS_BENCH_LINE_SEARCH must be off, monotone or adaptive" >&2; exit 2 ;;
+esac
+OUT="${1:-${ROOT}/target/opf-survey-${MODEL}-${SOLVER}-${KKT}-${ORDERING}-${LINE_SEARCH}.csv}"
 TIMEOUT="${YBUS_BENCH_TIMEOUT:-3600}"
 MEMORY_GIB="${YBUS_BENCH_MEMORY:-10}"
 case "${MODEL}" in
@@ -108,6 +116,7 @@ for name in "${CASES[@]}"; do
     if line="$(/usr/bin/time -f %M -o "${LOG}/rss" timeout "${TIMEOUT}" \
         bash -c 'ulimit -v "$1" && exec "${@:2}"' _ "$((MEMORY_GIB * 1024 * 1024))" \
         "${SURVEY}" --model "${MODEL}" --solver "${SOLVER}" --kkt "${KKT}" --kkt-ordering "${ORDERING}" \
+        --line-search "${LINE_SEARCH}" \
         "${NORMALIZED}/${name}.m" "${REFERENCE}" \
         2> "${LOG}/err")"; then
         status=ok

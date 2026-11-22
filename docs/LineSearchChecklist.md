@@ -378,8 +378,21 @@ for the defaults its papers name.
 
 ## PR 4: the survey and the default
 
-- [ ] **The survey's tooling:** `YBUS_BENCH_LINE_SEARCH` in `scripts/benchmark-opf.sh` and the
+- [x] **The survey's tooling:** `YBUS_BENCH_LINE_SEARCH` in `scripts/benchmark-opf.sh` and the
   `opf_survey` example.
+  - **Done** (2026-11-22).
+    - **`opf_survey --line-search off|monotone|adaptive`** adds eight columns: the line search,
+      then counts from the method's record (the backtracks, the steps with a second-order
+      correction, the restoration phases and their iterations, the switches to fixed mode, the
+      returns, and the fixed-mode iterations).
+    - **`opf_batch --line-search`,** with a `line_search` column, and
+      `YBUS_BATCH_LINE_SEARCH` in `scripts/benchmark-opf-batch.sh`.
+    - **`mehrotra_test.rs`'s `every_line_search_meets_the_bar_on_mipss_problems`** runs MIPS's
+      test problems with each line search on LDLᵀ, under `check`'s bar without its pins
+      (`meets_the_bar`). Every one passes, and the infeasible LP fails under each.
+    - **`--line-search off` matches the unchanged example** on every result column: 36 runs,
+      on six cases, both models, with MIPS-LU and the predictor-corrector method with
+      `ldlt-uncorrected` and `ldlt`.
 - [ ] **The rule, before the survey:** a default changes only if every outcome is the same or
   better, O3's bar holds wherever today's default meets it, and the iteration and time cost
   stays within a limit stated with the rule. The objective-gap cases, the backtracks, the
