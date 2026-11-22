@@ -265,10 +265,48 @@ for the defaults its papers name.
 
 ## PR 3: the adaptive barrier
 
-- [ ] **The rules, from the paper, written here before coding:**
+- [x] **The rules, from the paper, written here before coding:**
   - the free mode's progress test
   - when to switch to fixed mode, and its μ
   - when to return
+  - **Written 2026-11-22,** from §5 ("Globalization Framework") and §6 of the paper's 2005
+    report: J. Nocedal, A. Wächter and R. A. Waltz, "Adaptive barrier strategies for nonlinear
+    interior methods," IBM Research Report RC23563, February 2005, read from the copy on
+    Optimization Online (`optimization-online.org/wp-content/uploads/2005/03/1089.pdf`). The
+    2009 *SIAM J. Optim.* version wasn't available to read, so these rules are the report's.
+  - **The defaults the report leaves open** come from IPOPT's options documentation
+    (`coin-or.org/Ipopt/OPTIONS.html`), each read verbatim on 2026-11-22:
+    `adaptive_mu_kkterror_red_fact = 0.9999`, `adaptive_mu_kkterror_red_iters = 4`,
+    `adaptive_mu_kkt_norm_type = 2-norm-squared`, `fixed_mu_oracle = average_compl`,
+    `adaptive_mu_monotone_init_factor = 0.8`, and `adaptive_mu_restore_previous_iterate = no`.
+  - **The measure,** the original problem's KKT error (5.1):
+    `Φ = ‖∇L‖² + ‖c‖² + ‖ZXe‖²`. As in IPOPT (§6), each term is divided by its vector's
+    length. Here that's
+    `‖r_d‖²/nx + ‖[g; h + z]‖²/m + ‖[z∘μ; s_l∘π_l; s_u∘π_u]‖²/pairs`, with an empty term
+    left out.
+  - **Free mode's test:** a free iteration's new point is accepted if `Φ̃ ≤ κ M_k`, with
+    `M_k = max{Φ_{k−l}, …, Φ_k}` and `l = min(k, l_max)`: the KKT error falls by `κ = 0.9999`
+    against the largest of the last `l_max + 1 = 5` accepted values. The values are those of
+    accepted free points and of the points where fixed mode returns.
+  - **Free mode's step:** the report allows any rule for μ. Its own implementations also
+    line-searched each free step, with a filter reset every free iteration (§5), and dropped
+    harmful correctors (§7). Here free mode is today's predictor-corrector step, taken whole
+    (decided 2026-11-22), so that wherever `Φ` keeps falling the method is `Off`'s with LDLᵀ and
+    the inertia correction, bit for bit.
+  - **The switch:** if the test fails, fixed mode starts **from the trial point** (the report's
+    framework, and IPOPT's `restore_previous_iterate = no`).
+    - **Its barrier parameter:** `μ̄ = 0.8 ×` the average complementarity there, no lower than
+      fixed mode's floor.
+    - **The filter** is reset, and `M_k` is frozen.
+    - **A free step that can't be computed, or is longer than `max_stepsize`,** has no trial
+      point, so fixed mode starts from the current point.
+  - **Fixed mode:** PR 1's monotone barrier and filter, with PR 2's restoration.
+  - **The return:** "as soon as `Φ(x, y, z) ≤ κ M_k`", checked at every fixed-mode iterate,
+    including after a restoration phase, without first solving its barrier problem (§5). The
+    returning point's `Φ` joins the reference values.
+  - **Why it converges:** `Φ` falls by `κ` at least every `l_max` iterations, so every limit
+    point is a first-order point (§5). Fixed mode reaches each such point by PR 1's and PR 2's
+    globalization.
 - [ ] **`LineSearch::AdaptiveFilter`:**
   - **The free mode:** today's predictor-corrector step, accepted by the free mode's test.
   - **The fixed mode:** PR 1's filter, with PR 2's restoration.
