@@ -1,6 +1,12 @@
 // Tests for the solver-independent KKT check (ybus_ipm::solution::kkt_residuals): zero at
 //   a known exact optimum, each residual catching its own kind of error, and small at MIPS's
 //   solutions of MATPOWER's MIPS test problems, nonlinear ones included.
+//
+// qp2 below, with its expected answer, is restated from t_qps_mips.m, where it's the example
+//   of MATLAB's quadprog documentation, which t_qps_mips names as its source:
+//   Copyright (c) 2010-2024, Power Systems Engineering Research Center (PSERC)
+//   by Ray Zimmerman, PSERC Cornell
+//   Covered by the 3-clause BSD License; see LICENSE-MIPS at the repository's root.
 
 mod common;
 

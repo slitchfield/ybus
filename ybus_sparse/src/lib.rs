@@ -47,8 +47,10 @@
 //! # Features
 //!
 //! - `serde`: `Serialize` and `Deserialize` for both matrix types.
-//! - `rayon`: parallel products, prefixed `par_`, whose results are bit for bit the
-//!   sequential versions'.
+//! - `rayon`: parallel products and many-right-hand-side solves, prefixed `par_`, whose results
+//!   are bit for bit the sequential versions'; and the multifrontal LDLᵀ's factorization and
+//!   solves over its front tree's independent subtrees, bit for bit the serial ones at any
+//!   thread count.
 //!
 //! See the [README](https://crates.io/crates/ybus_sparse) for a longer tour, and the
 //! [repository](https://github.com/slitchfield/ybus) for the rest of the `ybus` workspace.

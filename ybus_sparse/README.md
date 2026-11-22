@@ -193,7 +193,7 @@ checked method alongside it (`try_add`, `matmul`, `mul_vec`, `peek_at`, …).
 | Feature | Adds |
 |---|---|
 | `serde` | `Serialize`/`Deserialize` for `SparseMatrix` as `{"shape": [r, c], "entries": [[row, col, value], ...]}`, with entries in row-major order and validated like `from_triplets`; and for `CompressedMatrix` as its arrays with the orientation, validated like `try_from_raw_parts` |
-| `rayon` | `par_mul_vec` on `CsrMatrix`, `par_vec_mul` on `CscMatrix` and `par_matmul` on both, which return results bit-for-bit equal to the sequential versions |
+| `rayon` | `par_mul_vec` on `CsrMatrix`, `par_vec_mul` on `CscMatrix`, `par_matmul` on both, and `par_solve_many` for every factorization, which return results bit-for-bit equal to the sequential versions; and the multifrontal LDLᵀ's factorization and solves run its front tree's independent subtrees in parallel, also bit for bit the serial ones, at any thread count |
 
 ## Development
 

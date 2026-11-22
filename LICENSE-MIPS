@@ -7,8 +7,13 @@ redistributed under MIPS's 3-clause BSD license, reproduced below:
 
 - ybus_ipm/src/mips.rs: a step-for-step port of mips.m and qps_mips.m
   (Copyright (c) 2009-2024 and 2010-2024, PSERC)
-- ybus_ipm/tests/mips_test.rs: the test problems, starting points and expected answers of
+- ybus_ipm/tests/common/mod.rs: the test problems, starting points and expected answers of
   t_mips.m and t_qps_mips.m, restated in Rust (Copyright (c) 2010-2024, PSERC)
+- ybus_ipm/tests/mips_test.rs and ybus_ipm/tests/mehrotra_test.rs: t_qps_mips.m's quadratic
+  and linear programs, with their starting points and expected answers, restated in Rust
+  (Copyright (c) 2010-2024, PSERC)
+- ybus_ipm/tests/solution_test.rs: t_qps_mips.m's qp2 and its answer, restated in Rust
+  (Copyright (c) 2010-2024, PSERC)
 - scripts/generate_mips_reference.m: the problem functions of t_mips.m, copied, and the problems
   of t_mips.m and t_qps_mips.m (Copyright (c) 2010-2024, PSERC)
 

@@ -84,7 +84,7 @@ fn main() -> Result<(), PowerflowError> {
 
 | Feature | Adds |
 |---|---|
-| `rayon` | Parallel batches of outages and of PTDF and LODF columns (`DcStudy::par_solve_outages`, `DcSensitivity::par_ptdf_columns` and `par_lodf_columns`), and `ybus_sparse`'s `rayon` feature |
+| `rayon` | Parallel batches of outages and of PTDF and LODF columns (`DcStudy::par_solve_outages`, `DcSensitivity::par_ptdf_columns` and `par_lodf_columns`); parallel batches of OPF solves (`opf::batch::par_ac_opf_outages` and `par_dc_opf_outages`, and `par_solve_many` on the OPF models); the AC OPF's evaluation in parallel on large networks; and `ybus_ipm`'s and `ybus_sparse`'s `rayon` features. Every parallel result is bit for bit the serial one |
 | `cuda` | **Experimental.** The DC studies on a GPU, through [`ybus_cuda`](https://crates.io/crates/ybus_cuda): batched solves, single-branch outages and PTDF columns (`DcStudy::gpu`, `DcSensitivity::gpu`). It builds without the CUDA toolkit; running it needs a CUDA 13 driver and cuSPARSE. |
 
 ## Development

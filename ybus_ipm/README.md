@@ -35,7 +35,8 @@ ybus_sparse = "0.1"
 ```
 
 A quadratic program: minimize `½ xᵀ H x + cᵀ x` subject to three linear constraints and
-`x ≥ 0`.
+`x ≥ 0`. It's the example of MATLAB's `quadprog` documentation, which MIPS's own tests
+(`t_qps_mips.m`) also solve.
 
 ```rust
 use ybus_ipm::mips::{qps_mips, MipsOptions};
@@ -77,6 +78,12 @@ fn main() -> Result<(), InteriorPointError> {
 
 `mehrotra::qps_mehrotra(&qp, &constraints, None, &MehrotraOptions::default())` solves the same
 program with the predictor-corrector method.
+
+## Features
+
+| Feature | Adds |
+|---|---|
+| `rayon` | `ybus_sparse`'s `rayon` feature, so that the LDLᵀ's KKT factorizations and solves run in parallel, bit for bit the serial ones |
 
 ## Development
 

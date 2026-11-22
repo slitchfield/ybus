@@ -37,19 +37,11 @@ releases.
   height and critical path.
 - `SymbolicLdlt::refactor`: a factorization into an earlier one's storage, bit for bit
   `factor`'s with fewer allocations. The interior-point solvers' KKT factorizations use it.
-- With the `rayon` feature, the multifrontal LDLᵀ factors in parallel: independent subtrees of
-  its front tree. It's bit for bit the serial factorization at any thread count, and `ybus_ipm`'s new `rayon` feature, forwarded by
-  `ybus_powerflow`'s, gives it to the OPF's KKT factorizations. It runs serially on a
-  one-thread pool, and inside `opf::batch`'s `par_` forms, whose solves are the parallelism.
-- With the `rayon` feature, the AC OPF's evaluation runs its independent parts concurrently on
-  networks of 1,000 buses or more: the bus and branch-end flows, the Lagrangian Hessian's bus and
-  branch-end parts, and their parts in turn. It's bit for bit the serial evaluation, and serial
-  in the same places the LDLᵀ is. The LDLᵀ factorizations now
-  require `T: Send + Sync`, which every scalar type here satisfies.
-- With the `rayon` feature, the multifrontal LDLᵀ's solves run in parallel too: the front tree's
-  independent subtrees, bit for bit the serial solve at any thread count, and serial in the
-  same places the factorization is. `Ldlt`'s solves, like its factorizations, require
-  `T: Send + Sync`.
+- With the `rayon` feature, the multifrontal LDLᵀ factors and solves in parallel: the
+  independent subtrees of its front tree. Both are bit for bit the serial ones at any thread
+  count. They run serially on a one-thread pool, and inside `ybus_powerflow`'s parallel
+  batches, whose solves are the parallelism. The LDLᵀ's
+  factorizations and solves require `T: Send + Sync`, which every scalar type here satisfies.
 - Conjugate gradient, and Matrix Market reading and writing.
 - Optional features: `serde`, and `rayon` for parallel products and solves.
 
@@ -80,6 +72,8 @@ releases.
   patterns don't change can refill values in place. Each defaults to its allocating method.
 - The solvers keep the Newton system's product and sum, and the KKT matrix's assembly, planned
   for the solve while their patterns hold, with the same results bit for bit.
+- Optional feature: `rayon`, which gives the KKT factorizations and solves `ybus_sparse`'s
+  parallel LDLᵀ.
 
 #### `ybus_cuda` (experimental)
 
@@ -91,8 +85,9 @@ releases.
 - `GpuLdlt`: a sparse symmetric indefinite `L D Lᵀ` on the device through cuDSS 1.0, with its
   inertia, analyzed once and refactored for new values. cuDSS is loaded at run time too, and
   `GpuLdlt::new` returns `Ok(None)` without it. Its solves need refinement, since cuDSS
-  perturbs small pivots, and `GpuLdlt::perturbed_pivots` counts them. `GpuLdlt::with_ordering` takes the
-  elimination order, and `GpuLdlt::factor_entries` reports the fill. On the OPF's KKT matrices
+  perturbs small pivots, and `GpuLdlt::perturbed_pivots` counts them.
+  `GpuLdlt::with_ordering` takes the elimination order, and `GpuLdlt::factor_entries` reports
+  the fill. On the OPF's KKT matrices
   its inertia and solves were wrong, since their zero constraint block needs pivots cuDSS can't
   choose, so the interior-point solvers don't use it.
 
@@ -120,10 +115,15 @@ releases.
   (`ac_opf_outages`, `dc_opf_outages`); and many cases on one model (`solve_many` on both
   models). With the `rayon` feature, their `par_` forms run the solves in parallel, bit for bit
   the serial results at any thread count.
+- With the `rayon` feature, the AC OPF's evaluation runs its independent parts concurrently on
+  networks of 1,000 buses or more: the bus and branch-end flows, the Lagrangian Hessian's bus and
+  branch-end parts, and their parts in turn. It's bit for bit the serial evaluation, and serial
+  in the same places the LDLᵀ is.
 - Islands and bridges of a network.
 - Each solver is tested against results computed by MATPOWER.
-- Optional features: `rayon` for parallel outages and sensitivities, and `cuda`
-  (experimental) for the DC studies on a GPU, through `ybus_cuda`.
+- Optional features: `rayon` for parallel outages, sensitivities, OPF batches and AC OPF
+  evaluation (and `ybus_ipm`'s and `ybus_sparse`'s parallel LDLᵀ), and `cuda` (experimental)
+  for the DC studies on a GPU, through `ybus_cuda`.
 
 [Unreleased]: https://github.com/slitchfield/ybus/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/slitchfield/ybus/releases/tag/v0.1.0

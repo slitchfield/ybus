@@ -39,6 +39,10 @@
 //!   method; and the generator costs ([`opf::cost`]).
 //! - [`islands`]: a network's islands and bridges ([`islands::find_islands`],
 //!   [`islands::find_bridges`]), as MATPOWER's `find_islands` and `find_bridges` define them.
+//! - With the `rayon` feature, parallel batches, bit for bit the serial results: a DC study's
+//!   outages and sensitivities, and OPF solves of a case's outages or of many cases on one
+//!   model (`opf::batch`). The AC OPF's evaluation, and `ybus_ipm`'s KKT factorizations, run
+//!   in parallel too.
 //! - With the `cuda` feature, the DC power flow on the GPU: batched solves, single-branch
 //!   outages and PTDF columns (`dc::DcStudy::gpu` and `dc::DcSensitivity::gpu`), on a `Gpu`
 //!   from `ybus_cuda`. (Plain code, not links: the items exist only with the feature.)

@@ -40,6 +40,8 @@
 //! - [`mehrotra`]: a primal-dual method with Mehrotra's predictor-corrector, written from the
 //!   literature, for the same programs.
 //! - [`kkt`]: how the solvers factor the KKT system, by LU (the default) or by LDLᵀ.
+//! - [`start`]: warm starts, a solve begun from an earlier solution's point and multipliers
+//!   ([`start::Start`]), for sequences of related problems.
 //! - [`interior_point_error`]: why a solver couldn't start.
 //!
 //! The problem types, the result and the error type are re-exported here: [`Problem`],
@@ -62,8 +64,12 @@
 //! A general nonlinear program implements [`Problem`], with its derivatives; a quadratic or
 //! linear one is a [`QuadraticProblem`], for `qps_mips` and `qps_mehrotra`.
 //!
-//! The linear algebra is [`ybus_sparse`]'s. See the
-//! [roadmap](https://github.com/slitchfield/ybus/blob/main/docs/OptimizationChecklist.md) for
+//! The linear algebra is [`ybus_sparse`]'s. With the `rayon` feature, its LDLᵀ factors and
+//! solves the KKT systems in parallel, bit for bit the serial results.
+//!
+//! See the [roadmap](https://github.com/slitchfield/ybus/blob/main/docs/OptimizationChecklist.md)
+//! for how the solvers were built and measured, and the
+//! [long-term goals](https://github.com/slitchfield/ybus/blob/main/docs/LongTermGoals.md) for
 //! what's planned.
 
 // No unsafe code here: the GPU path's FFI and kernel launches live in ybus_cuda, behind a safe
