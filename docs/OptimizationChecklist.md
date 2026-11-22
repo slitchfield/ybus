@@ -1173,9 +1173,68 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
         so the loss is the fused kernel's own.
       - **Accuracy:** unchanged outcomes and iterations, with differences in the last digits.
       - **No option was built,** and target 3 closes.
-- [ ] **A GPU KKT factorization** (O5 target 4): a cuDSS spike behind `cuda`. It's gated: only
+- [x] **A GPU KKT factorization** (O5 target 4, closed 2026-11-22, no go): a cuDSS spike behind `cuda`. It's gated: only
   if the KKT factorization is still the largest stage of a large AC solve after targets 1–3,
   and O2's transfer measurements leave it room.
+  - **The gate, decided 2026-11-22:** measured at 1 and 14 threads, and passing at either is
+    enough.
+  - **The gate's result (2026-11-22): passes.**
+    - **The measurement:** same-day profiles of the predictor-corrector method's AC, with the
+      factorization's three stages combined (dense kernel, front assembly, numeric
+      factorization), against the largest other stage, the evaluation:
+
+      | Case | 1 thread | 14 threads |
+      |---|---|---|
+      | case9241pegase | 36.5% against 23.7% | 32.6% against 28.3% |
+      | case_ACTIVSg10k | 42.2% against 27.4% | 36.2% against 30.9% |
+      | case_ACTIVSg25k | 38.1% against 25.6% | 32.0% against 35.7% (fails) |
+
+    - **The transfer room:** each iteration's upload of the KKT matrix's values is at most its
+      factor's entries times 8 bytes: 6.6–21.0 MB. At O2's pinned rate (1.07 GB in 55 ms), that's
+      at most 0.34–1.08 ms, against 17.7–55.1 ms of factorization at one thread. That's at most
+      2%.
+  - **The second gate, written before it's measured:** the solvers get cuDSS only if both hold,
+    on case_ACTIVSg10k's and case_ACTIVSg25k's AC KKT matrices (dumped from real solves):
+    - **Speed:** its refactorization and solves, with the CPU's refinement and the transfers
+      counted, are at least ×1.5 faster than the CPU LDLᵀ, at 1 or at 14 threads.
+    - **Inertia:** it matches the CPU's on every dumped matrix, since the inertia correction
+      depends on it.
+  - **Then:** a `KktFactorization::Cudss` option for both solvers, behind a new `cuda` feature in
+    `ybus_ipm`. It's opt-in and judged by O3's bar.
+  - **The second gate's result: no go**
+    ([`o5-cudss-spike-2026-11-22.md`](benchmarks/o5-cudss-spike-2026-11-22.md)).
+    - **Fast, nominally:** an iteration's refactorization and two refined solves were ×2.1–5.7
+      faster than the CPU LDLᵀ.
+    - **But wrong:** the inertia was wrong on all 9 dumped KKT matrices, and the solves'
+      residuals were 7e2–1e11, which refinement didn't reduce.
+    - **Why (2026-11-22):** the KKT matrix's zero constraint block.
+      - **Exactly zero pivots:** cuDSS's ordering eliminates most constraint rows before their
+        coupled variables, so their pivots are exactly zero.
+      - **What's missing:** cuDSS pivots only within a supernode, with no delayed pivots, so it
+        replaces a fifth to a third of all pivots with ±1e-13. The factors grow until rounding
+        swamps the matrix.
+      - **Reproduced on the CPU:** our static LDLᵀ under the same rule fails the same way (D
+        up to 1e21–4e22), as it did in O4.
+      - **Regularized** to `[W + δI, Jᵀ; J, −δI]` with δ ≥ 1e-4, cuDSS perturbs nothing and its
+        inertia is right, but accuracy then grows only as δ does.
+    - **A binding bug, fixed:** the analysis first ran on zeros, so cuDSS's default matching
+      did nothing. Fixing it didn't change the verdict.
+    - **So:** the solvers don't get cuDSS, and PRs 4b and 4c aren't built.
+    - **The bindings stay** in `ybus_cuda` as `GpuLdlt`, with `perturbed_pivots()` and the
+      finding in their docs.
+    - **Our orderings given to cuDSS (2026-11-22): partial mitigation, and slower than the CPU.**
+      - **AMD:** perturbed pivots fall by up to 99%, but only 1 of 9 matrices comes out
+        correct.
+      - **Matched:** it removes the exact zeros, but 5,521–14,188 tiny pivots are still
+        perturbed.
+      - **Speed:** on any supplied ordering, cuDSS's factorization is 10–25× slower than on its
+        own, so the GPU runs at ×0.21–0.59 of the CPU's speed at 1 and 14 threads.
+    - **Not tried:** regularizing the solver's KKT matrix for cuDSS, which is a solver change
+      under O3's bar. It's recorded as a long-term goal: GPU-friendly KKT formulations
+      ([`LongTermGoals.md`](LongTermGoals.md), goal 6).
+
+**Phase O5 is complete** (PRs #88–#94 and this one, 2026-11-22). Next is the publishing plan, P5
+(`docs/PublishingChecklist.md`).
 
 ## Warm starts for OPF sequences
 
