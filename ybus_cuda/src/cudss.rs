@@ -24,6 +24,7 @@ type Opaque = *mut c_void;
 const CONFIG_DETERMINISTIC_MODE: c_int = 24;
 /// `cudssDataParam_t`'s error indicator and inertia
 const DATA_INFO: c_int = 0;
+const DATA_NPIVOTS: c_int = 2;
 const DATA_INERTIA: c_int = 3;
 /// `cudssPhase_t`
 const PHASE_ANALYSIS: c_int = 0b11;
@@ -152,11 +153,16 @@ pub struct LdltTimings {
 ///   inertia is a nearby nonsingular matrix's. Don't rely on [`GpuLdlt::factor`] to detect
 ///   singularity.
 ///
-/// **Not for interior-point KKT matrices yet:** on the OPF's real KKT matrices (O5 target 4's
-/// spike, `docs/benchmarks/o5-cudss-spike-2026-11-22.md`), its inertia was wrong on every one,
-/// and its solves' relative residuals were 10⁴–10⁷, which refinement didn't reduce. Matching,
-/// Bunch–Kaufman pivoting, the scaled epsilon, AMD ordering and symmetric equilibration didn't
-/// help, and cuDSS's general mode gave NaNs.
+/// **Not for interior-point KKT matrices:** an OPF's KKT matrix `[W Jᵀ; J 0]` has a zero
+/// constraint block, and cuDSS's ordering eliminates most constraint rows before the variables
+/// they couple to, so their pivots are exactly zero. A 2×2 pivot with a coupled variable would
+/// take them, but cuDSS pivots only within a supernode and can't delay a pivot to its parent, so
+/// it perturbs them to its epsilon (1e-13): a third of all pivots on the OPF's matrices. Dividing
+/// by those makes the factors grow (to 1e21 and more in `ybus_sparse`'s static LDLᵀ under the
+/// same rule), and the rounding in later updates swamps the matrix: the inertia is wrong, and
+/// refinement doesn't reduce the solves' residuals
+/// (`docs/benchmarks/o5-cudss-spike-2026-11-22.md`). [`GpuLdlt::perturbed_pivots`] reports it.
+/// Regularizing the matrix enough to be quasi-definite removes the perturbations.
 ///
 /// [`Ldlt`]: ybus_sparse::compressed_matrix::Ldlt
 pub struct GpuLdlt<'g> {
@@ -191,7 +197,8 @@ pub struct GpuLdlt<'g> {
 impl<'g> GpuLdlt<'g> {
     /// Analyzes `a`, a symmetric matrix stored in full (both triangles, as
     /// [`CsrMatrix::ldlt`] takes it), for factoring on `gpu`, or `None` if cuDSS isn't
-    /// installed. Only `a`'s lower triangle is uploaded; [`GpuLdlt::factor`] then factors it.
+    /// installed. Only `a`'s lower triangle is uploaded, values included, since cuDSS's matching
+    /// uses them; [`GpuLdlt::factor`] then factors it, or another matrix on the pattern.
     ///
     /// Returns `CudaError::ShapeMismatch` for a non-square matrix, `CudaError::TooLarge` past
     /// 32-bit indices, and cuDSS's or the driver's errors.
@@ -294,6 +301,11 @@ impl<'g> GpuLdlt<'g> {
             )?;
         }
         ldlt.describe(lower_ptr.len())?;
+        // `a`'s values before the analysis: cuDSS 1.0's default matching (`AUTO`) computes its
+        //   permutation and scaling from them, and from zeros it does nothing useful
+        let start = Instant::now();
+        ldlt.stage_values(a)?;
+        ldlt.timings.upload += start.elapsed();
         let start = Instant::now();
         ldlt.execute(PHASE_ANALYSIS, "cudssExecute (analysis)")?;
         stream.synchronize()?;
@@ -404,13 +416,31 @@ impl<'g> GpuLdlt<'g> {
         Ok(value)
     }
 
+    /// `a`'s lower triangle's values, gathered into the page-locked staging and copied to the
+    ///   device's array, which the matrix's descriptor points into
+    fn stage_values(&mut self, a: &CsrMatrix<f64>) -> Result<(), CudaError> {
+        {
+            let staged = self.staged_values.as_mut_slice()?;
+            let data = a.values();
+            for (slot, &p) in staged.iter_mut().zip(&self.lower) {
+                *slot = data[p];
+            }
+        }
+        self.gpu
+            .stream
+            .memcpy_htod(&self.staged_values, &mut self.values)?;
+        self.gpu.stream.synchronize()?;
+        Ok(())
+    }
+
     /// The order of the matrix.
     pub fn dim(&self) -> usize {
         self.n
     }
 
     /// Factors `a`, which must have the analyzed pattern: the first time a factorization,
-    /// then refactorizations, which reuse the analysis.
+    /// then refactorizations, which reuse the analysis, including the matching and scaling
+    /// cuDSS chose from the values [`GpuLdlt::new`] was given.
     ///
     /// Returns `CudaError::PatternMismatch` for another pattern, `CudaError::Singular` if cuDSS
     /// reports a failure in its error indicator, and cuDSS's or the driver's errors. A singular
@@ -422,18 +452,9 @@ impl<'g> GpuLdlt<'g> {
         {
             return Err(CudaError::PatternMismatch);
         }
-        let stream = &self.gpu.stream;
         self.gpu.context.bind_to_thread()?;
         let start = Instant::now();
-        {
-            let staged = self.staged_values.as_mut_slice()?;
-            let data = a.values();
-            for (slot, &p) in staged.iter_mut().zip(&self.lower) {
-                *slot = data[p];
-            }
-        }
-        stream.memcpy_htod(&self.staged_values, &mut self.values)?;
-        stream.synchronize()?;
+        self.stage_values(a)?;
         self.timings.upload += start.elapsed();
         let start = Instant::now();
         if self.factored {
@@ -498,6 +519,20 @@ impl<'g> GpuLdlt<'g> {
             positive: positive.max(0) as usize,
             negative: negative.max(0) as usize,
         })
+    }
+
+    /// How many 1×1 pivots the last factorization perturbed (`CUDSS_DATA_NPIVOTS`): pivots too
+    /// small to take, replaced by cuDSS's signed epsilon. 0 means the factorization is exact up
+    /// to rounding; many mean the factors, the solves and the inertia can't be trusted (see
+    /// [`GpuLdlt`]).
+    ///
+    /// Returns `CudaError::NotFactored` before a successful [`GpuLdlt::factor`].
+    pub fn perturbed_pivots(&self) -> Result<usize, CudaError> {
+        if !self.factored {
+            return Err(CudaError::NotFactored);
+        }
+        let [count] = self.data_ints::<1>(DATA_NPIVOTS)?;
+        Ok(count.max(0) as usize)
     }
 
     /// The time spent so far, by stage.

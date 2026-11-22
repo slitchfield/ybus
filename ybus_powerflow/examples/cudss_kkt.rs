@@ -13,7 +13,7 @@
 //!   the host's matrix, the residuals computed on the host. The transfers are counted in each
 //!   stage. Separately, the corrections the GPU needs to reach 1e-12 at all, up to 10.
 //! - **Reported:** the time per stage (the median of `RUNS`), the inertia of each and whether
-//!   they agree, the refined residuals, and the device memory in use after factoring.
+//!   they agree, cuDSS's perturbed pivots, the refined residuals, and the device memory in use after factoring.
 //!
 //! Prints one CSV line per matrix.
 
@@ -27,7 +27,7 @@ use ybus_cuda::{Gpu, GpuLdlt};
 use ybus_sparse::compressed_matrix::{CsrMatrix, LdltOptions, Ordering};
 use ybus_sparse::SparseMatrix;
 
-const HEADER: &str = "label,matrix,n,entries,threads,cpu_analysis_ms,cpu_factor_ms,cpu_solves_ms,cpu_steps,cpu_residual,cpu_positive,cpu_negative,gpu_analysis_ms,gpu_factor_ms,gpu_solves_ms,gpu_steps,gpu_residual,gpu_steps_to_tolerance,gpu_positive,gpu_negative,inertia_matches,cpu_iteration_ms,gpu_iteration_ms,speedup,device_mib";
+const HEADER: &str = "label,matrix,n,entries,threads,cpu_analysis_ms,cpu_factor_ms,cpu_solves_ms,cpu_steps,cpu_residual,cpu_positive,cpu_negative,gpu_analysis_ms,gpu_factor_ms,gpu_solves_ms,gpu_steps,gpu_residual,gpu_steps_to_tolerance,gpu_perturbed,gpu_positive,gpu_negative,inertia_matches,cpu_iteration_ms,gpu_iteration_ms,speedup,device_mib";
 
 /// The KKT solver's settings (`ybus_ipm::kkt`)
 const THRESHOLD: f64 = 1e-4;
@@ -178,12 +178,13 @@ fn run(label: &str, path: &str, gpu: &Gpu) -> Result<(), Box<dyn std::error::Err
     let (cpu_iteration, gpu_iteration) = (cpu_factor + cpu_solves, gpu_factor + gpu_solves);
     let matrix = path.rsplit('/').next().unwrap_or(path);
     println!(
-        "{label},{matrix},{n},{},{},{cpu_analysis:.3},{cpu_factor:.3},{cpu_solves:.3},{cpu_steps},{cpu_residual:e},{},{},{gpu_analysis:.3},{gpu_factor:.3},{gpu_solves:.3},{gpu_steps},{gpu_residual:e},{},{},{},{},{cpu_iteration:.3},{gpu_iteration:.3},{:.3},{}",
+        "{label},{matrix},{n},{},{},{cpu_analysis:.3},{cpu_factor:.3},{cpu_solves:.3},{cpu_steps},{cpu_residual:e},{},{},{gpu_analysis:.3},{gpu_factor:.3},{gpu_solves:.3},{gpu_steps},{gpu_residual:e},{},{},{},{},{},{cpu_iteration:.3},{gpu_iteration:.3},{:.3},{}",
         a.indices().len(),
         rayon::current_num_threads(),
         cpu_inertia.positive,
         cpu_inertia.negative,
         if to_tolerance == usize::MAX { "never".to_string() } else { to_tolerance.to_string() },
+        device.perturbed_pivots()?,
         gpu_inertia.positive,
         gpu_inertia.negative,
         cpu_inertia == gpu_inertia,

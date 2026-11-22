@@ -1203,17 +1203,30 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
     `ybus_ipm`. It's opt-in and judged by O3's bar.
   - **The second gate's result: no go**
     ([`o5-cudss-spike-2026-11-22.md`](benchmarks/o5-cudss-spike-2026-11-22.md)).
-    - **Fast, nominally:** an iteration's refactorization and two refined solves were ×2.4–6.2
+    - **Fast, nominally:** an iteration's refactorization and two refined solves were ×2.1–5.7
       faster than the CPU LDLᵀ.
     - **But wrong:** the inertia was wrong on all 9 dumped KKT matrices, and the solves'
-      residuals were 5 × 10⁴ to 10⁷, which refinement didn't reduce. cuDSS perturbs small
-      pivots instead of delaying them.
-    - **No setting fixed it:** matching, Bunch–Kaufman pivoting, the scaled epsilon, AMD
-      ordering, equilibration, and general mode.
+      residuals were 7e2–1e11, which refinement didn't reduce.
+    - **Why (2026-11-22):** the KKT matrix's zero constraint block.
+      - **Exactly zero pivots:** cuDSS's ordering eliminates most constraint rows before their
+        coupled variables, so their pivots are exactly zero.
+      - **What's missing:** cuDSS pivots only within a supernode, with no delayed pivots, so it
+        replaces a fifth to a third of all pivots with ±1e-13. The factors grow until rounding
+        swamps the matrix.
+      - **Reproduced on the CPU:** our static LDLᵀ under the same rule fails the same way (D
+        up to 1e21–4e22), as it did in O4.
+      - **Regularized** to `[W + δI, Jᵀ; J, −δI]` with δ ≥ 1e-4, cuDSS perturbs nothing and its
+        inertia is right, but accuracy then grows only as δ does.
+    - **A binding bug, fixed:** the analysis first ran on zeros, so cuDSS's default matching
+      did nothing. Fixing it didn't change the verdict.
     - **So:** the solvers don't get cuDSS, and PRs 4b and 4c aren't built.
-    - **The bindings stay** in `ybus_cuda` as `GpuLdlt`, with the finding in their docs.
-    - **Not tried:** regularizing the KKT matrix so cuDSS sees a quasi-definite one. That's a
-      solver change under O3's bar, left for later.
+    - **The bindings stay** in `ybus_cuda` as `GpuLdlt`, with `perturbed_pivots()` and the
+      finding in their docs.
+    - **Not tried:**
+      - a user ordering that eliminates each constraint after a coupled variable (`ybus_ipm`'s
+        matched ordering)
+      - regularizing the solver's KKT matrix for cuDSS, which is a solver change under O3's
+        bar
 
 **Phase O5 is complete** (PRs #88–#94 and this one, 2026-11-22). Next is the publishing plan, P5
 (`docs/PublishingChecklist.md`).

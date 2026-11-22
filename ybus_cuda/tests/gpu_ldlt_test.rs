@@ -148,44 +148,51 @@ fn solves_and_inertia_match_the_cpu_ldlt() {
 }
 
 #[test]
-fn refactoring_is_a_fresh_factorization_and_repeats_exactly() {
-    let test = "refactoring_is_a_fresh_factorization_and_repeats_exactly";
+fn refactoring_repeats_exactly_and_solves_as_a_fresh_factorization() {
+    let test = "refactoring_repeats_exactly_and_solves_as_a_fresh_factorization";
     let Some(gpu) = gpu(test) else { return };
     let (first, second) = (saddle(30, 3, 5, 1.0), saddle(30, 3, 5, 0.25));
     assert_eq!(first.pointers(), second.pointers());
     assert_eq!(first.indices(), second.indices());
     let b = rhs(first.shape().0, 13);
-    let Some(mut refactored) = analyze(&gpu, &first, test) else {
+    // Analyzed on `first`, refactored for `second`: the matching and scaling come from the
+    //   analysis's values, so this isn't bit for bit a fresh analysis of `second`, but the same
+    //   sequence repeats exactly (deterministic mode)
+    let run = || {
+        let mut ldlt = analyze(&gpu, &first, test).unwrap();
+        ldlt.factor(&first).unwrap();
+        ldlt.factor(&second).unwrap();
+        let x = ldlt.solve(&b).unwrap();
+        (ldlt, x)
+    };
+    let Some(_) = analyze(&gpu, &first, test) else {
         return;
     };
-    refactored.factor(&first).unwrap();
-    refactored.factor(&second).unwrap();
-    let x = refactored.solve(&b).unwrap();
+    let (mut refactored, x) = run();
+    let (_, again) = run();
+    assert_eq!(again, x, "the same sequence, the same solution");
+    assert_eq!(refactored.solve(&b).unwrap(), x, "solved again");
     let inertia = refactored.inertia().unwrap();
+    assert_eq!(inertia, second.ldlt().unwrap().inertia());
     let mut fresh = analyze(&gpu, &second, test).unwrap();
     fresh.factor(&second).unwrap();
     assert_eq!(fresh.inertia().unwrap(), inertia);
-    assert_eq!(inertia, second.ldlt().unwrap().inertia());
-    // Deterministic mode: the same matrix, the same solution, every time
-    assert_eq!(fresh.solve(&b).unwrap(), x, "refactored against fresh");
-    assert_eq!(fresh.solve(&b).unwrap(), x, "solved again");
-    fresh.factor(&second).unwrap();
-    assert_eq!(
-        fresh.solve(&b).unwrap(),
-        x,
-        "refactored with the same values"
-    );
     // H indefinite here (its diagonal scaled down), so cuDSS's perturbed pivots cost more: each
-    //   correction gains only about two digits, and seven reach the CPU's accuracy
-    let steps: Vec<f64> = (0..8)
-        .map(|k| residual(&second, &refine(&mut fresh, &second, &b, k), &b))
-        .collect();
-    assert!(
-        steps.windows(2).all(|pair| pair[1] < pair[0] / 10.0) && steps[7] < 1e-14,
-        "{steps:?}"
-    );
+    //   correction gains only about two digits; both factorizations converge
+    for (label, ldlt) in [("refactored", &mut refactored), ("fresh", &mut fresh)] {
+        let steps: Vec<f64> = (0..8)
+            .map(|k| residual(&second, &refine(ldlt, &second, &b, k), &b))
+            .collect();
+        assert!(
+            steps
+                .windows(2)
+                .all(|pair| pair[1] < pair[0] / 10.0 || pair[1] < 1e-15)
+                && steps[7] < 1e-14,
+            "{label}: {steps:?}"
+        );
+    }
     let timings = refactored.timings();
-    assert_eq!((timings.factorizations, timings.solves), (2, 1));
+    assert_eq!((timings.factorizations, timings.solves), (2, 2 + 36));
 }
 
 #[test]
@@ -202,6 +209,10 @@ fn the_errors() {
         Err(CudaError::NotFactored)
     ));
     assert!(matches!(ldlt.inertia(), Err(CudaError::NotFactored)));
+    assert!(matches!(
+        ldlt.perturbed_pivots(),
+        Err(CudaError::NotFactored)
+    ));
     let other = indefinite(n, 2, 9);
     assert!(matches!(
         ldlt.factor(&other),
@@ -244,4 +255,8 @@ fn a_singular_matrix_is_perturbed_not_reported() {
     ldlt.factor(&a).unwrap();
     let inertia = ldlt.inertia().unwrap();
     assert_eq!(inertia.positive + inertia.negative, 40, "{inertia:?}");
+    assert!(
+        ldlt.perturbed_pivots().unwrap() >= 1,
+        "the zero pivot was perturbed"
+    );
 }
