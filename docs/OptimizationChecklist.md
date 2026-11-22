@@ -1230,7 +1230,8 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
       - **Speed:** on any supplied ordering, cuDSS's factorization is 10–25× slower than on its
         own, so the GPU runs at ×0.21–0.59 of the CPU's speed at 1 and 14 threads.
     - **Not tried:** regularizing the solver's KKT matrix for cuDSS, which is a solver change
-      under O3's bar.
+      under O3's bar. It's recorded as a long-term goal: GPU-friendly KKT formulations
+      ([`LongTermGoals.md`](LongTermGoals.md), goal 6).
 
 **Phase O5 is complete** (PRs #88–#94 and this one, 2026-11-22). Next is the publishing plan, P5
 (`docs/PublishingChecklist.md`).

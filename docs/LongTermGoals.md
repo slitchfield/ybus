@@ -1,8 +1,8 @@
 # Long-term goals
 
 Goals beyond the current roadmaps ([`PowerFlowChecklist.md`](PowerFlowChecklist.md), complete,
-and [`OptimizationChecklist.md`](OptimizationChecklist.md), whose phases O1 to O4 are complete),
-recorded 2026-11-04 with coarse plans, and goal 5 on 2026-11-18. Each becomes a checklist of its own, planned with the maintainer,
+and [`OptimizationChecklist.md`](OptimizationChecklist.md), whose phases O1 to O5 are complete),
+recorded 2026-11-04 with coarse plans, goal 5 on 2026-11-18, and goal 6 on 2026-11-22. Each becomes a checklist of its own, planned with the maintainer,
 when its turn comes.
 
 ## 1. Stable foreign function interfaces: C, Python and Julia
@@ -126,9 +126,75 @@ was the last open item of #59's "left for later".
   - **What it costs per iteration:** each trial step evaluates the problem again, which #79's
     plans made cheaper.
 
+## 6. GPU-friendly KKT formulations for the interior-point solvers
+
+Give `ybus_ipm` KKT formulations that a GPU's sparse direct solver can factor accurately, so
+that the KKT factorization can run on the GPU. Recorded 2026-11-22, from phase O5's target 4
+(#95), which found cuDSS fast but wrong on today's formulation.
+
+- **Why it's needed:**
+  - **Today's KKT matrix doesn't suit a GPU solver.** The solvers factor the indefinite,
+    unregularized `[W Jᵀ; J 0]`. Its zero constraint block, near half the matrix, and its
+    exact zeros on W's diagonal need pivots delayed across fronts.
+    - **The CPU can:** `ybus_sparse`'s multifrontal LDLᵀ delays them.
+    - **GPU solvers can't:** they fix the factorization's structure at analysis for speed, and
+      replace small pivots instead. cuDSS replaced a fifth to a third of all pivots, and was
+      wrong on every dumped KKT matrix
+      ([`o5-cudss-spike-2026-11-22.md`](benchmarks/o5-cudss-spike-2026-11-22.md)).
+  - **The speed is there.** On its own ordering, cuDSS's iteration was ×2.1–5.7 faster than the
+    CPU LDLᵀ, nominally. None of our orderings kept that speed while fixing the accuracy.
+  - **The formulation is what fixes it.** With the zero block regularized (`[W + δI, Jᵀ; J,
+    −δI]`, δ ≥ 1e-4), cuDSS perturbed no pivot and got the inertia right. The published GPU
+    OPF work (MadNLP with cuDSS) condenses the KKT system into a positive definite one, which
+    needs no pivoting at all. It reports up to about 10× on large OPF cases, with robustness
+    limits on harder problems.
+- **Builds on:**
+  - **The cuDSS bindings** (`ybus_cuda::GpuLdlt`, #95): `with_ordering`, `perturbed_pivots` and
+    `factor_entries`. A positive definite (Cholesky) mode, cuDSS's `CUDSS_MTYPE_SPD`, would be
+    added.
+  - **The KKT benchmark** (`scripts/benchmark-cudss-kkt.sh`, the `cudss_kkt` example), and
+    dumping KKT matrices from real solves.
+  - **Phase O4's static-pivot tools,** kept in `ybus_sparse`: the static LDLᵀ with pivot
+    replacement, Ruiz scaling, normwise refinement, and their record of how regularization
+    fails when δ is too large or too small.
+  - **The predictor-corrector method's inertia correction (#58),** whose regularization
+    parameters a quasi-definite formulation would reuse.
+- **Coarse plan:**
+  - **Measure before building,** on dumped KKT matrices, on the CPU and on cuDSS:
+    - **Regularization:** how large δ must be for a static factorization, and how much accuracy
+      each δ costs the step.
+    - **A condensed system:** its accuracy and speed.
+  - **The formulations to weigh, from the literature:**
+    - **A regularized, quasi-definite KKT matrix** (Vanderbei, 1995; Altman and Gondzio, 1999),
+      factored by a static LDLᵀ: the smallest change to the solvers.
+    - **LiftedKKT** (Shin, Pacaud and Anitescu, 2023): equality constraints relaxed into
+      inequalities, so the KKT system condenses to a positive definite one.
+    - **HyKKT** (Regev et al., 2023): an augmented-Lagrangian Schur complement solved by
+      conjugate gradient, with an inner Cholesky.
+  - **An option first,** off by default, on the CPU before the GPU, so that it's judged apart
+    from the device.
+  - **Surveyed under O3's bar:** speedups recorded against the CPU at 1 and 14 threads, the
+    same day.
+  - **As a default** only by a rule written before its survey. MIPS's default stays MATPOWER's,
+    bit for bit.
+- **Open questions:**
+  - **The inertia correction in condensed space:** a Cholesky's failure takes the inertia's
+    place, and what that means for the predictor-corrector method's correction isn't
+    settled.
+  - **What a relaxation costs:** whether LiftedKKT's relaxation, or a regularization's δ, keeps
+    the agreement with MATPOWER that today's solvers reach.
+  - **Conditioning near convergence:** condensed matrices grow ill-conditioned as the barrier
+    parameter falls, the robustness limit the papers report.
+  - **Where the GPU still loses:** batches of solves on one device, as `opf::batch` runs them,
+    and small cases, whose transfers and launches may outweigh the factorization.
+  - **WSL:** GPU runs can crash the machine, so surveys start small and commit first.
+
 ## Order
 
 Goal 4's parser and goal 3's DC SCOPF can follow the optimization roadmap's phases O3 and O4,
 which the AC SCOPF needs. Goal 1 is independent of them and can start with the C layer whenever
 the API settles; goal 2 follows it. Goal 5 is independent of the others; the AC SCOPF would
-benefit from it, since its problems are larger and more nonconvex than the OPF's.
+benefit from it, since its problems are larger and more nonconvex than the OPF's. Goal 6 is
+independent too, but it touches the same KKT systems as goal 5's line search and the inertia
+correction, so the two are best planned with each other in view. The AC SCOPF's larger KKT
+systems are where a GPU would gain the most.
