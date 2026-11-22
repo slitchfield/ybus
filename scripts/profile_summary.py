@@ -81,6 +81,11 @@ STAGES = [
 ]
 
 
+# The stages that together are a factorization's time
+FACTORIZATION_STAGES = ("LDLᵀ: dense kernel", "LDLᵀ: front assembly and extend-add",
+                        "numeric factorization")
+
+
 def symbolizer(syms):
     strings = syms["string_table"]
     tables = {}
@@ -210,6 +215,16 @@ def summarize(path):
     lines += ["| Stage | Share |", "|---|--:|"]
     for stage, count in stages.most_common():
         lines.append(f"| {stage} | {count / samples:.1%} |")
+    # O5 target 4's gate compares the KKT factorization, whose time the stages split three
+    #   ways, with the largest other stage: their sum, after the table so its rows stay as
+    #   earlier tools parse them
+    factorization = sum(stages[stage] for stage in FACTORIZATION_STAGES)
+    if factorization:
+        others = [(stage, count) for stage, count in stages.most_common()
+                  if stage not in FACTORIZATION_STAGES]
+        lines += ["", f"The KKT factorization ({', '.join(FACTORIZATION_STAGES)}): "
+                      f"{factorization / samples:.1%}, against the largest other stage, "
+                      f"{others[0][0]}, {others[0][1] / samples:.1%}." if others else ""]
     lines += ["", "| Most samples of their own | Share |", "|---|--:|"]
     for frame, count in own.most_common(12):
         lines.append(f"| `{shorten(frame)}` | {count / samples:.1%} |")

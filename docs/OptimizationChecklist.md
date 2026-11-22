@@ -1176,6 +1176,31 @@ Planned 2026-11-19, after the warm starts, as the last optimization phase before
 - [ ] **A GPU KKT factorization** (O5 target 4): a cuDSS spike behind `cuda`. It's gated: only
   if the KKT factorization is still the largest stage of a large AC solve after targets 1–3,
   and O2's transfer measurements leave it room.
+  - **The gate, decided 2026-11-22:** measured at 1 and 14 threads, and passing at either is
+    enough.
+  - **The gate's result (2026-11-22): passes.**
+    - **The measurement:** same-day profiles of the predictor-corrector method's AC, with the
+      factorization's three stages combined (dense kernel, front assembly, numeric
+      factorization), against the largest other stage, the evaluation:
+
+      | Case | 1 thread | 14 threads |
+      |---|---|---|
+      | case9241pegase | 36.5% against 23.7% | 32.6% against 28.3% |
+      | case_ACTIVSg10k | 42.2% against 27.4% | 36.2% against 30.9% |
+      | case_ACTIVSg25k | 38.1% against 25.6% | 32.0% against 35.7% (fails) |
+
+    - **The transfer room:** each iteration's upload of the KKT matrix's values is at most its
+      factor's entries times 8 bytes: 6.6–21.0 MB. At O2's pinned rate (1.07 GB in 55 ms), that's
+      at most 0.34–1.08 ms, against 17.7–55.1 ms of factorization at one thread. That's at most
+      2%.
+  - **The second gate, written before it's measured:** the solvers get cuDSS only if both hold,
+    on case_ACTIVSg10k's and case_ACTIVSg25k's AC KKT matrices (dumped from real solves):
+    - **Speed:** its refactorization and solves, with the CPU's refinement and the transfers
+      counted, are at least ×1.5 faster than the CPU LDLᵀ, at 1 or at 14 threads.
+    - **Inertia:** it matches the CPU's on every dumped matrix, since the inertia correction
+      depends on it.
+  - **Then:** a `KktFactorization::Cudss` option for both solvers, behind a new `cuda` feature in
+    `ybus_ipm`. It's opt-in and judged by O3's bar.
 
 ## Warm starts for OPF sequences
 
