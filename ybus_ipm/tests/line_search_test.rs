@@ -64,3 +64,34 @@ fn off_records_the_constraint_violation_and_nothing_of_a_filter() {
         assert!(!record.second_order);
     }
 }
+
+/// LDLᵀ with the monotone filter
+fn monotone() -> MehrotraOptions {
+    let mut options = MehrotraOptions::default();
+    options.kkt_factorization = KktFactorization::Ldlt;
+    options.line_search = LineSearch::MonotoneFilter;
+    options
+}
+
+#[test]
+fn fixed_mode_lowers_its_barrier_parameter_monotonically_to_the_optimum() {
+    let s = mehrotra(&Hs71, &hs71_bounds(), &[1.0, 5.0, 5.0, 1.0], &monotone()).unwrap();
+    assert!(s.converged(), "{:?}", s.status);
+    assert!(
+        (s.f - 17.014_017_3).abs() < 1e-6 * 17.0,
+        "the optimum, not {}",
+        s.f
+    );
+    let steps = &records(&s)[1..];
+    assert!(steps.iter().all(|r| r.mode == IterationMode::Fixed));
+    assert_eq!(steps[0].barrier_parameter, 0.1, "the paper's μ₀");
+    assert!(
+        steps
+            .windows(2)
+            .all(|pair| pair[1].barrier_parameter <= pair[0].barrier_parameter),
+        "μ̄ never rises"
+    );
+    assert!(steps.last().unwrap().barrier_parameter < 1e-6);
+    // φ is recorded at the step's μ̄, f − μ̄ Σ ln s, finite at an interior point
+    assert!(steps.iter().all(|r| r.barrier.is_finite()));
+}

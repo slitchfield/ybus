@@ -82,6 +82,8 @@
 //! - It converges by MIPS's four measures, defined alike, with the bounds' slacks and
 //!   multipliers counted as MIPS counts its bound rows, so iteration counts compare fairly.
 
+mod filter;
+
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
 use crate::interior_point_error::InteriorPointError;
@@ -158,8 +160,9 @@ pub enum LineSearch {
     #[default]
     Off,
     /// Wächter and Biegler's monotone barrier with their filter line search (see
-    /// `docs/LineSearchChecklist.md`). In progress: so far it turns the inertia correction on and
-    /// records the barrier problem's measures, and the line search itself follows
+    /// `docs/LineSearchChecklist.md`). In progress: so far, centered Newton steps at a fixed
+    /// barrier parameter, lowered as each barrier problem is solved, with the inertia
+    /// correction on; the filter line search itself follows
     MonotoneFilter,
 }
 
@@ -252,6 +255,8 @@ pub struct MehrotraIteration {
     pub backtracks: usize,
     /// Whether the step was a second-order correction (false without a filter)
     pub second_order: bool,
+    /// The fixed barrier parameter the step aimed at, in fixed mode (0 in free mode)
+    pub barrier_parameter: f64,
 }
 
 /// The linear rows and bounds, split as the method uses them.
@@ -799,6 +804,14 @@ pub fn mehrotra_from<P: Problem>(
     // The inertia correction's last shift, and how many refactorizations it took
     let mut last_delta_w = 0.0;
     let mut corrections = 0;
+    // With a filter, the fixed barrier parameter μ̄ (filter.rs). Its floor keeps the method's
+    //   convergence test reachable: that test sums complementarity over every pair, as MIPS's
+    //   does, where the paper's floor, ε/10, bounds each pair's
+    let mu_floor = opt.comptol / (10.0 * pairs.max(1) as f64);
+    let mut mu_bar = match warm_start {
+        None => filter::MU_INIT,
+        Some(_) => average(&p).max(mu_floor),
+    };
 
     while !converged && i < opt.max_it {
         i += 1;
@@ -939,6 +952,15 @@ pub fn mehrotra_from<P: Problem>(
         let (step, sigma) = if pairs == 0 {
             // No inequalities or bounds: a plain Newton step
             (solve(&[], &[], &[]), 0.0)
+        } else if filter {
+            // Fixed mode: the centered Newton step at the barrier parameter μ̄
+            let centered = |s: &[f64], v: &[f64]| -> Vec<f64> {
+                s.iter().zip(v).map(|(s, v)| mu_bar - s * v).collect()
+            };
+            let r_z = centered(&p.z, &p.mu);
+            let r_l = centered(&p.s_l, &p.pi_l);
+            let r_u = centered(&p.s_u, &p.pi_u);
+            (solve(&r_z, &r_l, &r_u), 0.0)
         } else {
             // The predictor: an affine step towards zero complementarity
             let mu_now = average(&p);
@@ -986,9 +1008,12 @@ pub fn mehrotra_from<P: Problem>(
             break;
         }
 
-        // The step, at most xi of the way to the boundary
+        // The step, at most xi of the way to the boundary; in fixed mode, τ of the way, with the
+        //   primal and dual lengths apart, as the paper takes them (§2.2)
         let (alphap, alphad) = if pairs == 0 {
             (1.0, 1.0)
+        } else if filter {
+            step.lengths(&split, &p, filter::fraction(mu_bar))
         } else {
             let (alphap, alphad) = step.lengths(&split, &p, opt.xi);
             if curved {
@@ -1006,10 +1031,18 @@ pub fn mehrotra_from<P: Problem>(
         advance(&mut x, &step.dx, alphap);
         advance(&mut p.z, &step.dz, alphap);
         advance(&mut p.mu, &step.dmu, alphad);
-        advance(&mut lam, &step.dlam, alphad);
+        // The equalities' multipliers take the primal length in fixed mode, as in the paper's
+        //   iteration (§2.2)
+        advance(&mut lam, &step.dlam, if filter { alphap } else { alphad });
         advance(&mut p.pi_l, &step.dpi_l, alphad);
         advance(&mut p.pi_u, &step.dpi_u, alphad);
         (p.s_l, p.s_u) = slacks(&x);
+        let step_mu_bar = mu_bar;
+        if filter {
+            filter::safeguard(&mut p.mu, &p.z, mu_bar);
+            filter::safeguard(&mut p.pi_l, &p.s_l, mu_bar);
+            filter::safeguard(&mut p.pi_u, &p.s_u, mu_bar);
+        }
 
         // The new point
         e = evaluate(&x);
@@ -1017,6 +1050,27 @@ pub fn mehrotra_from<P: Problem>(
         (feascond, gradcond, compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
         costcond = (e.f - f0).abs() / (1.0 + f0.abs());
         let mu_new = average(&p);
+        let barrier = if filter {
+            filter::barrier(e.f, step_mu_bar, [&p.z, &p.s_l, &p.s_u])
+        } else {
+            0.0
+        };
+        // The barrier parameter falls once the barrier problem is solved to κ_ε μ̄ (§3.1):
+        //   its error is the method's feasibility and gradient measures, with complementarity
+        //   measured against μ̄
+        if filter {
+            loop {
+                let comp = filter::complementarity_error(
+                    [(&p.z, &p.mu), (&p.s_l, &p.pi_l), (&p.s_u, &p.pi_u)],
+                    mu_bar,
+                ) / (1.0 + norm_inf(&x));
+                let error = feascond.max(gradcond).max(comp);
+                if error > filter::KAPPA_EPSILON * mu_bar || mu_bar <= mu_floor {
+                    break;
+                }
+                mu_bar = filter::decrease(mu_bar, mu_floor);
+            }
+        }
         history.push(MehrotraIteration {
             feascond,
             gradcond,
@@ -1030,6 +1084,13 @@ pub fn mehrotra_from<P: Problem>(
             alphad,
             delta_w,
             theta: theta(&e, &p),
+            mode: if filter {
+                IterationMode::Fixed
+            } else {
+                IterationMode::Free
+            },
+            barrier,
+            barrier_parameter: if filter { step_mu_bar } else { 0.0 },
             ..MehrotraIteration::default()
         });
         if tolerances_met(feascond, gradcond, compcond, costcond) {

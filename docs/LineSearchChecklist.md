@@ -123,11 +123,24 @@ for the defaults its papers name.
     The filter's other fields stay at their defaults until the filter fills them.
   - **Until the next two items,** `MonotoneFilter` only turns the inertia correction on.
   - **`Off` checked bit for bit:** the 72-case snapshot, in the default and `rayon` builds.
-- [ ] **The monotone barrier** (§3.1):
+- [x] **The monotone barrier** (§3.1):
   - **The barrier:** a fixed `μ_j`, with `τ_j = max(τ_min, 1 − μ_j)`.
   - **Its update:** `μ_{j+1} = max(ε/10, min(κ_μ μ_j, μ_j^{θ_μ}))` once the barrier problem's
     error is at most `κ_ε μ_j`.
   - **The step:** the centered Newton step at `μ_j`.
+  - **Done** (`mehrotra/filter.rs`), with the paper's defaults: `μ₀ = 0.1`, `κ_ε = 10`,
+    `κ_μ = 0.2`, `θ_μ = 1.5`, `τ_min = 0.99`, and the multipliers' safeguard at `κ_Σ = 1e10`.
+    - **The step lengths:** the primal and dual lengths are kept apart, with `λ` on the primal
+      one, as the paper's iteration has them.
+    - **An adaptation:** `μ`'s floor is `comptol / (10 · pairs)`, not the paper's `ε/10`.
+      The method converges on MIPS's complementarity measure, which sums over every pair, so a
+      floor per pair of `ε/10` could leave it unreachable on a large problem.
+    - **A warm start** begins at its own average complementarity rather than `μ₀`.
+  - **Found:** hs71 from 2, in fixed mode without a line search yet, ends at a fourth KKT
+    point, `f = 27.146` at `x = (1, 5, 1.449, 3.449)`, with stationarity 2e-8. The tests
+    named three KKT points until now. So PR 1's hs71 test asserts a verified KKT point that
+    isn't the local maximum, not "the minimum": a line search guarantees progress to a KKT
+    point, not to the global one.
 - [ ] **The filter line search** (§2.3–2.4):
   - the switching condition, the Armijo test, sufficient decrease, the filter and its
     augmentation
