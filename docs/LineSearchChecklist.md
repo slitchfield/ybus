@@ -393,10 +393,45 @@ for the defaults its papers name.
     - **`--line-search off` matches the unchanged example** on every result column: 36 runs,
       on six cases, both models, with MIPS-LU and the predictor-corrector method with
       `ldlt-uncorrected` and `ldlt`.
-- [ ] **The rule, before the survey:** a default changes only if every outcome is the same or
+- [x] **The rule, before the survey:** a default changes only if every outcome is the same or
   better, O3's bar holds wherever today's default meets it, and the iteration and time cost
   stays within a limit stated with the rule. The objective-gap cases, the backtracks, the
   second-order corrections, the restorations and the mode switches are recorded either way.
+  - **Written 2026-11-22, before any survey run.**
+  - **What it decides:** the OPF presets' line search, `AcOpfOptions::mehrotra()` and
+    `DcOpfOptions::mehrotra()`, each judged on its own model's 73 cases with costs.
+    - **`MehrotraOptions::default()` keeps `Off`:** it factors by LU, which a filter can't use.
+    - **MIPS,** the OPF's default solver, isn't in question.
+  - **The runs compared:**
+    - **Today's preset, the baseline:** the predictor-corrector method, LDLᵀ without the
+      inertia correction, `Off`.
+    - **Each candidate:** `monotone` or `adaptive`, on LDLᵀ with the inertia correction,
+      which a filter turns on.
+    - **MIPS-LU:** run beside them for O3's residual bar.
+    - **An error, a time-out or a memory limit** counts as not converged.
+  - **A candidate replaces `Off` in a preset only if all of these hold:**
+    1. **Outcomes no worse:**
+       - every case the baseline converges on, the candidate converges on
+       - where both converge and MATPOWER does, the candidate's objective is no further from
+         MATPOWER's than the baseline's: its relative difference is at most the baseline's, or
+         at most 1e-6, O3's bar, so that a difference under the bar doesn't count
+    2. **O3's bar kept:** wherever the baseline meets it, the candidate meets it.
+       - The objective within 1e-6 of MATPOWER's.
+       - The prices within 1e-3.
+       - Each KKT residual within 100× MIPS-LU's, or below 1e-6.
+    3. **The cost within 1.10× (decided 2026-11-22),** over the cases both converge on:
+       - the candidate's total iterations at most 1.10× the baseline's
+       - the median, over those cases, of the candidate's solve time over the baseline's, at
+         most 1.10, with the runs made the same day, one after another
+  - **If both candidates qualify,** the one with the fewer total iterations wins.
+  - **If neither qualifies,** the presets keep `Off`, and the record says which conditions
+    failed, on which cases.
+  - **Recorded either way:**
+    - **The objective-gap cases,** where the baseline converges to a different objective than
+      MATPOWER's: case60nordic, case_ACTIVSg25k, case_ACTIVSg70k and case33mg.
+    - **The cases a candidate converges on that the baseline doesn't.**
+    - **Each candidate's line-search counts:** the backtracks, second-order corrections,
+      restorations and mode switches.
 - [ ] **The survey and the record:**
   - the AC and DC OPF on the 73 cases with costs
   - MIPS's test problems
