@@ -225,3 +225,177 @@ fn the_second_order_correction_keeps_full_steps_against_the_maratos_effect() {
         steps.iter().map(|r| r.backtracks).collect::<Vec<_>>()
     );
 }
+
+/// The restoration phases of a solve's record
+fn restorations(s: &Solution) -> Vec<&MehrotraIteration> {
+    records(s)
+        .iter()
+        .filter(|r| r.mode == IterationMode::Restoration)
+        .collect()
+}
+
+/// Wächter and Biegler's counterexample ("Failure of global convergence for a class of interior
+///   point methods for nonlinear programming," *Math. Program.* 88(3):565–574, 2000,
+///   doi:10.1007/pl00011386): `min x₀` subject to `x₀² − x₁ − 1 = 0`, here nonlinear,
+///   `x₀ − x₂ = 0.5`, here linear, and `x₁, x₂ ≥ 0`. Its solution is `(1, 0, 0.5)`
+struct Counterexample;
+
+impl Problem for Counterexample {
+    fn dimension(&self) -> usize {
+        3
+    }
+    fn objective(&self, x: &[f64]) -> (f64, Vec<f64>) {
+        (x[0], vec![1.0, 0.0, 0.0])
+    }
+    fn objective_hessian(&self, _: &[f64]) -> CsrMatrix<f64> {
+        CsrMatrix::from_triplets(3, 3, vec![]).unwrap()
+    }
+    fn has_nonlinear_constraints(&self) -> bool {
+        true
+    }
+    fn constraints(&self, x: &[f64]) -> NonlinearConstraints {
+        NonlinearConstraints {
+            g: vec![x[0] * x[0] - x[1] - 1.0],
+            h: vec![],
+            dg: dense(&[&[2.0 * x[0], -1.0, 0.0]]),
+            dh: CsrMatrix::from_triplets(0, 3, vec![]).unwrap(),
+        }
+    }
+    fn lagrangian_hessian(&self, _: &[f64], m: NonlinearMultipliers<'_>, _: f64) -> CsrMatrix<f64> {
+        CsrMatrix::from_triplets(3, 3, vec![(0, 0, 2.0 * m.eq[0])]).unwrap()
+    }
+}
+
+fn counterexample_constraints() -> Constraints {
+    Constraints {
+        a: Some(dense(&[&[1.0, 0.0, -1.0]])),
+        l: Some(vec![0.5]),
+        u: Some(vec![0.5]),
+        xmin: Some(vec![f64::NEG_INFINITY, 0.0, 0.0]),
+        ..Constraints::default()
+    }
+}
+
+#[test]
+fn on_wachter_and_bieglers_counterexample_restoration_reaches_the_solution() {
+    // From x₀ = −0.5, the method alone runs into x₁ = x₂ = 0 at a point that isn't feasible,
+    //   as that paper shows such methods do. The filter's line search fails there, and
+    //   restoration finds a feasible region the method then converges in
+    let x0 = [-0.5, 1.0, 1.0];
+    let mut off = MehrotraOptions::default();
+    off.kkt_factorization = KktFactorization::Ldlt;
+    let alone = mehrotra(&Counterexample, &counterexample_constraints(), &x0, &off).unwrap();
+    assert!(!alone.converged(), "without restoration: {:?}", alone.x);
+    let s = mehrotra(
+        &Counterexample,
+        &counterexample_constraints(),
+        &x0,
+        &monotone(),
+    )
+    .unwrap();
+    assert!(s.converged(), "{:?} at {:?}", s.status, s.x);
+    let phases = restorations(&s);
+    assert!(!phases.is_empty(), "it restores");
+    assert!(phases.iter().all(|r| r.restoration_iterations > 0));
+    // Entering added the point's margin to the filter, so that restoration can't return to it:
+    //   here one entry more than before, since it dominates none
+    let history = records(&s);
+    let entered = (history.iter())
+        .position(|r| r.mode == IterationMode::Restoration)
+        .unwrap();
+    assert_eq!(
+        history[entered].filter_size,
+        history[entered - 1].filter_size + 1
+    );
+    for (x, solution) in s.x.iter().zip([1.0, 0.0, 0.5]) {
+        assert!((x - solution).abs() < 1e-6, "{:?}", s.x);
+    }
+    assert!(kkt(&Counterexample, &counterexample_constraints(), &s) < 1e-6);
+    // The solve's count includes restoration's iterations, which its own records don't show
+    let own = records(&s).len() - 1 - phases.len();
+    assert_eq!(
+        s.iterations,
+        own + phases.len()
+            + phases
+                .iter()
+                .map(|r| r.restoration_iterations)
+                .sum::<usize>()
+    );
+}
+
+#[test]
+fn from_further_left_restoration_stops_at_a_local_minimizer_of_the_violation() {
+    // From x₀ = −2, restoration is entered more than once, and the last ends at (−1, 0, 0).
+    //   With x₁, x₂ ≥ 0 the violation near there is 1.5 − x₀ − x₀² for x₀ > −1 and
+    //   0.5 − x₀ below, a strict local minimizer of it, so the solve ends there as locally
+    //   infeasible
+    let s = mehrotra(
+        &Counterexample,
+        &counterexample_constraints(),
+        &[-2.0, 1.0, 1.0],
+        &monotone(),
+    )
+    .unwrap();
+    assert_eq!(s.status, ybus_ipm::Status::NumericalFailure);
+    let last = records(&s).last().unwrap();
+    assert_eq!(last.mode, IterationMode::Restoration);
+    assert!(restorations(&s).len() > 1);
+    assert!((s.x[0] + 1.0).abs() < 0.1, "{:?}", s.x);
+}
+
+/// `min x₀² + x₁²` subject to `x₀² + x₁² + 1 = 0` and `x₀ ≥ 0`, which nothing satisfies
+struct Infeasible;
+
+impl Problem for Infeasible {
+    fn dimension(&self) -> usize {
+        2
+    }
+    fn objective(&self, x: &[f64]) -> (f64, Vec<f64>) {
+        (x[0] * x[0] + x[1] * x[1], vec![2.0 * x[0], 2.0 * x[1]])
+    }
+    fn objective_hessian(&self, _: &[f64]) -> CsrMatrix<f64> {
+        dense(&[&[2.0, 0.0], &[0.0, 2.0]])
+    }
+    fn has_nonlinear_constraints(&self) -> bool {
+        true
+    }
+    fn constraints(&self, x: &[f64]) -> NonlinearConstraints {
+        NonlinearConstraints {
+            g: vec![x[0] * x[0] + x[1] * x[1] + 1.0],
+            h: vec![],
+            dg: dense(&[&[2.0 * x[0], 2.0 * x[1]]]),
+            dh: CsrMatrix::from_triplets(0, 2, vec![]).unwrap(),
+        }
+    }
+    fn lagrangian_hessian(
+        &self,
+        _: &[f64],
+        m: NonlinearMultipliers<'_>,
+        cost_mult: f64,
+    ) -> CsrMatrix<f64> {
+        let d = 2.0 * cost_mult + 2.0 * m.eq[0];
+        dense(&[&[d, 0.0], &[0.0, d]])
+    }
+}
+
+#[test]
+fn an_infeasible_problem_ends_in_restoration() {
+    let constraints = Constraints {
+        xmin: Some(vec![0.0, f64::NEG_INFINITY]),
+        ..Constraints::default()
+    };
+    let s = mehrotra(&Infeasible, &constraints, &[1.0, 1.0], &monotone()).unwrap();
+    assert_eq!(s.status, ybus_ipm::Status::NumericalFailure);
+    assert_eq!(records(&s).last().unwrap().mode, IterationMode::Restoration);
+    // Near the violation's minimizer, the origin, where it's 1
+    assert!(s.x.iter().all(|x| x.abs() < 0.1), "{:?}", s.x);
+}
+
+#[test]
+fn problems_whose_line_search_succeeds_never_restore() {
+    for x0 in [[1.0, 5.0, 5.0, 1.0], [1.0; 4], [2.0; 4]] {
+        let s = mehrotra(&Hs71, &hs71_bounds(), &x0, &monotone()).unwrap();
+        assert!(restorations(&s).is_empty(), "from {x0:?}");
+        assert_eq!(s.iterations, records(&s).len() - 1);
+    }
+}

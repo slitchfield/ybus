@@ -1257,8 +1257,7 @@ fn solve_with_hooks<P: Problem + ?Sized>(
                 // Restoration's end (§3.3): less violation, at a point the filter accepts
                 let restored = |y: &[f64]| {
                     mapped(restoration.x(y)).is_some_and(|(_, _, theta_t, phi_t)| {
-                        theta_t <= filter::KAPPA_RESTO * theta_k
-                            && line_filter.acceptable(theta_t, phi_t)
+                        filter::restored(&line_filter, theta_t, phi_t, theta_k)
                     })
                 };
                 let outcome = solve_with_hooks(
@@ -1301,30 +1300,11 @@ fn solve_with_hooks<P: Problem + ?Sized>(
                 filter::safeguard(&mut p.mu, &p.z, mu_bar);
                 filter::safeguard(&mut p.pi_l, &p.s_l, mu_bar);
                 filter::safeguard(&mut p.pi_u, &p.s_u, mu_bar);
-                lam = {
-                    let identity = CsrMatrix::from_triplets(nx, nx, (0..nx).map(|i| (i, i, 1.0)))
-                        .expect("an identity");
-                    let mut rhs: Vec<f64> = lagrangian_gradient(&e, &vec![0.0; neq], &p)
-                        .iter()
-                        .map(|r| -r)
-                        .collect();
-                    rhs.extend(std::iter::repeat_n(0.0, neq));
-                    let mut ls = KktSolver::new(KktFactorization::Ldlt, opt.kkt_ordering);
-                    let estimate = ls
-                        .factor(nx, &identity, &[], e.jg(&split), 0.0)
-                        .ok()
-                        .and_then(|f| f.solve(&rhs).ok())
-                        .map(|s| s[nx..].to_vec());
-                    match estimate {
-                        Some(l)
-                            if l.iter().all(|v| v.is_finite())
-                                && norm_inf(&l) <= filter::LAMBDA_MAX =>
-                        {
-                            l
-                        }
-                        _ => vec![0.0; neq],
-                    }
-                };
+                lam = restoration::least_squares_multipliers(
+                    &lagrangian_gradient(&e, &vec![0.0; neq], &p),
+                    e.jg(&split),
+                    opt.kkt_ordering,
+                );
                 rd = lagrangian_gradient(&e, &lam, &p);
                 (feascond, gradcond, compcond) = conditions(&x, &e.g, &e.h, &lam, &p, &rd);
                 costcond = (e.f - f0).abs() / (1.0 + f0.abs());

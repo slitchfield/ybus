@@ -15,10 +15,40 @@
 
 use ybus_sparse::compressed_matrix::CsrMatrix;
 
+use crate::kkt::{KktFactorization, KktOrdering, KktSolver};
 use crate::problem::{Constraints, NonlinearConstraints, NonlinearMultipliers, Problem};
+use crate::vector::norm_inf;
+
+use super::filter::LAMBDA_MAX;
 
 /// The violation's weight in the restoration problem's objective, `ρ`
 pub(super) const RHO: f64 = 1000.0;
+
+/// The equality multipliers that best fit stationarity after restoration, by least squares
+///   (§3.6): `λ` minimizing `‖r + Jgᵀ λ‖` for `r`, the Lagrangian's gradient without them, from
+///   one factorization of `[I Jgᵀ; Jg 0]` ordered by `ordering`. Zero if that fails, or if any
+///   exceeds `λ_max`, as when large bound multipliers would be absorbed into them
+pub(super) fn least_squares_multipliers(
+    r: &[f64],
+    jg: &CsrMatrix<f64>,
+    ordering: KktOrdering,
+) -> Vec<f64> {
+    let (neq, nx) = jg.shape();
+    let identity =
+        CsrMatrix::from_triplets(nx, nx, (0..nx).map(|i| (i, i, 1.0))).expect("an identity");
+    let mut rhs: Vec<f64> = r.iter().map(|r| -r).collect();
+    rhs.extend(std::iter::repeat_n(0.0, neq));
+    let mut solver = KktSolver::new(KktFactorization::Ldlt, ordering);
+    let estimate = solver
+        .factor(nx, &identity, &[], jg, 0.0)
+        .ok()
+        .and_then(|f| f.solve(&rhs).ok())
+        .map(|s| s[nx..].to_vec());
+    match estimate {
+        Some(l) if l.iter().all(|v| v.is_finite()) && norm_inf(&l) <= LAMBDA_MAX => l,
+        _ => vec![0.0; neq],
+    }
+}
 
 /// The restoration problem for `problem`, at the reference point `x_r`
 pub(super) struct Restoration<'a, P: Problem + ?Sized> {
@@ -278,6 +308,20 @@ mod tests {
             }
         }
         d
+    }
+
+    #[test]
+    fn the_multipliers_estimate_fits_stationarity_by_least_squares_up_to_lambda_max() {
+        // Rows x₀ + x₁ and x₂: λ = −(Jg Jgᵀ)⁻¹ Jg r = (−(1 + 3)/2, −5)
+        let jg =
+            CsrMatrix::from_triplets(2, 3, vec![(0, 0, 1.0), (0, 1, 1.0), (1, 2, 1.0)]).unwrap();
+        let lambda = least_squares_multipliers(&[1.0, 3.0, 5.0], &jg, KktOrdering::Amd);
+        assert!((lambda[0] + 2.0).abs() < 1e-12 && (lambda[1] + 5.0).abs() < 1e-12);
+        assert_eq!(
+            least_squares_multipliers(&[1.0, 3.0, 2e3], &jg, KktOrdering::Amd),
+            vec![0.0, 0.0],
+            "one beyond λ_max resets them all"
+        );
     }
 
     #[test]

@@ -92,6 +92,12 @@ impl Filter {
     }
 }
 
+/// Whether restoration may end at a point with measures `(θ, φ)` (§3.3): with less violation than
+///   its reference point's `θ_R`, by `κ_resto`, and acceptable to the original filter
+pub(super) fn restored(filter: &Filter, theta: f64, phi: f64, theta_r: f64) -> bool {
+    theta <= KAPPA_RESTO * theta_r && filter.acceptable(theta, phi)
+}
+
 /// The switching condition (eq. 19): the step is a descent direction for `φ`, by enough
 ///   relative to `θ`, at step length `alpha`
 pub(super) fn switching(alpha: f64, grad_phi_d: f64, theta: f64) -> bool {
@@ -191,6 +197,22 @@ mod tests {
         assert_eq!(f.len(), 1, "the margin around (1, 1) dominates both");
         f.reset();
         assert!(f.acceptable(5.0, 4.0));
+    }
+
+    #[test]
+    fn restoration_ends_with_less_violation_at_a_point_the_filter_accepts() {
+        let mut f = Filter::new(10.0);
+        f.augment(0.5, 1.0);
+        assert!(
+            restored(&f, 0.8, 0.5, 1.0),
+            "less violation, and a better φ"
+        );
+        assert!(!restored(&f, 0.95, 0.5, 1.0), "not 0.9 of θ_R");
+        assert!(
+            !restored(&f, 0.8, 2.0, 1.0),
+            "the filter's entry dominates it"
+        );
+        assert!(restored(&f, 0.4, 2.0, 1.0), "a better θ than the entry's");
     }
 
     #[test]
