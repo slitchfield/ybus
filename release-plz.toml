@@ -1,0 +1,46 @@
+# release-plz's configuration (docs/Releasing.md, "Every release after 0.1.0"), for the workflow
+#   in .github/workflows/release-plz.yml. Reference: https://release-plz.dev/docs/config
+#
+# - One version for the four published crates: a version group, so a release bumps them all to
+#   the highest of their next versions, as [workspace.package]'s shared version requires.
+# - One git tag and one GitHub release per release, `v<version>` like v0.1.0, made only by
+#   ybus_powerflow, the crate that depends on the other three (release-plz's single-tag recipe).
+# - One section per release in the root CHANGELOG.md, written by ybus_powerflow from the commits
+#   of all four. The maintainer rewrites it into per-crate subsections in the release PR.
+# - Publishing and tagging only when the release PR merges, not on every push to main.
+# - Semver checks on (release-plz's default): the release PR reports each crate's API
+#   compatibility, and a breaking change raises the bump.
+
+[workspace]
+release_always = false
+git_tag_enable = false
+git_release_enable = false
+changelog_update = false
+
+[[package]]
+name = "ybus_sparse"
+version_group = "ybus"
+
+[[package]]
+name = "ybus_ipm"
+version_group = "ybus"
+
+[[package]]
+name = "ybus_cuda"
+version_group = "ybus"
+
+[[package]]
+name = "ybus_powerflow"
+version_group = "ybus"
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+git_release_enable = true
+git_release_name = "v{{ version }}"
+changelog_update = true
+changelog_path = "./CHANGELOG.md"
+changelog_include = ["ybus_sparse", "ybus_ipm", "ybus_cuda"]
+
+# The C interface isn't published (publish = false, docs/PublishingChecklist.md, P0)
+[[package]]
+name = "ybus_ffi"
+release = false
