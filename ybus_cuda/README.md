@@ -3,7 +3,8 @@
 **Experimental.** The GPU path of
 [`ybus_powerflow`](https://crates.io/crates/ybus_powerflow): sparse triangular solves with
 many right-hand sides on CUDA, against a Cholesky or LU factorization made on the CPU by
-[`ybus_sparse`](https://crates.io/crates/ybus_sparse).
+[`ybus_sparse`](https://crates.io/crates/ybus_sparse). Also a sparse symmetric indefinite
+factorization on the device, through NVIDIA's cuDSS.
 
 - **`Gpu`:** a CUDA device, its stream and a cuSPARSE handle, or `None` on a machine without
   CUDA.
@@ -13,6 +14,12 @@ many right-hand sides on CUDA, against a Cholesky or LU factorization made on th
   the device, optionally with a rank-one update of a base solution per column, as a DC study's
   PTDF columns and outages need. They stay on the device as a `GpuBlock`, so only what's asked
   for is downloaded.
+- **`GpuLdlt`:** a sparse symmetric indefinite `L D Lᵀ` factored on the device by cuDSS, with
+  its inertia, analyzed once and refactored for new values. It's not for interior-point KKT
+  matrices: on the OPF's, its inertia and solves were wrong, since cuDSS perturbs the small
+  pivots their zero block gives it rather than delaying them
+  ([the record](https://github.com/slitchfield/ybus/blob/main/docs/benchmarks/o5-cudss-spike-2026-11-22.md)).
+  `GpuLdlt::perturbed_pivots` reports how many it perturbed.
 
 Most users want `ybus_powerflow`'s `cuda` feature, which drives this crate, rather than the
 crate itself.
@@ -29,7 +36,10 @@ orders its arithmetic differently.
   [`cudarc`](https://crates.io/crates/cudarc), so the crate builds without the CUDA toolkit,
   docs.rs included.
 - **To run:** a CUDA 13 driver, cuSPARSE and NVRTC, which compiles the crate's kernels when a
-  `Gpu` is made. Without them, `Gpu::new` returns `Ok(None)`.
+  `Gpu` is made. Without them, `Gpu::new` returns `Ok(None)`. `GpuLdlt` also needs cuDSS 1.0
+  for CUDA 13 (`libcudss.so.1`), and without it `GpuLdlt::new` returns `Ok(None)`.
+- **NVIDIA's libraries** are proprietary, under NVIDIA's license terms. The crate loads them at
+  run time and doesn't include or redistribute them.
 
 ## Quick start
 
@@ -77,14 +87,15 @@ fn main() -> Result<(), CudaError> {
 ## Safety
 
 With `ybus_ffi`, this is one of the two crates in the `ybus` workspace with `unsafe` code:
-cudarc exposes cuSPARSE only as raw FFI. Each `unsafe` block says why it's sound, and nothing
-unsafe crosses the public API.
+cudarc exposes cuSPARSE only as raw FFI, and cuDSS is bound here by hand. Each `unsafe` block
+says why it's sound, and nothing unsafe crosses the public API.
 
 ## Development
 
 - **MSRV:** Rust 1.88, set for the whole workspace in the root `Cargo.toml`.
 - **Tests:** in the repository's `ybus_cuda/tests/`. They compare the GPU's solves with the
-  CPU's, and skip on a machine without CUDA unless `YBUS_REQUIRE_CUDA=1` is set.
+  CPU's, and `GpuLdlt`'s inertia and refined solves with `ybus_sparse`'s LDLᵀ's, and skip on a
+  machine without CUDA or cuDSS unless `YBUS_REQUIRE_CUDA=1` is set.
 - **API documentation:** `cargo doc -p ybus_cuda --open`.
 
 See the [workspace README](https://github.com/slitchfield/ybus#readme) for `./check.sh`, CI and

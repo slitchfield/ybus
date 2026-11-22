@@ -79,6 +79,12 @@ fn main() -> Result<(), InteriorPointError> {
 `mehrotra::qps_mehrotra(&qp, &constraints, None, &MehrotraOptions::default())` solves the same
 program with the predictor-corrector method.
 
+## Features
+
+| Feature | Adds |
+|---|---|
+| `rayon` | `ybus_sparse`'s `rayon` feature, so that the LDLᵀ's KKT factorizations and solves run in parallel, bit for bit the serial ones |
+
 ## Development
 
 - **MSRV:** Rust 1.88, set for the whole workspace in the root `Cargo.toml`.
