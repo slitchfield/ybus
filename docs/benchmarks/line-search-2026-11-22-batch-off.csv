@@ -1,0 +1,13 @@
+case,model,solver,line_search,batch,start,threads,solves,converged,serial_ms,parallel_ms,speedup,bit_for_bit,status
+case2383wp,dc,mehrotra,off,outages,cold,1,28,27,1722.309,1712.505,1.006,true,ok
+case2383wp,dc,mehrotra,off,outages,warm,1,28,22,446.904,438.688,1.019,true,ok
+case2383wp,ac,mehrotra,off,outages,cold,1,28,26,9543.776,10244.157,0.932,true,ok
+case2383wp,ac,mehrotra,off,outages,warm,1,28,26,6872.307,7810.582,0.880,true,ok
+case3120sp,dc,mehrotra,off,outages,cold,1,28,28,1353.060,1320.617,1.025,true,ok
+case3120sp,dc,mehrotra,off,outages,warm,1,28,25,623.003,622.801,1.000,true,ok
+case3120sp,ac,mehrotra,off,outages,cold,1,28,28,14511.243,16380.667,0.886,true,ok
+case3120sp,ac,mehrotra,off,outages,warm,1,28,28,6014.114,6442.788,0.933,true,ok
+case9241pegase,dc,mehrotra,off,outages,cold,1,28,28,1733.002,1803.024,0.961,true,ok
+case9241pegase,dc,mehrotra,off,outages,warm,1,28,28,2519.019,2995.763,0.841,true,ok
+case9241pegase,ac,mehrotra,off,outages,cold,1,28,28,42191.654,53195.992,0.793,true,ok
+case9241pegase,ac,mehrotra,off,outages,warm,1,28,0,41994.191,50232.455,0.836,true,ok

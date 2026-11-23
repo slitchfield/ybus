@@ -432,12 +432,31 @@ for the defaults its papers name.
     - **The cases a candidate converges on that the baseline doesn't.**
     - **Each candidate's line-search counts:** the backtracks, second-order corrections,
       restorations and mode switches.
-- [ ] **The survey and the record:**
+- [x] **The survey and the record:**
   - the AC and DC OPF on the 73 cases with costs
   - MIPS's test problems
   - a warm-started outage batch
   
   The record is `benchmarks/line-search-<date>.md`.
+  - **Done:** [`benchmarks/line-search-2026-11-22.md`](benchmarks/line-search-2026-11-22.md),
+    with its CSVs. The runs took 18:17 to 19:26 on 2026-11-22.
+  - **The verdict: neither filter qualifies, so both presets keep `Off`.**
+    - **DC, `adaptive`:** met every condition but the iteration cost, 1.106× against 1.10×.
+    - **AC, `adaptive`:** lost O3's bar on case2737sop (LAM_Q 9.7e-4 to 1.05e-3). Its
+      case9241pegase objective also moved from 2.3e-6 to 2.8e-6 of MATPOWER's. The inertia
+      correction alone makes that same move.
+    - **`monotone`** failed several conditions on both models, despite gaining AC's
+      case13659pegase.
+  - **Found:**
+    - **Warm starts:** with `Off`, case9241pegase's warm-started AC outages converge on none of
+      28, and case2383wp's and case3120sp's DC on 22 and 25. Either filter converges on all but
+      at most one of those. The rule judged cold starts only, so a warm-start default is left
+      for a rule of its own.
+    - **The objective-gap cases** in "Why" above: MATPOWER itself fails on case60nordic,
+      case_ACTIVSg25k and case_ACTIVSg70k (AC), so only case33mg's gap (2.0e-5) is a real
+      difference, and neither filter changes it.
+- [x] **The default** (only if the rule passes): not changed, since neither filter qualified.
+  No commit.
 - [ ] **The docs:**
   - the module docs, the changelog (0.2.0) and the README's References
   - goal 5 closed in `LongTermGoals.md`
