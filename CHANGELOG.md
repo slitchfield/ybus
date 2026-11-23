@@ -11,6 +11,18 @@ version bump (0.1 to 0.2) may break the API, and a patch bump doesn't.
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/slitchfield/ybus/compare/v0.2.0...v0.2.1) - 2026-11-23
+
+### Other
+
+- Add the line search to the OPF survey's tooling
+- Test the adaptive barrier on hs71, the nonconvex problems and small OPFs
+- Close goal 5: the line search's docs and references
+- Add the adaptive barrier: free mode while the KKT error falls
+- Test restoration on Wächter and Biegler's counterexample
+- Restore feasibility where fixed mode finds no acceptable step
+- Build feasibility restoration's problem in this solver's form
+
 ## [0.2.0](https://github.com/slitchfield/ybus/compare/v0.1.0...v0.2.0) - 2026-11-22
 
 ### Other
