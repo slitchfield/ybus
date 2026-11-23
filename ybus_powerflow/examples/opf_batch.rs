@@ -2,8 +2,10 @@
 //! phase O5's target 1 survey that `scripts/benchmark-opf-batch.sh` runs.
 //!
 //! Usage: `opf_batch --model dc|ac --solver mips|mehrotra --batch outages|hours
-//! [--outages <n>] [--threads <t>[,<t>…]] <case.m>`, or `opf_batch --header`. Each solver runs
-//! at MATPOWER's OPF settings with its own defaults (`warm_shift` included).
+//! [--outages <n>] [--threads <t>[,<t>…]] [--line-search off|monotone|adaptive] <case.m>`, or
+//! `opf_batch --header`. Each solver runs at MATPOWER's OPF settings with its own defaults
+//! (`warm_shift` included). `--line-search` sets the predictor-corrector method's `LineSearch`
+//! (`Off` by default; MIPS ignores it), and is its own column.
 //!
 //! **The batches:**
 //! - `outages`: a seeded sample of `n` branch outages (not bridges) and `n` generator outages
@@ -36,10 +38,34 @@ use ybus_powerflow::opf::batch::{
     ac_opf_outages, dc_opf_outages, par_ac_opf_outages, par_dc_opf_outages, BatchStart, OpfOutage,
 };
 use ybus_powerflow::opf::dc::{DcOpfModel, DcOpfOptions};
-use ybus_powerflow::opf::OpfStart;
+use ybus_powerflow::opf::{LineSearch, OpfSolver, OpfStart};
 
-const HEADER: &str = "case,model,solver,batch,start,threads,solves,converged,serial_ms,\
-                      parallel_ms,speedup,bit_for_bit";
+const HEADER: &str = "case,model,solver,line_search,batch,start,threads,solves,converged,\
+                      serial_ms,parallel_ms,speedup,bit_for_bit";
+
+/// The AC OPF's options: MIPS's, or the predictor-corrector method's with `line_search`
+fn ac_options(mehrotra: bool, line_search: LineSearch) -> AcOpfOptions {
+    if !mehrotra {
+        return AcOpfOptions::default();
+    }
+    let mut options = AcOpfOptions::mehrotra();
+    if let OpfSolver::Mehrotra(m) = &mut options.solver {
+        m.line_search = line_search;
+    }
+    options
+}
+
+/// The DC OPF's options, as `ac_options`
+fn dc_options(mehrotra: bool, line_search: LineSearch) -> DcOpfOptions {
+    if !mehrotra {
+        return DcOpfOptions::default();
+    }
+    let mut options = DcOpfOptions::mehrotra();
+    if let OpfSolver::Mehrotra(m) = &mut options.solver {
+        m.line_search = line_search;
+    }
+    options
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -82,8 +108,25 @@ fn main() -> ExitCode {
         }
         rest => (vec![1, 2, 4, 8, 14, 28], rest),
     };
+    let (line_search, rest) = match rest {
+        [flag, line_search, rest @ ..] if flag == "--line-search" => match line_search.as_str() {
+            "off" => (LineSearch::Off, rest),
+            "monotone" => (LineSearch::MonotoneFilter, rest),
+            "adaptive" => (LineSearch::AdaptiveFilter, rest),
+            _ => return usage(),
+        },
+        rest => (LineSearch::Off, rest),
+    };
     let [path] = rest else { return usage() };
-    match run(Path::new(path), ac, mehrotra, outages, per_kind, &threads) {
+    match run(
+        Path::new(path),
+        ac,
+        mehrotra,
+        line_search,
+        outages,
+        per_kind,
+        &threads,
+    ) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => {
             eprintln!("{path}: a parallel batch differed from the serial one");
@@ -99,7 +142,8 @@ fn main() -> ExitCode {
 fn usage() -> ExitCode {
     eprintln!(
         "usage: opf_batch --model dc|ac --solver mips|mehrotra --batch outages|hours \
-         [--outages <n>] [--threads <t>[,<t>…]] <case.m> | --header"
+         [--outages <n>] [--threads <t>[,<t>…]] [--line-search off|monotone|adaptive] \
+         <case.m> | --header"
     );
     ExitCode::from(2)
 }
@@ -160,6 +204,7 @@ fn run(
     path: &Path,
     ac: bool,
     mehrotra: bool,
+    line_search: LineSearch,
     outages: bool,
     per_kind: usize,
     threads: &[usize],
@@ -171,9 +216,14 @@ fn run(
     let case = Case::from_path(path).map_err(|err| err.to_string())?;
     let batch = Batch {
         prefix: format!(
-            "{name},{},{},{}",
+            "{name},{},{},{},{}",
             if ac { "ac" } else { "dc" },
             if mehrotra { "mehrotra" } else { "mips" },
+            match line_search {
+                LineSearch::MonotoneFilter => "monotone",
+                LineSearch::AdaptiveFilter => "adaptive",
+                _ => "off",
+            },
             if outages { "outages" } else { "hours" },
         ),
         threads,
@@ -192,11 +242,7 @@ fn run(
             .collect();
         for (label, start) in starts {
             all &= if ac {
-                let options = if mehrotra {
-                    AcOpfOptions::mehrotra()
-                } else {
-                    AcOpfOptions::default()
-                };
+                let options = ac_options(mehrotra, line_search);
                 batch.time(
                     label,
                     || ac_opf_outages(&case, &list, &options, start).map_err(|e| e.to_string()),
@@ -212,11 +258,7 @@ fn run(
                     },
                 )?
             } else {
-                let options = if mehrotra {
-                    DcOpfOptions::mehrotra()
-                } else {
-                    DcOpfOptions::default()
-                };
+                let options = dc_options(mehrotra, line_search);
                 batch.time(
                     label,
                     || dc_opf_outages(&case, &list, &options, start).map_err(|e| e.to_string()),
@@ -241,11 +283,7 @@ fn run(
             .map(|(factors, _)| loaded(&case, &factors))
             .collect();
         if ac {
-            let options = if mehrotra {
-                AcOpfOptions::mehrotra()
-            } else {
-                AcOpfOptions::default()
-            };
+            let options = ac_options(mehrotra, line_search);
             let model = AcOpfModel::new(&case).map_err(|e| e.to_string())?;
             let base = model.solve(&case, &options).map_err(|e| e.to_string())?;
             for (label, start) in [
@@ -265,11 +303,7 @@ fn run(
                 )?;
             }
         } else {
-            let options = if mehrotra {
-                DcOpfOptions::mehrotra()
-            } else {
-                DcOpfOptions::default()
-            };
+            let options = dc_options(mehrotra, line_search);
             let model = DcOpfModel::new(&case).map_err(|e| e.to_string())?;
             let base = model.solve(&case, &options).map_err(|e| e.to_string())?;
             for (label, start) in [

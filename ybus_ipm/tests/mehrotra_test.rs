@@ -19,7 +19,8 @@ use common::{
     dense, known, qp4_constraints, qp4_hessian, references, Banana, Hs71, Nonlinear2, Nonlinear3,
     Quadratic3,
 };
-use ybus_ipm::mehrotra::{mehrotra, qps_mehrotra, MehrotraOptions};
+use ybus_ipm::kkt::KktFactorization;
+use ybus_ipm::mehrotra::{mehrotra, qps_mehrotra, LineSearch, MehrotraOptions};
 use ybus_ipm::problem::{
     Constraints, NonlinearConstraints, NonlinearMultipliers, Problem, QuadraticProblem,
 };
@@ -73,19 +74,36 @@ fn close_within(ours: &[f64], theirs: &[f64], tolerance: f64, what: &str) -> f64
 }
 
 /// Checks a converged solution against MATPOWER's MIPS run of the same problem (without step
-/// control), and its KKT residuals; prints the iterations against MIPS's
+/// control), and its KKT residuals; prints the iterations against MIPS's; and pins this
+/// method's iterations and analyses
 fn check<P: Problem>(name: &str, problem: &P, constraints: &Constraints, solution: &Solution) {
-    let runs = references();
-    let reference = &runs[&(name.to_string(), false)];
-    let field = |key: &str| reference.0.get(key);
-    assert_eq!(field("eflag").unwrap()[0], 1.0, "{name}: MIPS converges");
-    assert!(solution.converged(), "{name}: {:?}", solution.status);
+    meets_the_bar(name, problem, constraints, solution);
     // One analysis serves the whole solve where the KKT pattern holds. nonlinear3 builds its
     //   Jacobian with from_dense, which stores no zeros, and starts at x₃ = 0, so an entry
     //   appears once x₃ moves (nonlinear2's x₂ = 0 is a bound, which this method moves off
     //   first, so its pattern holds)
     let expected = if name == "nonlinear3" { 2 } else { 1 };
     assert_eq!(solution.analyses, expected, "{name}: analyses");
+    assert_eq!(
+        solution.iterations,
+        expected_iterations(name),
+        "{name}: iterations"
+    );
+}
+
+/// `check`'s bar without its pins: converged where MIPS converges, close to MIPS's solution and
+/// multipliers, with small KKT residuals. Prints the iterations against MIPS's
+fn meets_the_bar<P: Problem>(
+    name: &str,
+    problem: &P,
+    constraints: &Constraints,
+    solution: &Solution,
+) {
+    let runs = references();
+    let reference = &runs[&(name.to_string(), false)];
+    let field = |key: &str| reference.0.get(key);
+    assert_eq!(field("eflag").unwrap()[0], 1.0, "{name}: MIPS converges");
+    assert!(solution.converged(), "{name}: {:?}", solution.status);
     close_within(
         &[solution.f],
         field("f").unwrap(),
@@ -123,11 +141,6 @@ fn check<P: Problem>(name: &str, problem: &P, constraints: &Constraints, solutio
         solution.iterations,
         field("iterations").unwrap()[0],
         residuals.max()
-    );
-    assert_eq!(
-        solution.iterations,
-        expected_iterations(name),
-        "{name}: iterations"
     );
 }
 
@@ -504,4 +517,109 @@ fn a_nonlinear_equality_couples_the_steps_from_the_start() {
     known(&s.multipliers.eq_nonlin, &[1.0], 6, "lambda");
     let residuals = kkt_residuals(&Parabola, &bounds, &s.x, &s.multipliers).unwrap();
     assert!(residuals.max() < RESIDUAL, "{residuals:?}");
+}
+
+#[test]
+fn every_line_search_meets_the_bar_on_mipss_problems() {
+    // The line search survey's MIPS problems (docs/LineSearchChecklist.md, PR 4): each problem
+    //   MIPS converges on, under check's bar, with each line search on LDLᵀ, and the
+    //   infeasible LP not converging. The iterations are printed for the record, not pinned
+    let none = Constraints::default();
+    let bounds = Constraints {
+        xmin: Some(vec![0.0; 2]),
+        ..Constraints::default()
+    };
+    let lp = QuadraticProblem {
+        h: None,
+        c: vec![-5.0, -4.0, -6.0],
+    };
+    let lp_constraints = Constraints {
+        a: Some(dense(&[
+            &[1.0, -1.0, 1.0],
+            &[-3.0, -2.0, -4.0],
+            &[3.0, 2.0, 0.0],
+        ])),
+        l: Some(vec![f64::NEG_INFINITY, -42.0, f64::NEG_INFINITY]),
+        u: Some(vec![20.0, f64::INFINITY, 30.0]),
+        xmin: Some(vec![0.0; 3]),
+        xmax: None,
+    };
+    let qp4 = QuadraticProblem {
+        h: Some(qp4_hessian()),
+        c: vec![0.0; 4],
+    };
+    let quadratic3 = QuadraticProblem {
+        h: Some(Quadratic3.objective_hessian(&[])),
+        c: vec![2.0, -35.0, -47.0],
+    };
+    let qp2 = QuadraticProblem {
+        h: Some(dense(&[&[1.0, -1.0], &[-1.0, 2.0]])),
+        c: vec![-2.0, -6.0],
+    };
+    let qp2_constraints = Constraints {
+        a: Some(dense(&[&[1.0, 1.0], &[-1.0, 2.0], &[2.0, 1.0]])),
+        l: None,
+        u: Some(vec![2.0, 2.0, 3.0]),
+        xmin: Some(vec![0.0; 2]),
+        xmax: None,
+    };
+    let infeasible = QuadraticProblem {
+        h: None,
+        c: vec![1.0, 1.0],
+    };
+    let infeasible_constraints = Constraints {
+        a: Some(dense(&[&[1.0, 1.0]])),
+        l: None,
+        u: Some(vec![-1.0]),
+        xmin: Some(vec![0.0; 2]),
+        xmax: None,
+    };
+    for line_search in [
+        LineSearch::Off,
+        LineSearch::MonotoneFilter,
+        LineSearch::AdaptiveFilter,
+    ] {
+        let mut options = MehrotraOptions::default();
+        options.kkt_factorization = KktFactorization::Ldlt;
+        options.line_search = line_search;
+        // The QPs and the LP run at MIPS's tighter complementarity tolerance, as above
+        let mut tight = options;
+        tight.comptol = 1e-8;
+        eprintln!("{line_search:?}:");
+        let s = mehrotra(&Banana, &none, &[-1.9, 2.0], &options).unwrap();
+        meets_the_bar("banana", &Banana, &none, &s);
+        let s = mehrotra(&Quadratic3, &none, &[0.0; 3], &options).unwrap();
+        meets_the_bar("quadratic3", &Quadratic3, &none, &s);
+        let s = mehrotra(&qp4, &qp4_constraints(), &[1.0, 0.0, 0.0, 1.0], &options).unwrap();
+        meets_the_bar("qp4", &qp4, &qp4_constraints(), &s);
+        let s = qps_mehrotra(&lp, &lp_constraints, None, &tight).unwrap();
+        meets_the_bar("lp3", &lp, &lp_constraints, &s);
+        let s = qps_mehrotra(&quadratic3, &none, Some(&[0.0; 3]), &tight).unwrap();
+        meets_the_bar("qps_quadratic3", &quadratic3, &none, &s);
+        let s = qps_mehrotra(&qp2, &qp2_constraints, None, &tight).unwrap();
+        meets_the_bar("qp2", &qp2, &qp2_constraints, &s);
+        let s = qps_mehrotra(
+            &qp4,
+            &qp4_constraints(),
+            Some(&[1.0, 0.0, 0.0, 1.0]),
+            &tight,
+        )
+        .unwrap();
+        meets_the_bar("qps_qp4", &qp4, &qp4_constraints(), &s);
+        let s = mehrotra(&Nonlinear2, &bounds, &[1.1, 0.0], &options).unwrap();
+        meets_the_bar("nonlinear2", &Nonlinear2, &bounds, &s);
+        let s = mehrotra(&Nonlinear3, &none, &[1.0, 1.0, 0.0], &options).unwrap();
+        meets_the_bar("nonlinear3", &Nonlinear3, &none, &s);
+        let s = mehrotra(&Hs71, &hs71_bounds(), &[1.0, 5.0, 5.0, 1.0], &options).unwrap();
+        meets_the_bar("hs71", &Hs71, &hs71_bounds(), &s);
+        let s = qps_mehrotra(&infeasible, &infeasible_constraints, None, &options).unwrap();
+        assert!(
+            !s.converged(),
+            "{line_search:?}: the infeasible LP converged"
+        );
+        eprintln!(
+            "infeasible_lp: {:?} after {} iterations",
+            s.status, s.iterations
+        );
+    }
 }

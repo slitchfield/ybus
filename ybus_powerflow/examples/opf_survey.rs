@@ -4,12 +4,16 @@
 //! and record peak memory.
 //!
 //! Usage: `opf_survey --model dc|ac [--solver mips|mehrotra] [--kkt lu|ldlt|ldlt-uncorrected]
-//! <case.m> [<reference-dir>]`, or `opf_survey --header`. The solver is MIPS by default, as in
+//! [--kkt-ordering amd|matched] [--line-search off|monotone|adaptive] <case.m> [<reference-dir>]`,
+//! or `opf_survey --header`. The solver is MIPS by default, as in
 //! MATPOWER, or the predictor-corrector method, each at MATPOWER's OPF settings
 //! (`DcOpfOptions::mehrotra`, `AcOpfOptions::mehrotra`). The KKT matrix is factored by LU by default, or by the pivoted
 //! LDLᵀ (`OpfSolver::with_kkt_factorization`), with the predictor-corrector method's inertia
 //! correction on or, for `ldlt-uncorrected`, off. `--kkt` overrides the solver's own default (the
 //! AC OPF's predictor-corrector settings factor by LDLᵀ), so `lu` is LU for every solver.
+//! `--line-search` sets the predictor-corrector method's `LineSearch` (`Off` by default; MIPS
+//! ignores it): `monotone` or `adaptive`, each of which needs LDLᵀ and turns the inertia
+//! correction on.
 //!
 //! Prints one CSV line, with the columns in `HEADER`. Parsing and the OPF (model and solve
 //! together, as MATPOWER's elapsed time covers its setup and solve) are each timed by their median
@@ -30,8 +34,8 @@ use reference::{AcOpfReference, DcOpfReference};
 use ybus_powerflow::case::Case;
 use ybus_powerflow::opf::ac::{ac_opf_with_options, AcOpfOptions, AcOpfSolution};
 use ybus_powerflow::opf::dc::{dc_opf_with_options, DcOpfOptions, DcOpfSolution};
+use ybus_powerflow::opf::{History, IterationMode, KktResiduals, LineSearch, Status};
 use ybus_powerflow::opf::{KktFactorization, KktOrdering, KktStatistics, OpfSolver};
-use ybus_powerflow::opf::{KktResiduals, Status};
 
 /// The columns.
 ///
@@ -55,6 +59,11 @@ use ybus_powerflow::opf::{KktResiduals, Status};
 ///   factorizations' statistics (`KktStatistics`), totals over the solve: the factorizations,
 ///   delayed pivots, 2×2 pivots and factor entries; and LDLᵀ's ordering, `amd` or `matched`
 ///   (`--kkt-ordering`, AMD by default; LU ignores it).
+/// - **The line search** (last): `off`, `monotone` or `adaptive` (`--line-search`), then, from
+///   the predictor-corrector method's record (empty for MIPS or an error): the line search's
+///   halvings over the solve (`backtracks`), the steps taken with a second-order correction,
+///   the restoration phases and their iterations, and the adaptive barrier's switches to fixed
+///   mode, its returns to free mode, and its fixed-mode iterations.
 const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_runs,outcome,\
                       iterations,matpower_success,matpower_iterations,singular,matpower_ms,\
                       objective_rel,lam_p_rel,lam_q_rel,primal_abs,multiplier_abs,\
@@ -64,7 +73,85 @@ const HEADER: &str = "case,buses,branches,generators,model,parse_ms,opf_ms,opf_r
                       cores_primal_abs,cores_multiplier_abs,solver,kkt_stationarity,\
                       kkt_feasibility,kkt_complementarity,kkt_dual_feasibility,\
                       analyses,kkt_factorization,refinement_steps,inertia_corrections,\
-                      kkt_factorizations,kkt_delays,kkt_two_by_two,kkt_factor_entries,kkt_ordering";
+                      kkt_factorizations,kkt_delays,kkt_two_by_two,kkt_factor_entries,kkt_ordering,\
+                      line_search,backtracks,second_order,restorations,restoration_iterations,\
+                      switches,returns,fixed_iterations";
+
+/// What the predictor-corrector method's line search did over a solve, from its record
+#[derive(Clone, Copy, Default)]
+struct LineSearchCounts {
+    backtracks: usize,
+    second_order: usize,
+    restorations: usize,
+    restoration_iterations: usize,
+    switches: usize,
+    returns: usize,
+    fixed_iterations: usize,
+}
+
+impl LineSearchCounts {
+    /// From a solve's record; none for MIPS's
+    fn of(history: &History) -> Option<LineSearchCounts> {
+        let History::Mehrotra(records) = history else {
+            return None;
+        };
+        let mut counts = LineSearchCounts::default();
+        // The first record is the starting point's
+        for (k, r) in records.iter().enumerate().skip(1) {
+            counts.backtracks += r.backtracks;
+            counts.second_order += usize::from(r.second_order);
+            match r.mode {
+                IterationMode::Restoration => {
+                    counts.restorations += 1;
+                    counts.restoration_iterations += r.restoration_iterations;
+                }
+                IterationMode::Fixed => counts.fixed_iterations += 1,
+                _ => {}
+            }
+            if let Some(previous) = records.get(k - 1).filter(|_| k > 1) {
+                let (was_free, is_free) = (
+                    previous.mode == IterationMode::Free,
+                    r.mode == IterationMode::Free,
+                );
+                counts.switches += usize::from(was_free && !is_free);
+                counts.returns += usize::from(!was_free && is_free);
+            }
+        }
+        Some(counts)
+    }
+
+    fn columns(counts: Option<LineSearchCounts>) -> String {
+        counts.map_or(",,,,,,".to_string(), |c| {
+            format!(
+                "{},{},{},{},{},{},{}",
+                c.backtracks,
+                c.second_order,
+                c.restorations,
+                c.restoration_iterations,
+                c.switches,
+                c.returns,
+                c.fixed_iterations
+            )
+        })
+    }
+}
+
+/// `--line-search`'s values
+fn line_search_name(line_search: LineSearch) -> &'static str {
+    match line_search {
+        LineSearch::MonotoneFilter => "monotone",
+        LineSearch::AdaptiveFilter => "adaptive",
+        _ => "off",
+    }
+}
+
+/// Sets the predictor-corrector method's line search; MIPS has none
+fn with_line_search(mut solver: OpfSolver, line_search: LineSearch) -> OpfSolver {
+    if let OpfSolver::Mehrotra(options) = &mut solver {
+        options.line_search = line_search;
+    }
+    solver
+}
 
 /// How long to keep repeating a step for its median time
 const BUDGET: Duration = Duration::from_secs(1);
@@ -150,12 +237,29 @@ fn main() -> ExitCode {
         },
         rest => (KktOrdering::Amd, rest),
     };
+    let (line_search, rest) = match rest {
+        [flag, line_search, rest @ ..] if flag == "--line-search" => match line_search.as_str() {
+            "off" => (LineSearch::Off, rest),
+            "monotone" => (LineSearch::MonotoneFilter, rest),
+            "adaptive" => (LineSearch::AdaptiveFilter, rest),
+            _ => return usage(),
+        },
+        rest => (LineSearch::Off, rest),
+    };
     let (case, references) = match rest {
         [case] => (case, None),
         [case, references] => (case, Some(Path::new(references))),
         _ => return usage(),
     };
-    match survey(Path::new(case), references, model, solver, kkt, ordering) {
+    match survey(
+        Path::new(case),
+        references,
+        model,
+        solver,
+        kkt,
+        ordering,
+        line_search,
+    ) {
         Ok(line) => {
             println!("{line}");
             ExitCode::SUCCESS
@@ -170,7 +274,8 @@ fn main() -> ExitCode {
 fn usage() -> ExitCode {
     eprintln!(
         "usage: opf_survey --model dc|ac [--solver mips|mehrotra] [--kkt lu|ldlt|ldlt-uncorrected] \
-         [--kkt-ordering amd|matched] <case.m> [<reference-dir>] | --header"
+         [--kkt-ordering amd|matched] [--line-search off|monotone|adaptive] <case.m> \
+         [<reference-dir>] | --header"
     );
     ExitCode::from(2)
 }
@@ -188,6 +293,8 @@ struct Fields {
     inertia_corrections: Option<usize>,
     /// The KKT factorizations' statistics (none for a reference)
     kkt: Option<KktStatistics>,
+    /// The predictor-corrector method's line search counts (none for MIPS or a reference)
+    line_search: Option<LineSearchCounts>,
     iterations: usize,
     lam_p: Vec<f64>,
     /// `LAM_Q`, for AC only
@@ -207,6 +314,7 @@ impl Fields {
             refinement_steps: Some(s.solver.refinement_steps),
             inertia_corrections: Some(s.solver.inertia_corrections),
             kkt: Some(s.solver.kkt),
+            line_search: LineSearchCounts::of(&s.solver.history),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: None,
@@ -232,6 +340,7 @@ impl Fields {
             refinement_steps: None,
             inertia_corrections: None,
             kkt: None,
+            line_search: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: None,
@@ -257,6 +366,7 @@ impl Fields {
             refinement_steps: Some(s.solver.refinement_steps),
             inertia_corrections: Some(s.solver.inertia_corrections),
             kkt: Some(s.solver.kkt),
+            line_search: LineSearchCounts::of(&s.solver.history),
             iterations: s.iterations,
             lam_p: s.lam_p.clone(),
             lam_q: Some(s.lam_q.clone()),
@@ -295,6 +405,7 @@ impl Fields {
             refinement_steps: None,
             inertia_corrections: None,
             kkt: None,
+            line_search: None,
             iterations: r.iterations,
             lam_p: r.lam_p.clone(),
             lam_q: Some(r.lam_q.clone()),
@@ -371,6 +482,7 @@ fn survey(
     solver: Solver,
     factorization: Kkt,
     ordering: KktOrdering,
+    line_search: LineSearch,
 ) -> Result<String, String> {
     let name = path
         .file_stem()
@@ -384,9 +496,12 @@ fn survey(
                 Solver::Mips => DcOpfOptions::default(),
                 Solver::Mehrotra => DcOpfOptions::mehrotra(),
             };
-            options.solver = factorization
-                .configure(options.solver)
-                .with_kkt_ordering(ordering);
+            options.solver = with_line_search(
+                factorization
+                    .configure(options.solver)
+                    .with_kkt_ordering(ordering),
+                line_search,
+            );
             let (t, n, s) = time(|| dc_opf_with_options(&case, &options));
             (t, n, s.map(|s| Fields::dc(&s)))
         }
@@ -395,9 +510,12 @@ fn survey(
                 Solver::Mips => AcOpfOptions::default(),
                 Solver::Mehrotra => AcOpfOptions::mehrotra(),
             };
-            options.solver = factorization
-                .configure(options.solver)
-                .with_kkt_ordering(ordering);
+            options.solver = with_line_search(
+                factorization
+                    .configure(options.solver)
+                    .with_kkt_ordering(ordering),
+                line_search,
+            );
             let (t, n, s) = time(|| ac_opf_with_options(&case, &options));
             (t, n, s.map(|s| Fields::ac(&s)))
         }
@@ -526,12 +644,14 @@ fn survey(
     Ok(format!(
         "{name},{},{},{},{model_name},{:.3},{:.3},{runs},{outcome},{iterations},{core},{legacy},\
          {solver_name},{kkt},{analyses},{kkt_name},{refinement_steps},{inertia_corrections},\
-         {statistics},{ordering_name}",
+         {statistics},{ordering_name},{},{}",
         case.bus.len(),
         case.branch.len(),
         case.generator.len(),
         milliseconds(parse),
         milliseconds(opf),
+        line_search_name(line_search),
+        LineSearchCounts::columns(ours.as_ref().ok().and_then(|fields| fields.line_search)),
     ))
 }
 

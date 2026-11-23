@@ -19,6 +19,8 @@
 #   YBUS_BATCH_OUTAGES   the branch and the generator outages each (default 14)
 #   YBUS_BATCH_THREADS   the thread counts, separated by commas (default 1,2,4,8,14,28)
 #   YBUS_BATCH_SKIP      runs to leave out, as case:model:solver words separated by spaces
+#   YBUS_BATCH_LINE_SEARCH  the predictor-corrector method's line search: off, monotone or
+#                        adaptive (default off; MIPS ignores it)
 #   YBUS_BENCH_TIMEOUT   the time limit per run, in seconds (default 7200)
 #   YBUS_BENCH_MEMORY    the address-space limit per run, in GiB (default 12). Every thread's
 #                        solve holds its own model and factorization, so many threads on a large
@@ -38,15 +40,20 @@ THREADS="${YBUS_BATCH_THREADS:-1,2,4,8,14,28}"
 SKIP=" ${YBUS_BATCH_SKIP:-} "
 TIMEOUT="${YBUS_BENCH_TIMEOUT:-7200}"
 MEMORY_GIB="${YBUS_BENCH_MEMORY:-12}"
+LINE_SEARCH="${YBUS_BATCH_LINE_SEARCH:-off}"
+case "${LINE_SEARCH}" in
+    off|monotone|adaptive) ;;
+    *) echo "error: YBUS_BATCH_LINE_SEARCH must be off, monotone or adaptive" >&2; exit 2 ;;
+esac
 
 cargo build --release --quiet --manifest-path "${ROOT}/Cargo.toml" -p ybus_powerflow \
     --features rayon --example opf_batch
 BATCH="${ROOT}/target/release/examples/opf_batch"
 
 HEADER="$("${BATCH}" --header)"
-# A failed run's line: its key (case, model, solver, batch), then an empty field for every
-#   other column
-EMPTY="$(cut -d, -f5- <<< "${HEADER}")"
+# A failed run's line: its key (case, model, solver, line search, batch), then an empty field
+#   for every other column
+EMPTY="$(cut -d, -f6- <<< "${HEADER}")"
 EMPTY=",${EMPTY//[^,]/}"
 LOG="$(mktemp -d)"
 trap 'rm -rf "${LOG}"' EXIT
@@ -62,7 +69,8 @@ for name in "${CASES[@]}"; do
                     bash -c 'ulimit -v "$1" && exec "${@:2}"' _ \
                     "$((MEMORY_GIB * 1024 * 1024))" "${BATCH}" --model "${model}" \
                     --solver "${solver}" --batch "${batch}" --outages "${OUTAGES}" \
-                    --threads "${THREADS}" "${NORMALIZED}/${name}.m" \
+                    --threads "${THREADS}" --line-search "${LINE_SEARCH}" \
+                    "${NORMALIZED}/${name}.m" \
                     > "${LOG}/out" 2> "${LOG}/err"; then
                     sed 's/$/,ok/' "${LOG}/out" | tee -a "${OUT}"
                 else
@@ -76,7 +84,7 @@ for name in "${CASES[@]}"; do
                     fi
                     # The lines finished before the failure, then the failure
                     sed 's/$/,ok/' "${LOG}/out" | tee -a "${OUT}"
-                    echo "${name},${model},${solver},${batch}${EMPTY},${status}" |
+                    echo "${name},${model},${solver},${LINE_SEARCH},${batch}${EMPTY},${status}" |
                         tee -a "${OUT}"
                 fi
             done

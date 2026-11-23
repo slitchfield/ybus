@@ -90,6 +90,19 @@ or shortens each step by whether it makes progress, so that the method converges
 starting points and on nonconvex problems. Recorded 2026-11-18, from phase O4's records, where it
 was the last open item of #59's "left for later".
 
+**Done (2026-11-22),** in four PRs: #101, #104 (which relanded #103), #105 and this survey's.
+The option, `MehrotraOptions::line_search`, has `MonotoneFilter` and `AdaptiveFilter`, with
+feasibility restoration. It stays `Off` by default: under the rule written before
+[the survey](benchmarks/line-search-2026-11-22.md), neither filter qualified for the OPF's
+presets.
+- **What's left for later:**
+  - **A warm-start default.** With `Off`, warm-started outages fail where cold ones converge
+    (case9241pegase AC: none of 28), and either filter converges on them. That needs a rule of
+    its own, written before a survey of warm starts.
+  - **The free mode's own line search** and Nocedal, Wächter and Waltz's conditional
+    corrector, which their implementations used and PR 3 left out by choice (2026-11-22).
+  - **MIPS:** left as it is.
+
 **Planned (2026-11-22)** in [`LineSearchChecklist.md`](LineSearchChecklist.md): the
 adaptive-barrier filter of Nocedal, Wächter and Waltz (2009), with Wächter and Biegler's filter
 line search and full feasibility restoration, for the predictor-corrector method only. That

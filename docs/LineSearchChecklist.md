@@ -378,18 +378,93 @@ for the defaults its papers name.
 
 ## PR 4: the survey and the default
 
-- [ ] **The survey's tooling:** `YBUS_BENCH_LINE_SEARCH` in `scripts/benchmark-opf.sh` and the
+- [x] **The survey's tooling:** `YBUS_BENCH_LINE_SEARCH` in `scripts/benchmark-opf.sh` and the
   `opf_survey` example.
-- [ ] **The rule, before the survey:** a default changes only if every outcome is the same or
+  - **Done** (2026-11-22).
+    - **`opf_survey --line-search off|monotone|adaptive`** adds eight columns: the line search,
+      then counts from the method's record (the backtracks, the steps with a second-order
+      correction, the restoration phases and their iterations, the switches to fixed mode, the
+      returns, and the fixed-mode iterations).
+    - **`opf_batch --line-search`,** with a `line_search` column, and
+      `YBUS_BATCH_LINE_SEARCH` in `scripts/benchmark-opf-batch.sh`.
+    - **`mehrotra_test.rs`'s `every_line_search_meets_the_bar_on_mipss_problems`** runs MIPS's
+      test problems with each line search on LDLᵀ, under `check`'s bar without its pins
+      (`meets_the_bar`). Every one passes, and the infeasible LP fails under each.
+    - **`--line-search off` matches the unchanged example** on every result column: 36 runs,
+      on six cases, both models, with MIPS-LU and the predictor-corrector method with
+      `ldlt-uncorrected` and `ldlt`.
+- [x] **The rule, before the survey:** a default changes only if every outcome is the same or
   better, O3's bar holds wherever today's default meets it, and the iteration and time cost
   stays within a limit stated with the rule. The objective-gap cases, the backtracks, the
   second-order corrections, the restorations and the mode switches are recorded either way.
-- [ ] **The survey and the record:**
+  - **Written 2026-11-22, before any survey run.**
+  - **What it decides:** the OPF presets' line search, `AcOpfOptions::mehrotra()` and
+    `DcOpfOptions::mehrotra()`, each judged on its own model's 73 cases with costs.
+    - **`MehrotraOptions::default()` keeps `Off`:** it factors by LU, which a filter can't use.
+    - **MIPS,** the OPF's default solver, isn't in question.
+  - **The runs compared:**
+    - **Today's preset, the baseline:** the predictor-corrector method, LDLᵀ without the
+      inertia correction, `Off`.
+    - **Each candidate:** `monotone` or `adaptive`, on LDLᵀ with the inertia correction,
+      which a filter turns on.
+    - **MIPS-LU:** run beside them for O3's residual bar.
+    - **An error, a time-out or a memory limit** counts as not converged.
+  - **A candidate replaces `Off` in a preset only if all of these hold:**
+    1. **Outcomes no worse:**
+       - every case the baseline converges on, the candidate converges on
+       - where both converge and MATPOWER does, the candidate's objective is no further from
+         MATPOWER's than the baseline's: its relative difference is at most the baseline's, or
+         at most 1e-6, O3's bar, so that a difference under the bar doesn't count
+    2. **O3's bar kept:** wherever the baseline meets it, the candidate meets it.
+       - The objective within 1e-6 of MATPOWER's.
+       - The prices within 1e-3.
+       - Each KKT residual within 100× MIPS-LU's, or below 1e-6.
+    3. **The cost within 1.10× (decided 2026-11-22),** over the cases both converge on:
+       - the candidate's total iterations at most 1.10× the baseline's
+       - the median, over those cases, of the candidate's solve time over the baseline's, at
+         most 1.10, with the runs made the same day, one after another
+  - **If both candidates qualify,** the one with the fewer total iterations wins.
+  - **If neither qualifies,** the presets keep `Off`, and the record says which conditions
+    failed, on which cases.
+  - **Recorded either way:**
+    - **The objective-gap cases,** where the baseline converges to a different objective than
+      MATPOWER's: case60nordic, case_ACTIVSg25k, case_ACTIVSg70k and case33mg.
+    - **The cases a candidate converges on that the baseline doesn't.**
+    - **Each candidate's line-search counts:** the backtracks, second-order corrections,
+      restorations and mode switches.
+- [x] **The survey and the record:**
   - the AC and DC OPF on the 73 cases with costs
   - MIPS's test problems
   - a warm-started outage batch
   
   The record is `benchmarks/line-search-<date>.md`.
-- [ ] **The docs:**
+  - **Done:** [`benchmarks/line-search-2026-11-22.md`](benchmarks/line-search-2026-11-22.md),
+    with its CSVs. The runs took 18:17 to 19:26 on 2026-11-22.
+  - **The verdict: neither filter qualifies, so both presets keep `Off`.**
+    - **DC, `adaptive`:** met every condition but the iteration cost, 1.106× against 1.10×.
+    - **AC, `adaptive`:** lost O3's bar on case2737sop (LAM_Q 9.7e-4 to 1.05e-3). Its
+      case9241pegase objective also moved from 2.3e-6 to 2.8e-6 of MATPOWER's. The inertia
+      correction alone makes that same move.
+    - **`monotone`** failed several conditions on both models, despite gaining AC's
+      case13659pegase.
+  - **Found:**
+    - **Warm starts:** with `Off`, case9241pegase's warm-started AC outages converge on none of
+      28, and case2383wp's and case3120sp's DC on 22 and 25. Either filter converges on all but
+      at most one of those. The rule judged cold starts only, so a warm-start default is left
+      for a rule of its own.
+    - **The objective-gap cases** in "Why" above: MATPOWER itself fails on case60nordic,
+      case_ACTIVSg25k and case_ACTIVSg70k (AC), so only case33mg's gap (2.0e-5) is a real
+      difference, and neither filter changes it.
+- [x] **The default** (only if the rule passes): not changed, since neither filter qualified.
+  No commit.
+- [x] **The docs:**
   - the module docs, the changelog (0.2.0) and the README's References
   - goal 5 closed in `LongTermGoals.md`
+  - **Done:**
+    - **The `mehrotra` module docs** give the survey's outcome.
+    - **The README's References** list the four papers, each checked against Crossref on
+      2026-11-22. Goal 5's line leaves "Planned".
+    - **`LongTermGoals.md`** closes goal 5, with what's left: a warm-start default, free
+      mode's own line search, and MIPS.
+    - **The changelog** is release-plz's to generate. #106's section, and the raw 0.2.0 section
+      already released, are rewritten in #106 once this merges (decided 2026-11-22).
