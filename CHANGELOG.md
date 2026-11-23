@@ -13,24 +13,80 @@ version bump (0.1 to 0.2) may break the API, and a patch bump doesn't.
 
 ## [0.2.1](https://github.com/slitchfield/ybus/compare/v0.2.0...v0.2.1) - 2026-11-23
 
-### Other
+Completes the predictor-corrector method's line search (`docs/LineSearchChecklist.md`, goal 5).
+- **It stays off by default,** in `MehrotraOptions` and in the OPF presets
+  (`AcOpfOptions::mehrotra()`, `DcOpfOptions::mehrotra()`).
+  - **The survey:** on the 73 MATPOWER cases with costs, neither filter met the rule written
+    before it (`docs/benchmarks/line-search-2026-11-22.md`).
+  - **Warm starts:** the filters make warm-started OPF solves converge far more often. With
+    `Off`, case9241pegase's warm-started AC outages converge on none of 28; with either filter,
+    on all 28.
+- **`ybus_sparse` and `ybus_cuda`** are unchanged, released at the shared version.
 
-- Add the line search to the OPF survey's tooling
-- Test the adaptive barrier on hs71, the nonconvex problems and small OPFs
-- Close goal 5: the line search's docs and references
-- Add the adaptive barrier: free mode while the KKT error falls
-- Test restoration on Wächter and Biegler's counterexample
-- Restore feasibility where fixed mode finds no acceptable step
-- Build feasibility restoration's problem in this solver's form
+### Added
+
+#### `ybus_ipm`
+
+- **Feasibility restoration** for `LineSearch::MonotoneFilter` (Wächter and Biegler, 2006,
+  §3.3). Where the filter line search finds no acceptable step, or no step can be computed, the
+  method minimizes the constraint violation until the filter accepts a point with less of it,
+  then resumes from there.
+  - A restoration that can't get there, as at a local minimizer of the violation, ends the
+    solve as `NumericalFailure`, with its last record in `IterationMode::Restoration`.
+  - `MehrotraIteration::restoration_iterations` counts each restoration phase's iterations,
+    which `Solution::iterations` includes.
+- **`LineSearch::AdaptiveFilter`:** Nocedal, Wächter and Waltz's adaptive barrier (2009).
+  - **Free mode** takes `Off`'s predictor-corrector steps while the KKT error keeps falling.
+    Where it does, the solve is `Off`'s with LDLᵀ and the inertia correction, bit for bit.
+  - **Fixed mode** runs `MonotoneFilter`'s method when the error stops falling, and hands back
+    to free mode once it does.
+  - `MehrotraIteration::kkt_error` records the KKT error its test compares.
+
+#### `ybus_powerflow`
+
+- `opf` re-exports `LineSearch` and `IterationMode`. Without them, `MehrotraOptions::line_search`
+  couldn't be set without depending on `ybus_ipm` directly.
+
+### Fixed
+
+#### `ybus_ipm`
+
+- **`LineSearch::MonotoneFilter` no longer fails where it needs restoration.** In 0.2.0, a solve
+  ended as `NumericalFailure` wherever the filter accepted no step.
 
 ## [0.2.0](https://github.com/slitchfield/ybus/compare/v0.1.0...v0.2.0) - 2026-11-22
 
-### Other
+A filter line search for the predictor-corrector method, as an option, off by default.
+- **`LineSearch::Off`** is the predictor-corrector method as it was, bit for bit, and MIPS is
+  unchanged.
+- **`ybus_sparse`, `ybus_cuda` and `ybus_powerflow`** are unchanged, released at the shared
+  version.
+- **This section was rewritten after the release,** on 2026-11-23 in the 0.2.1 release PR, from
+  release-plz's list of commits.
 
-- Test the filter line search on hs71, the nonconvex problems and Maratos
-- Accept fixed mode's steps by Wächter and Biegler's filter line search
-- Take fixed mode's steps at a monotone barrier parameter
-- Add the line search's option, its record and its setup error
+### Added
+
+#### `ybus_ipm`
+
+- **`MehrotraOptions::line_search`** (`LineSearch`, `Off` by default, `#[non_exhaustive]`).
+  - **`LineSearch::MonotoneFilter`:** Wächter and Biegler's monotone barrier with their filter
+    line search and second-order correction (2006). It needs LDLᵀ, and turns the inertia
+    correction on.
+  - **This release lacks the method's feasibility restoration.** A solve whose line search
+    finds no acceptable step ends as `NumericalFailure`. 0.2.1 adds the restoration.
+- **`InteriorPointError::LineSearchNeedsLdlt`:** a line search asked for with LU.
+- **The line search's record, in `MehrotraIteration`:**
+  - `mode` (`IterationMode`, `#[non_exhaustive]`)
+  - `theta`, the constraint violation, recorded with `Off` too
+  - `barrier`, `barrier_parameter` and `filter_size`
+  - `backtracks` and `second_order`
+
+### Changed
+
+#### `ybus_ipm`
+
+- **Breaking:** `MehrotraIteration` is `#[non_exhaustive]`, so it can no longer be built with a
+  struct expression outside the crate. That's why this release is 0.2.0.
 
 ## [0.1.0] - 2026-11-22
 
@@ -146,5 +202,5 @@ releases.
   evaluation (and `ybus_ipm`'s and `ybus_sparse`'s parallel LDLᵀ), and `cuda` (experimental)
   for the DC studies on a GPU, through `ybus_cuda`.
 
-[Unreleased]: https://github.com/slitchfield/ybus/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/slitchfield/ybus/compare/v0.2.1...HEAD
 [0.1.0]: https://github.com/slitchfield/ybus/releases/tag/v0.1.0
