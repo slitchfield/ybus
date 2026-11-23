@@ -69,7 +69,11 @@
 //!   `line_search` ([`LineSearch`], `docs/LineSearchChecklist.md`), adds Wächter and Biegler's
 //!   monotone barrier with their filter line search and feasibility restoration, alone or in
 //!   Nocedal, Wächter and Waltz's adaptive framework, which keeps Mehrotra's steps while the
-//!   KKT error falls.
+//!   KKT error falls. It stays off by default, including in the OPF's presets: on the 73
+//!   MATPOWER cases with costs, neither filter met the rule for a default, written before the
+//!   survey. The adaptive one missed the iteration cost on DC (1.106×, against 1.10×) and one
+//!   case's price bar on AC. It does make warm starts far more reliable
+//!   (`docs/benchmarks/line-search-2026-11-22.md`).
 //! - **The inertia correction,** with the pivoted LDLᵀ (`kkt_factorization`, see [`crate::kkt`]).
 //!   On a nonconvex problem an indefinite `∇²L` can make the step a poor one, as in MIPS. LDLᵀ
 //!   reveals it: the KKT matrix's inertia must be `(nx, neq)`, which holds when `W` is positive

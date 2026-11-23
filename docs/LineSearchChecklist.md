@@ -457,6 +457,14 @@ for the defaults its papers name.
       difference, and neither filter changes it.
 - [x] **The default** (only if the rule passes): not changed, since neither filter qualified.
   No commit.
-- [ ] **The docs:**
+- [x] **The docs:**
   - the module docs, the changelog (0.2.0) and the README's References
   - goal 5 closed in `LongTermGoals.md`
+  - **Done:**
+    - **The `mehrotra` module docs** give the survey's outcome.
+    - **The README's References** list the four papers, each checked against Crossref on
+      2026-11-22. Goal 5's line leaves "Planned".
+    - **`LongTermGoals.md`** closes goal 5, with what's left: a warm-start default, free
+      mode's own line search, and MIPS.
+    - **The changelog** is release-plz's to generate. #106's section, and the raw 0.2.0 section
+      already released, are rewritten in #106 once this merges (decided 2026-11-22).
