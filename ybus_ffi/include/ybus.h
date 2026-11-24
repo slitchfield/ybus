@@ -331,6 +331,13 @@ typedef int32_t ybus_opf_status;
 // result column.
 #define YBUS_BRANCH_MU_ANGMAX 21
 
+// Transformer magnetizing conductance (p.u.), to ground at the from bus and not divided by the
+// tap ratio: not in MATPOWER's format, so 0 for a case read from a MATPOWER file.
+#define YBUS_BRANCH_G_MAG 101
+
+// Transformer magnetizing susceptance (p.u.), as `YBUS_BRANCH_G_MAG`.
+#define YBUS_BRANCH_B_MAG 102
+
 // No reordering.
 #define YBUS_ORDERING_NATURAL 1
 

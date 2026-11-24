@@ -30,6 +30,15 @@ int main(void) {
     CHECK(ybus_case_get_branch_f64(three, YBUS_BRANCH_X, x, 3) == YBUS_OK);
     CHECK(x[0] == 0.1 && x[1] == 0.2 && x[2] == 0.25);
 
+    /* The magnetizing admittance, beyond MATPOWER's format: 0 as read, and writable */
+    double mag[3] = {-1, -1, -1};
+    CHECK(ybus_case_get_branch_f64(three, YBUS_BRANCH_G_MAG, mag, 3) == YBUS_OK);
+    CHECK(mag[0] == 0.0 && mag[1] == 0.0 && mag[2] == 0.0);
+    const double b_mag[3] = {0.0, -0.03, 0.0};
+    CHECK(ybus_case_set_branch_f64(three, YBUS_BRANCH_B_MAG, b_mag, 3) == YBUS_OK);
+    CHECK(ybus_case_get_branch_f64(three, YBUS_BRANCH_B_MAG, mag, 3) == YBUS_OK);
+    CHECK(mag[0] == 0.0 && mag[1] == -0.03 && mag[2] == 0.0);
+
     /* A code the table doesn't have, or of the other type */
     CHECK(ybus_case_get_bus_f64(three, 14, pd, 3) == YBUS_ERROR_INVALID_FIELD);
     CHECK(ybus_case_get_bus_f64(three, YBUS_BUS_TYPE, pd, 3) == YBUS_ERROR_INVALID_FIELD);

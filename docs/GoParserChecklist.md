@@ -122,11 +122,12 @@ gocompetition.energy.gov, was unreachable on 2026-11-24 because of an expired ce
 
 ## Phase G1: Magnetizing admittance in `Branch`
 
-- [ ] `Branch` gains `g_mag` and `b_mag`, in p.u. on the system base, to ground at the from bus
-      and not divided by the tap. The MATPOWER reader sets both to 0, `Case::validate` requires
-      them to be finite, and their docs say they're not part of MATPOWER's format. The
-      `Branch` literal in `tests/data_model_test.rs` gains them.
-- [ ] `branch_stamps` adds `g_mag + j·b_mag` to Yff, after `pi_stamps`'s division by τ², so the
+- [x] `Branch` gains `g_mag` and `b_mag`, in p.u. on the system base, to ground at the from bus
+      and not divided by the tap. The MATPOWER reader sets both to 0, and their docs say
+      they're not part of MATPOWER's format. `Case::validate` doesn't check them for NaN, as it
+      checks no other value: the readers reject NaN where it's read, and G3's will too. (The
+      `Branch` in `tests/data_model_test.rs` is built by struct update, so it needed no change.)
+- [x] `branch_stamps` adds `g_mag + j·b_mag` to Yff, after `pi_stamps`'s division by τ², so the
       AC power flow, the AC OPF and the derivatives all include it, from-end flows too. B″ gains
       `-b_mag` at (f, f). The DC models ignore it, as they ignore line charging, and say so.
       Tests:
@@ -136,10 +137,13 @@ gocompetition.energy.gov, was unreachable on 2026-11-24 because of an expired ce
       - That transformer's `OpfOutage::branch` equals the case with the branch removed and no
         shunt.
 
-      The MATPOWER reference results are unchanged, since the fields are 0 there.
-- [ ] `ybus_ffi` reads the new columns (`YBUS_BRANCH_G_MAG`, `YBUS_BRANCH_B_MAG`), with
-      `ybus.h` regenerated, `symbols.txt` updated, and a C test. `CHANGELOG.md` records the
-      breaking change under [Unreleased].
+      The MATPOWER reference results are unchanged, since the fields are 0 there
+      (`ybus_powerflow/tests/magnetizing_test.rs`).
+- [x] `ybus_ffi` reads and writes the new columns, `YBUS_BRANCH_G_MAG` (101) and
+      `YBUS_BRANCH_B_MAG` (102), with `ybus.h` regenerated and a C test. Field codes are
+      MATPOWER's column numbers, so fields beyond its format take codes from 101 up, clear of
+      any column MATPOWER might add. They're constants, not symbols, so `symbols.txt` is
+      unchanged. `CHANGELOG.md` records the breaking change under [Unreleased].
 
 ## Phase G2: The data
 
