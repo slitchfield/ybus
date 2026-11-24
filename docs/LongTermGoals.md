@@ -80,8 +80,12 @@ challenge, into the case model, so its public datasets can drive goal 3.
 - **Out of scope at first:** the later challenges' formats (Challenge 3 uses a single JSON file,
   with multi-period and unit-commitment data), and the full PSS/E format beyond what Challenge 1
   uses.
-- **Data licensing** to check before committing anything derived from the datasets, as for
-  MATPOWER's cases.
+- **Data licensing:** the datasets are on OEDI (<https://doi.org/10.25984/2437761>) under
+  CC BY 4.0, so results derived from them may be committed with attribution. The data itself is
+  fetched, as MATPOWER's cases are.
+- **Planned (2026-11-24)** in [`GoParserChecklist.md`](GoParserChecklist.md). Its decisions:
+  `Branch` gains the transformers' magnetizing admittance (a breaking change), and the reader
+  is a module of `ybus_powerflow`, `case::go`.
 
 ## 5. A line search for the predictor-corrector method
 
