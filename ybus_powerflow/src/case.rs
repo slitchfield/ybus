@@ -6,6 +6,11 @@
 //! per-unit powers, radians) are derived from it when needed, as MATPOWER's `ext2int` does,
 //! so the case itself stays a faithful copy of the file.
 //!
+//! One field goes beyond MATPOWER's format: a branch's magnetizing admittance
+//! ([`Branch::g_mag`] and [`Branch::b_mag`]), which PSS/E-based data such as the GO
+//! Competition's has and MATPOWER can only fold into the bus shunts. It's 0 for a case read
+//! from a MATPOWER file.
+//!
 //! See `caseformat.m` in MATPOWER for the format's definition, and [`Case::parse`] for what
 //! the reader supports.
 
@@ -169,6 +174,15 @@ pub struct Branch {
     pub angmin_deg: f64,
     /// Maximum angle difference, angle(Vf) − angle(Vt) (degrees).
     pub angmax_deg: f64,
+    /// Transformer magnetizing conductance (p.u.), to ground at the from bus and not divided by
+    /// the tap ratio. Not part of MATPOWER's format, so 0 for a case read from a MATPOWER file;
+    /// PSS/E's MAG1, as read from GO Competition Challenge 1 instances. It's part of the branch,
+    /// so it leaves the network with it when the branch is out of service. The DC models
+    /// ignore it, as they ignore line charging.
+    pub g_mag: f64,
+    /// Transformer magnetizing susceptance (p.u.), to ground at the from bus and not divided by
+    /// the tap ratio: PSS/E's MAG2. See [`Branch::g_mag`].
+    pub b_mag: f64,
 }
 
 impl Branch {

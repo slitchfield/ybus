@@ -983,6 +983,9 @@ fn branch_from_row(row: &Row) -> Result<Branch, PowerflowError> {
         status: v[10] != 0.0,
         angmin_deg: optional(v, 11, -360.0),
         angmax_deg: optional(v, 12, 360.0),
+        // Not in MATPOWER's format: see Branch::g_mag
+        g_mag: 0.0,
+        b_mag: 0.0,
     })
 }
 
