@@ -11,6 +11,21 @@ version bump (0.1 to 0.2) may break the API, and a patch bump doesn't.
 
 ## [Unreleased]
 
+### Changed
+
+#### `ybus_powerflow`
+
+- **Breaking:** `Branch` has two new fields, `g_mag` and `b_mag`: a transformer's magnetizing
+  admittance (p.u.), to ground at the from bus and not divided by the tap ratio, as PSS/E's
+  MAG1 and MAG2 and the GO Competition's transformer model have it
+  (`docs/GoParserChecklist.md`, goal 4). A `Branch` built with a struct literal needs them.
+  - **Not in MATPOWER's format,** so both are 0 for a case read from a MATPOWER file, and every
+    MATPOWER result is unchanged.
+  - **The AC models** add it to Yff, and so to Ybus and Yf; the fast-decoupled B″ keeps its
+    susceptance, and B′ drops it. Being part of the branch, it leaves the network with the
+    branch, through `OpfOutage::branch` too.
+  - **The DC models** ignore it, as they ignore line charging.
+
 ## [0.2.1](https://github.com/slitchfield/ybus/compare/v0.2.0...v0.2.1) - 2026-11-23
 
 Completes the predictor-corrector method's line search (`docs/LineSearchChecklist.md`, goal 5).

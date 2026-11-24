@@ -5,7 +5,8 @@
 //! the codes are fixed by the format itself and never renumbered. Codes repeat across tables,
 //! which have their own functions. A solution's columns take the same codes, in the columns
 //! MATPOWER writes its results to, such as `YBUS_BRANCH_PF_MW` (14), which a case doesn't
-//! have.
+//! have. Fields beyond MATPOWER's format, such as `YBUS_BRANCH_G_MAG` (101), take codes from
+//! 101 up, clear of any column MATPOWER might add.
 
 use ybus_powerflow::case::{Branch, Bus, BusType, Gen};
 use ybus_powerflow::Case;
@@ -160,6 +161,11 @@ pub const YBUS_BRANCH_MU_ANGMIN: ybus_field = 20;
 /// An OPF solution's multiplier of the upper angle difference limit, `MU_ANGMAX` ($/degree): a
 /// result column.
 pub const YBUS_BRANCH_MU_ANGMAX: ybus_field = 21;
+/// Transformer magnetizing conductance (p.u.), to ground at the from bus and not divided by the
+/// tap ratio: not in MATPOWER's format, so 0 for a case read from a MATPOWER file.
+pub const YBUS_BRANCH_G_MAG: ybus_field = 101;
+/// Transformer magnetizing susceptance (p.u.), as `YBUS_BRANCH_G_MAG`.
+pub const YBUS_BRANCH_B_MAG: ybus_field = 102;
 
 /// How to read and write one `double` field of a row.
 pub(crate) struct Float<R> {
@@ -320,6 +326,8 @@ fn branch_float(field: ybus_field) -> Option<Float<Branch>> {
         YBUS_BRANCH_SHIFT_DEG => float!(shift_deg),
         YBUS_BRANCH_ANGMIN_DEG => float!(angmin_deg),
         YBUS_BRANCH_ANGMAX_DEG => float!(angmax_deg),
+        YBUS_BRANCH_G_MAG => float!(g_mag),
+        YBUS_BRANCH_B_MAG => float!(b_mag),
         _ => None,
     }
 }

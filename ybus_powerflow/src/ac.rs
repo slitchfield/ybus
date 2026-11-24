@@ -135,16 +135,23 @@ impl Admittances {
 }
 
 /// A branch's π-model stamps, as in `makeYbus`: series admittance `Ys = 1 / (r + jx)`, line
-/// charging `Bc`, and the complex tap `τ = tap · e^{jφ}` (a tap of 0 meaning 1). Returns
-/// `(Yff, Yft, Ytf, Ytt)`.
+/// charging `Bc`, and the complex tap `τ = tap · e^{jφ}` (a tap of 0 meaning 1), plus the
+/// magnetizing admittance `Gm + jBm` added to `Yff` after the division by `|τ|²`, as the GO
+/// Competition's transformer model has it. Returns `(Yff, Yft, Ytf, Ytt)`.
 fn branch_stamps(branch: &Branch) -> [Complex<f64>; 4] {
-    pi_stamps(
+    let [yff, yft, ytf, ytt] = pi_stamps(
         branch.r,
         branch.x,
         branch.b,
         branch.effective_tap(),
         branch.shift_deg,
-    )
+    );
+    [
+        yff + Complex::new(branch.g_mag, branch.b_mag),
+        yft,
+        ytf,
+        ytt,
+    ]
 }
 
 /// The π-model stamps `(Yff, Yft, Ytf, Ytt)` of resistance `r`, reactance `x`, charging `b`, tap
@@ -174,8 +181,10 @@ impl AcModel {
     ///
     /// Each in-service branch `k` from bus `f` to bus `t` stamps its π-model: `Yff` at (f, f),
     /// `Yft` at (f, t), `Ytf` at (t, f) and `Ytt` at (t, t) of Ybus, with
-    /// `Ytt = Ys + jBc/2`, `Yff = Ytt / |τ|²`, `Yft = −Ys / conj(τ)` and `Ytf = −Ys / τ`, where
-    /// `Ys = 1 / (r + jx)` and `τ = tap · e^{jφ}` (a tap of 0 meaning 1). Row `k` of Yf holds
+    /// `Ytt = Ys + jBc/2`, `Yff = Ytt / |τ|² + Gm + jBm`, `Yft = −Ys / conj(τ)` and
+    /// `Ytf = −Ys / τ`, where `Ys = 1 / (r + jx)`, `τ = tap · e^{jφ}` (a tap of 0 meaning 1),
+    /// and `Gm + jBm` is the magnetizing admittance ([`Branch::g_mag`], 0 for MATPOWER cases).
+    /// Row `k` of Yf holds
     /// `Yff` and `Yft`, and row `k` of Yt holds `Ytf` and `Ytt`, so `Yf V` and `Yt V` are the
     /// branch currents at each end. Each connected bus adds its shunt `(Gs + jBs) / baseMVA` on
     /// the diagonal. Parallel branches sum, and every stamped position stays stored, so the
@@ -1039,9 +1048,9 @@ impl AcModel {
     }
 
     /// `makeB`'s B′ and B″ over all connected buses, as `−Im` of admittance matrices built with
-    /// changed branch data. B′: line charging, bus shunts and taps removed (phase shifts kept),
-    /// and for XB resistance too. B″: phase shifts removed, and for BX resistance too, with
-    /// charging, taps and bus shunts kept. Returns `PowerflowError::ZeroReactance` for an
+    /// changed branch data. B′: line charging, bus shunts, magnetizing susceptance and taps
+    /// removed (phase shifts kept), and for XB resistance too. B″: phase shifts removed, and for
+    /// BX resistance too, with charging, magnetizing susceptance, taps and bus shunts kept. Returns `PowerflowError::ZeroReactance` for an
     /// in-service branch with `x = 0`.
     fn make_b(
         &self,
@@ -1061,13 +1070,15 @@ impl AcModel {
             let r_prime = if xb { 0.0 } else { branch.r };
             let r_double_prime = if xb { branch.r } else { 0.0 };
             let stamps_prime = pi_stamps(r_prime, branch.x, 0.0, 1.0, branch.shift_deg);
-            let stamps_double_prime = pi_stamps(
+            let mut stamps_double_prime = pi_stamps(
                 r_double_prime,
                 branch.x,
                 branch.b,
                 branch.effective_tap(),
                 0.0,
             );
+            // B″ keeps the shunts, so the magnetizing susceptance too, undivided by the tap
+            stamps_double_prime[0] += Complex::new(0.0, branch.b_mag);
             for (matrix, stamps) in [
                 (&mut prime, stamps_prime),
                 (&mut double_prime, stamps_double_prime),

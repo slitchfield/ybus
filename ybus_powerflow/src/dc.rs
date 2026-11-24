@@ -120,7 +120,9 @@ impl DcModel {
     /// `Bbus = Cftᵀ · diag(b) · Cft` and `Bf = diag(b) · Cft`, where `Cft` has +1 at the
     /// branch's from bus and −1 at its to bus. Parallel branches sum. A phase shift of `φ`
     /// degrees adds the injection `−b · φ · π/180` at the from end (`pfinj_pu`), and its
-    /// effect on each bus (`pbusinj_pu = Cftᵀ · pfinj_pu`).
+    /// effect on each bus (`pbusinj_pu = Cftᵀ · pfinj_pu`). Like MATPOWER's DC model, it ignores
+    /// each branch's shunts: its line charging `b` and its magnetizing admittance (`g_mag`,
+    /// `b_mag`).
     ///
     /// Bus roles follow MATPOWER's `bustypes`: a REF or PV bus counts as one only if it has an
     /// in-service generator, and is otherwise treated as PQ. With no REF bus, the first PV bus
