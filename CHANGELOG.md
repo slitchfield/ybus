@@ -11,6 +11,13 @@ version bump (0.1 to 0.2) may break the API, and a patch bump doesn't.
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/slitchfield/ybus/compare/v0.2.1...v0.3.0) - 2026-11-24
+
+### Other
+
+- Stamp the magnetizing admittance into the AC models
+- Add a magnetizing admittance to Branch
+
 ### Changed
 
 #### `ybus_powerflow`
