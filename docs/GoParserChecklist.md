@@ -119,15 +119,21 @@ departure is in bold.
   - **A stray `case.raw3`** sits in bundle 2's Real-Time Network_01R-020/scenario_1, beside
     its `case.raw` and differing from it. `inputfiles.ini` doesn't name it, so a reader that
     follows `inputfiles.ini` never sees it.
-- **Sizes** (scenario 1 of each network):
+- **Sizes,** over every scenario of each network, in both parts and both bundles:
 
-  | Network | Buses | Loads | Fixed shunts | Generators | Lines | Transformers | Switched shunts | Contingencies per scenario |
-  |---|---|---|---|---|---|---|---|---|
-  | 01 | 500 | 200 | 0 | 90 | 468 | 131 | 17 | 371 to 409 |
-  | 03 | 793 | 568 | 49 | 210 | 769 | 143 | 50 | 86 to 100 |
-  | 05 | 2,000 | 1,125 | 0 | 544 | 2,359 | 847 | 153 | 3,143 to 3,187 |
-  | 07 | 2,312 | 1,529 | 121 | 617 | 2,156 | 857 | 201 | 979 to 1,014 |
-  | 10 | 7,977 | 6,671 | 4,584 | 570 | 8,896 | 2,548 | 455 | 629 to 2,402 |
+  | Network | Scenarios | Buses | Loads | Fixed shunts | Generators | Lines | Transformers | Switched shunts | Contingencies per scenario |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 01 | 60 | 500 | 200 | 0 | 90 | 468 | 131 | 17 to 19 | 371 to 409 |
+  | 03 | 60 | 793 | 568 | 49 | 210 | 769 | 143 | 50 | 86 to 100 |
+  | 05 | 40 | 2,000 | 1,125 | 0 to 3 | 544 | 2,359 | 847 | 153 to 160 | 3,143 to 3,187 |
+  | 07 | 60 | 2,312 | 1,529 | 121 | 617 | 2,156 | 857 | 201 | 979 to 1,014 |
+  | 10 | 20 | 7,977 | 6,671 | 0 to 4,587 | 560 to 570 | 8,896 to 8,900 | 2,548 to 2,693 | 6 to 5,082 | 629 to 2,402 |
+
+  **A network's scenarios aren't all the same network.** Network 10's differ most: 10
+  different sets of these counts in its 20 scenarios, matching its per-scenario `case.rop` and
+  `case.inl`. Networks 01 and 05 vary only in their shunts, and 03 and 07 not at all.
+  (Corrected 2026-11-26: this table first gave one scenario's sizes per network, mislabeled
+  as scenario 1's. G3's reader, read over every file, caught it.)
 - **Text.**
   - **Encoding:** every file is ASCII, with no byte order mark and no non-ASCII bytes.
   - **Line endings:** CRLF, except that **60 `case.raw` files end lines 2 and 3 (the case
@@ -234,6 +240,7 @@ find . -name case.inl -exec sh -c 'tail -n 2 "$1" | tr -d "\r" | tr "\n" "|"; ec
 # case.raw: sections, values, CZ 2, BINIT, Real-Time against Offline
 find . -name case.raw -print0 | xargs -0 python3 -I raw_sections.py
 find . -name case.raw -path '*scenario_*' -print0 | xargs -0 python3 -I raw_values.py
+python3 -I sizes.py raw_values.py   # the size table, over every scenario
 find . -name case.raw -path '*scenario_*' -print0 | xargs -0 python3 -I raw_details.py raw_values.py
 python3 -I nomv.py raw_values.py $(find . -name case.raw -path '*Network_07*scenario_1/*')
 find . -name case.raw -path '*scenario_*' -print0 | xargs -0 python3 -I binit.py raw_values.py
@@ -328,6 +335,27 @@ for k, v in C.items():
     items = v.most_common(12)
     print(f'{k}: {items}{" ..." if len(v) > 12 else ""}')
 print('sizes:'); [print(' ', k, v) for k, v in sorted(sizes.items())]
+```
+
+`sizes.py`:
+
+```python
+import sys, collections, glob
+src = open(sys.argv[1]).read().split('C = collections.defaultdict')[0]; ns = {}; exec(src, ns)
+KEYS = ('bus', 'load', 'fshunt', 'gen', 'line', 'xfmr', 'swsh')
+per = collections.defaultdict(list)
+for path in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*/case.raw')):
+    _, r = ns['records'](path)
+    net = [p for p in path.split('/') if p.startswith('Network_')][0]
+    scen = path.split('/')[-2]
+    per[net[:10]].append((net, scen, tuple(len(r[k]) for k in KEYS)))
+for net, rows in sorted(per.items()):
+    distinct = sorted(set(sizes for _, _, sizes in rows))
+    print(net, len(rows), 'scenarios,', len(distinct), 'distinct size tuples')
+    for k, key in enumerate(KEYS):
+        vals = [s[k] for _, _, s in rows]
+        print(f'   {key:7} {min(vals):>6} to {max(vals):>6}')
+    print('   scenario_1 sizes by part:', sorted({(n, s) for n, sc, s in rows if sc == 'scenario_1'}))
 ```
 
 `eol.py`:
