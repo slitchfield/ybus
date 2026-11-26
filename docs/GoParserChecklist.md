@@ -147,9 +147,13 @@ gocompetition.energy.gov, was unreachable on 2026-11-24 because of an expired ce
 
 ## Phase G2: The data
 
-- [ ] `scripts/fetch-go-c1.sh` downloads the two bundles into the gitignored `testdata/go-c1/`,
-      SHA-256 checked, reusing a verified download and honoring a `GO_C1_DIR` override, as
-      `scripts/fetch-matpower.sh` does. The README credits the data with the citation above.
+- [x] `scripts/fetch-go-c1.sh` downloads the two bundles into the gitignored `testdata/go-c1/`,
+      one directory per bundle, SHA-256 checked, reusing a verified extraction and honoring a
+      `GO_C1_DIR` override, as `scripts/fetch-matpower.sh` does. OEDI publishes no checksums,
+      so the pins are from the first download (2026-11-26), which a second, separate download
+      matched. The README credits the data with the citation above. CI doesn't run it yet:
+      decided with the maintainer (2026-11-26), its cached fetch step comes with G4's tests,
+      the first that read the data.
 - [ ] **Inspect** the data and record it here, before G3 and G4 rely on it:
       - the format of `inputfiles.ini`
       - which bus types (IDE), BASKV, CW, CZ and CM values occur

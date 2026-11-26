@@ -49,6 +49,10 @@ completed one that followed it: optimal power flow, interior-point solvers and a
   - **How tests use it:** `ybus_powerflow` tests find cases through `ybus_powerflow/tests/common`.
     They skip when MATPOWER hasn't been fetched. Set `YBUS_REQUIRE_CASES=1` to make missing cases
     fail instead; the Check CI job fetches MATPOWER (cached) and sets it.
+- **GO Competition test data:** `scripts/fetch-go-c1.sh` downloads two of ARPA-E's GO
+  Competition Challenge 1 dataset bundles from OEDI (checksum verified) into the gitignored
+  `testdata/go-c1/`, for the GO reader (goal 4, [`docs/GoParserChecklist.md`](docs/GoParserChecklist.md)).
+  It needs `curl` and `unzip`. Set `GO_C1_DIR` to use an existing copy instead.
 - **GPU tests:** the tests of `ybus_cuda` and of ybus_powerflow's `cuda` feature skip, saying so, on
   a machine without CUDA, as on CI. Set `YBUS_REQUIRE_CUDA=1` to make that a failure, when
   running `./check.sh` on a machine with a GPU.
@@ -261,6 +265,14 @@ The current terms of the most relevant implementations:
   [their README](ybus_powerflow/tests/data/matpower-reference/README.md). MIPS, MATPOWER's solver,
   is under the same BSD 3-clause license; `ybus_ipm::mips` is ported from it, so it and
   the files that restate MIPS's tests keep MIPS's notice ([`LICENSE-MIPS`](LICENSE-MIPS)).
+- **ARPA-E's GO Competition Challenge 1 datasets:** CC BY 4.0, which allows redistribution with
+  attribution. This repository doesn't include them, so that it stays small:
+  `scripts/fetch-go-c1.sh` downloads them. Results derived from them are committed with this
+  credit: S. Elbert, J. Holzer, A. Veeramany, K. Hedman, H. Mittelmann, C. Coffrin,
+  T. Overbye, A. Birchfield, C. DeMarco, R. Duthu, O. Kuchar, H. Li, A. Tbaileh and J. Wert,
+  *ARPA-E Grid Optimization (GO) Competition Challenge 1* [data set], Open Energy Data
+  Initiative (OEDI), Pacific Northwest National Laboratory, 2024.
+  [doi:10.25984/2437761](https://doi.org/10.25984/2437761)
 
 - **HSL's MA57 and MA97:** under HSL's own licences, not an open-source license. Only their
   published papers are cited, as descriptions of delayed pivoting.
