@@ -12,9 +12,6 @@
 //! - **Strictness:** what full PSS/E allows but Challenge 1 rules out (fields separated by
 //!   blanks, double-quoted strings) is an error, not read with a guess.
 
-// The reader in the next commit is its first user
-#![cfg_attr(not(test), allow(dead_code))]
-
 use super::GoFile;
 use crate::powerflow_error::PowerflowError;
 
@@ -169,13 +166,14 @@ impl<'a> Record<'a> {
         error(self.file, self.line, message)
     }
 
-    /// Checks that a `what` record (such as "bus") has exactly `count` fields.
+    /// Checks that the record has exactly `count` fields, for a message naming it `what`, such
+    /// as "a bus record".
     pub(super) fn expect_len(&self, what: &str, count: usize) -> Result<(), PowerflowError> {
         if self.fields.len() == count {
             Ok(())
         } else {
             Err(self.error(format!(
-                "a {what} record has {count} fields, not {}",
+                "{what} has {count} fields, not {}",
                 self.fields.len()
             )))
         }
@@ -333,7 +331,7 @@ mod tests {
     #[test]
     fn fields_and_their_types() {
         let r = record("   1,'1 ',   1.5, -2e-3, 0, 'TL', 'A NAME  ', 1.0").unwrap();
-        r.expect_len("test", 8).unwrap();
+        r.expect_len("a test record", 8).unwrap();
         assert_eq!(r.line(), 4);
         assert_eq!(r.label(0, "I"), Ok(1));
         assert_eq!(r.short_id(1, "ID"), Ok("1".to_string()));
@@ -345,7 +343,9 @@ mod tests {
         // A whole number may be written with a decimal point
         assert_eq!(r.int(7, "N1"), Ok(1));
         assert_eq!(r.count(7, "N1"), Ok(1));
-        assert!(message(r.expect_len("bus", 13)).contains("a bus record has 13 fields, not 8"));
+        assert!(
+            message(r.expect_len("a bus record", 13)).contains("a bus record has 13 fields, not 8")
+        );
     }
 
     #[test]

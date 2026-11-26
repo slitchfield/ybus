@@ -11,6 +11,25 @@ version bump (0.1 to 0.2) may break the API, and a patch bump doesn't.
 
 ## [Unreleased]
 
+### Added
+
+#### `ybus_powerflow`
+
+- **`case::go`, reading the GO Competition Challenge 1 input files** (goal 4,
+  `docs/GoParserChecklist.md`). The first part is `RawCase::parse`, `from_bytes` and `from_path`.
+  They read a `case.raw` file (PSS/E revision 33, in the subset Challenge 1 allows) faithfully into
+  `RawCase`. It holds the fields Challenge 1 uses of buses, loads, fixed shunts, generators,
+  lines, two-winding transformers and switched shunts, in the file's units, each with the line
+  it came from.
+  - **Strict:** fields separated by commas, strings in single quotes, every field present, as
+    the formulation's A.1.3 requires. What full PSS/E allows outside that is an error, not
+    read with a guess.
+  - **The record types are `#[non_exhaustive]`,** so later phases can add fields without a
+    breaking release.
+  - **Converting to a `Case`** comes in phase G4.
+- **`PowerflowError::GoParse { file, line, message }`,** with `GoFile` naming which of an
+  instance's four files the problem is in, displayed as `case.raw line 7: …`.
+
 ## [0.3.0](https://github.com/slitchfield/ybus/compare/v0.2.1...v0.3.0) - 2026-11-24
 
 The first step of the GO Competition Challenge 1 reader (`docs/GoParserChecklist.md`, goal 4):

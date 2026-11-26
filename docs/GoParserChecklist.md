@@ -753,18 +753,31 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
       - A terminator is `0` alone or followed by a `/` comment, with or without a space.
       - `Q` may stand in for the terminators still owed, as when the induction machine section
         isn't terminated.
-- [ ] `RawCase`, with the used fields of each section in file order and the IDs and circuits
+- [x] `RawCase`, with the used fields of each section in file order and the IDs and circuits
       unquoted and trimmed (the data pads them, as in `'1 '`). Unused fields are checked for
       count but not kept, and unused sections are skipped by counting their terminators.
-      They can hold records: area data always does. Tests:
+      They can hold records: area data always does.
+      - **The types:** `RawCase` and its record types are `#[non_exhaustive]`, as decided with
+        the maintainer (2026-11-26), and each record keeps the line it came from, for G4's
+        errors (`case/go/raw.rs`).
+      - **Two checks moved here from G4,** since they're about single fields: IDE must be 1 to
+        4, and K must be 0, because a three-winding record is five lines.
+      - **The rest stays for G4:** the CW, CZ and CM rules, and what a nonzero line-end shunt
+        means (the data has none). So do all cross-record checks, such as duplicate keys and
+        unknown buses.
+
+      Tests:
       - hand-written fixtures in `ybus_powerflow/tests/data/go/` covering every section:
         several loads and shunts on one bus, elements out of service, a transformer with
         magnetizing admittance and an off-nominal ratio and shift, switched-shunt blocks, and
         skipped sections with records in them. They also cover the text G2 found: mixed line
         endings, padded IDs, both terminator spellings, and `Q` in place of the last
-        terminators.
-      - malformed input, checking the file and line named
+        terminators. The fixture is committed with LF endings, and `tests/go_raw_test.rs` builds
+        the CRLF and mixed variants in code, so git's line-ending handling can't change it.
+      - malformed input, checking the file and line named (`tests/go_raw_syntax_test.rs`, 23
+        edits of the fixture)
       - a `catch_unwind` fuzz test, as `tests/matpower_fuzz_test.rs` does
+        (`tests/go_raw_fuzz_test.rs`)
 
 ## Phase G4: Conversion to `Case`
 
@@ -776,8 +789,8 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
         - In-service switched shunts add BINIT to the susceptance, as given, even outside its
           C.9 range (decided in G2).
         - NVHI and NVLO become the voltage limits, and VM and VA are copied.
-        - The bus type is IDE's, copied (decided in G2). An IDE other than 1 to 4 is an error
-          naming the line.
+        - The bus type is IDE's, copied (decided in G2). G3's reader already refuses an IDE
+          other than 1 to 4.
       - **Generators:**
         - Copied: PG, QG, QT and QB for the reactive limits, PT and PB for the real limits, and
           STAT.
@@ -788,7 +801,7 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
         shift, MAG1 and MAG2 as `g_mag` and `b_mag`, and RATA1 and RATC1 as the ratings.
         CW and CM must be 1, and CZ 1, or 2 where that's equivalent (SBASE12 equal to SBASE,
         and NOMV1 and NOMV2 each 0 or their bus's BASKV, decided in G2). Anything else is an
-        error naming the line, as is a nonzero K.
+        error naming the line. G3's reader already refuses a nonzero K.
       - **Angle limits:** ±360.
 - [ ] Switched-shunt ranges by C.9's rule, and contingency voltage limits, on `RawCase`. Tests
       check them on the fixtures.

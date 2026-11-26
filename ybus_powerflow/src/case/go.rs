@@ -9,7 +9,13 @@
 
 use std::fmt;
 
+mod raw;
 mod text;
+
+pub use raw::{
+    RawBus, RawCase, RawFixedShunt, RawGenerator, RawLine, RawLoad, RawSwitchedShunt,
+    RawTransformer,
+};
 
 /// One of the four files of a GO Challenge 1 instance, as errors name it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
