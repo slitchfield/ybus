@@ -743,9 +743,11 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
       yet, so `GoParse` falls to `YBUS_ERROR_OTHER`, as `status.rs`'s test expects of a variant
       added later, until the C library gains GO entry points. Mapping it to `YBUS_ERROR_PARSE`,
       as first planned, would break that test's rule of one code per variant.
-- [ ] A tokenizer for the comma format (single quotes, `/` starting a comment outside quotes,
-      `0` ending a section, `Q` ending the file), whose records keep their line numbers. From
-      G2's findings:
+- [x] A tokenizer for the comma format (single quotes, `/` starting a comment outside quotes,
+      `0` ending a section, `Q` ending the file), whose records keep their line numbers
+      (`case/go/text.rs`, with unit tests). Strict, as decided with the maintainer (2026-11-26):
+      what A.1.3 rules out, such as fields separated by blanks, double quotes and empty fields
+      left to defaults, is an error. From G2's findings:
       - Lines end with CRLF or LF, mixed within a file.
       - The case identification's lines 2 and 3 are free text.
       - A terminator is `0` alone or followed by a `/` comment, with or without a space.

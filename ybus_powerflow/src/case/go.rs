@@ -9,6 +9,8 @@
 
 use std::fmt;
 
+mod text;
+
 /// One of the four files of a GO Challenge 1 instance, as errors name it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
