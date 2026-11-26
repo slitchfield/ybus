@@ -11,19 +11,44 @@ version bump (0.1 to 0.2) may break the API, and a patch bump doesn't.
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/slitchfield/ybus/compare/v0.2.1...v0.3.0) - 2026-11-24
+
+The first step of the GO Competition Challenge 1 reader (`docs/GoParserChecklist.md`, goal 4):
+a branch can now carry a transformer's magnetizing admittance, which PSS/E-based data has and
+MATPOWER's format doesn't.
+- **Why 0.3.0: one breaking change,** two new public fields on `Branch` (below). There's no
+  other API change, and no change in results: every case read from a MATPOWER file has a zero
+  magnetizing admittance, which leaves each stamp's value as it was, so it solves as in 0.2.1.
+- **`ybus_sparse`, `ybus_ipm` and `ybus_cuda`** are unchanged, released at the shared version.
+
 ### Changed
 
 #### `ybus_powerflow`
 
-- **Breaking:** `Branch` has two new fields, `g_mag` and `b_mag`: a transformer's magnetizing
-  admittance (p.u.), to ground at the from bus and not divided by the tap ratio, as PSS/E's
-  MAG1 and MAG2 and the GO Competition's transformer model have it
-  (`docs/GoParserChecklist.md`, goal 4). A `Branch` built with a struct literal needs them.
-  - **Not in MATPOWER's format,** so both are 0 for a case read from a MATPOWER file, and every
-    MATPOWER result is unchanged.
-  - **The AC models** add it to Yff, and so to Ybus and Yf; the fast-decoupled B″ keeps its
-    susceptance, and B′ drops it. Being part of the branch, it leaves the network with the
-    branch, through `OpfOutage::branch` too.
+- **Breaking: `Branch` has two new public fields,** `g_mag` and `b_mag`.
+  - **What breaks:** code that builds a `Branch` with a struct literal, or matches one with a
+    pattern that names every field without `..`. Code that reads or writes a `Branch`'s fields,
+    builds one with struct update syntax (`Branch { to_label: 3, ..branch.clone() }`) or gets
+    its cases from `Case::parse` and the other readers is unaffected.
+  - **To upgrade,** add `g_mag: 0.0, b_mag: 0.0` to each literal. That reproduces 0.2.1's
+    model exactly, since 0 is what every MATPOWER case has.
+  - **`Branch`'s `PartialEq`** compares the new fields too, so it's unchanged for branches
+    whose fields are both 0.
+
+### Added
+
+#### `ybus_powerflow`
+
+- **A transformer magnetizing admittance:** `Branch::g_mag` and `Branch::b_mag`, in p.u. on the
+  system base, to ground at the from bus and not divided by the tap ratio. That's how PSS/E's
+  MAG1 and MAG2 and the GO Competition's transformer model define it.
+  - **Not in MATPOWER's format,** so the MATPOWER reader sets both to 0.
+  - **The AC models** add it to Yff, and so to Ybus and Yf: the AC power flow, the AC OPF and
+    its derivatives all include it, and a branch's from-end flow includes what it draws. The
+    fast-decoupled B″ keeps its susceptance and B′ drops it, as with the other shunts.
+  - **It's part of the branch,** so it leaves the network with it: when the branch's status is
+    0, and in an `OpfOutage::branch` outage. Folding it into the from bus's shunt, as
+    MATPOWER's `psse2mpc` does, would leave it behind in an outage.
   - **The DC models** ignore it, as they ignore line charging.
 
 ## [0.2.1](https://github.com/slitchfield/ybus/compare/v0.2.0...v0.2.1) - 2026-11-23
@@ -217,5 +242,5 @@ releases.
   evaluation (and `ybus_ipm`'s and `ybus_sparse`'s parallel LDLᵀ), and `cuda` (experimental)
   for the DC studies on a GPU, through `ybus_cuda`.
 
-[Unreleased]: https://github.com/slitchfield/ybus/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/slitchfield/ybus/compare/v0.3.0...HEAD
 [0.1.0]: https://github.com/slitchfield/ybus/releases/tag/v0.1.0
