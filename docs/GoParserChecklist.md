@@ -713,9 +713,9 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
       one directory per bundle, SHA-256 checked, reusing a verified extraction and honoring a
       `GO_C1_DIR` override, as `scripts/fetch-matpower.sh` does. OEDI publishes no checksums,
       so the pins are from the first download (2026-11-26), which a second, separate download
-      matched. The README credits the data with the citation above. CI doesn't run it yet:
-      decided with the maintainer (2026-11-26), its cached fetch step comes with G4's tests,
-      the first that read the data.
+      matched. The README credits the data with the citation above. CI's cached fetch step
+      comes with the first tests that read the data, as decided with the maintainer
+      (2026-11-26). Those turned out to be G3's, which added it.
 - [x] **Inspect** the data and record it, before G3 and G4 rely on it: "What the data holds",
       under "The data" above. Decided with the maintainer (2026-11-26), from those findings:
       - **Bus types: copy IDE.** It's always filled, with one reference bus per file that has
@@ -778,6 +778,15 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
         edits of the fixture)
       - a `catch_unwind` fuzz test, as `tests/matpower_fuzz_test.rs` does
         (`tests/go_raw_fuzz_test.rs`)
+- [x] **The real data,** in the tests and in CI, as decided with the maintainer (2026-11-26).
+      - **The test:** `tests/go_raw_data_test.rs` reads every fetched `case.raw`, through
+        `common::go_c1_dir`, which skips when the data isn't fetched unless
+        `YBUS_REQUIRE_CASES=1`. The totals and each network's size ranges must match what G2's
+        throwaway reader counted, so each reader checks the other. It took this to find that
+        G2's size table had one scenario's sizes per network, mislabeled as scenario 1's; that
+        table is now corrected.
+      - **CI** caches the 24 MB of archives, not the 194 MB extracted, keyed on the fetch
+        script's hash, and runs the script before `./check.sh`.
 
 ## Phase G4: Conversion to `Case`
 

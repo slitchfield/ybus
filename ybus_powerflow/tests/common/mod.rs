@@ -1,4 +1,4 @@
-//! Shared test support: locating MATPOWER case files.
+//! Shared test support: locating MATPOWER case files and the GO Challenge 1 data.
 //!
 //! MATPOWER's case files are not committed (see `docs/PowerFlowChecklist.md`, Phase 1.5).
 //! `scripts/fetch-matpower.sh` downloads them, so tests that need a case look it up here:
@@ -36,6 +36,11 @@
 //! Octave) and writes every case as plain literals. It follows the same rules, and its output
 //! only counts once complete (`.ybus-normalized`) and made from the MATPOWER installation
 //! currently in use (its `SOURCE` file).
+
+//! [`go_c1_dir`] finds the GO Competition Challenge 1 data from `scripts/fetch-go-c1.sh` by the
+//! same rules: `GO_C1_DIR` if set, which must hold GO scenarios, and otherwise
+//! `testdata/go-c1/` once every bundle the script pins has its `.ybus-verified` marker. It skips
+//! or fails as above. [`go_c1_scenarios`] lists the scenario folders below it.
 
 // Each integration test file compiles this module separately and uses only part of it
 #![allow(dead_code)]
@@ -328,4 +333,124 @@ pub fn matpower_case(case: &str) -> Option<PathBuf> {
         ),
         require,
     )
+}
+
+/// Names an existing copy of the GO Challenge 1 data to use instead of `testdata/go-c1/`.
+pub const GO_C1_DIR_VAR: &str = "GO_C1_DIR";
+
+/// The bundles `scripts/fetch-go-c1.sh` fetches, read from its `BUNDLES=(…)` lines (each
+/// `"<name> <sha256>"`), so they're written down in one place.
+pub fn go_c1_bundles(script: &str) -> Vec<String> {
+    script
+        .lines()
+        .skip_while(|line| !line.starts_with("BUNDLES=("))
+        .skip(1)
+        .take_while(|line| line.trim() != ")")
+        .filter_map(|line| {
+            let entry = line.trim().strip_prefix('"')?.strip_suffix('"')?;
+            entry.split_whitespace().next().map(str::to_string)
+        })
+        .collect()
+}
+
+/// Whether `dir` holds at least one GO scenario: a `case.raw` in a `scenario_*` folder.
+fn has_go_scenario(dir: &Path) -> bool {
+    !go_c1_scenarios(dir).is_empty()
+}
+
+/// Looks for the GO Challenge 1 data: in `env_dir` if given (the value of `GO_C1_DIR`), which
+/// must hold GO scenarios, and otherwise in `fetched_root`, counted only once every one of
+/// `bundles` has its `.ybus-verified` marker there. Reads no environment variables, so it can be
+/// tested directly.
+pub fn locate_go_c1(env_dir: Option<&Path>, fetched_root: &Path, bundles: &[String]) -> Located {
+    if let Some(dir) = env_dir {
+        return if has_go_scenario(dir) {
+            Located::Found {
+                path: dir.to_path_buf(),
+                warning: None,
+            }
+        } else {
+            Located::Broken(format!(
+                "{GO_C1_DIR_VAR}={} has no scenario_*/case.raw; is it GO Challenge 1 data?",
+                dir.display()
+            ))
+        };
+    }
+    let unverified: Vec<&String> = bundles
+        .iter()
+        .filter(|bundle| !fetched_root.join(bundle).join(VERIFIED_MARKER).is_file())
+        .collect();
+    if unverified.is_empty() {
+        Located::Found {
+            path: fetched_root.to_path_buf(),
+            warning: None,
+        }
+    } else {
+        Located::Missing(format!(
+            "the GO Challenge 1 data is not fetched (no complete download of {} in {}); run \
+             scripts/fetch-go-c1.sh or set {GO_C1_DIR_VAR}",
+            unverified
+                .iter()
+                .map(|bundle| bundle.as_str())
+                .collect::<Vec<_>>()
+                .join(" and "),
+            fetched_root.display()
+        ))
+    }
+}
+
+/// The GO Challenge 1 data's directory, or `None` (after reporting why on stderr) when it
+/// hasn't been fetched and cases aren't required (`YBUS_REQUIRE_CASES`). Panics if it's
+/// required but missing, or if `GO_C1_DIR` names a directory without GO data.
+pub fn go_c1_dir() -> Option<PathBuf> {
+    let env_dir = env::var_os(GO_C1_DIR_VAR)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from);
+    let require = parse_require(env::var(REQUIRE_VAR).ok().as_deref());
+    let root = workspace_root();
+    let script = root.join("scripts").join("fetch-go-c1.sh");
+    let text = fs::read_to_string(&script)
+        .unwrap_or_else(|err| panic!("can't read {}: {err}", script.display()));
+    let bundles = go_c1_bundles(&text);
+    assert!(
+        !bundles.is_empty(),
+        "no BUNDLES=(…) entries in {}",
+        script.display()
+    );
+    resolve(
+        locate_go_c1(
+            env_dir.as_deref(),
+            &root.join("testdata").join("go-c1"),
+            &bundles,
+        ),
+        require,
+    )
+}
+
+/// Every scenario folder below `dir` (a `scenario_*` folder holding a `case.raw`), sorted.
+pub fn go_c1_scenarios(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let is_scenario = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("scenario_"));
+            if is_scenario && path.join("case.raw").is_file() {
+                found.push(path);
+            } else {
+                pending.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
 }
