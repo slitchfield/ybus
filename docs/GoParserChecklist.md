@@ -736,10 +736,13 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
 
 ## Phase G3: The `.raw` reader
 
-- [ ] `PowerflowError::GoParse { file, line, message }`, where `file` is a new `GoFile` (Raw,
-      Rop, Inl or Con), displayed as `case.raw line {line}: …`. `ybus_ffi` maps it to
-      `YBUS_ERROR_PARSE`. The UTF-8 and Latin-1 decoding moves out of `Case::from_bytes` into a
-      helper both readers share.
+- [x] `PowerflowError::GoParse { file, line, message }`, where `file` is a new `GoFile` (Raw,
+      Rop, Inl or Con), displayed as `case.raw line {line}: …`. The UTF-8 and Latin-1 decoding
+      moves out of `Case::from_bytes` into `decode`, a helper both readers share. `ybus_ffi` is
+      unchanged, as decided with the maintainer (2026-11-26). The C library can't read GO files
+      yet, so `GoParse` falls to `YBUS_ERROR_OTHER`, as `status.rs`'s test expects of a variant
+      added later, until the C library gains GO entry points. Mapping it to `YBUS_ERROR_PARSE`,
+      as first planned, would break that test's rule of one code per variant.
 - [ ] A tokenizer for the comma format (single quotes, `/` starting a comment outside quotes,
       `0` ending a section, `Q` ending the file), whose records keep their line numbers. From
       G2's findings:
