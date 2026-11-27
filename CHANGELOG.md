@@ -11,6 +11,15 @@ version bump (0.1 to 0.2) may break the API, and a patch bump doesn't.
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/slitchfield/ybus/compare/v0.3.0...v0.4.0) - 2026-11-27
+
+### Other
+
+- Read every fetched case.raw in the tests, and fetch the GO data in CI
+- Read GO Challenge 1 case.raw files into RawCase
+- Tokenize the GO files' comma format
+- Add GoParse and GoFile, and share the readers' decoding
+
 ### Added
 
 #### `ybus_powerflow`
