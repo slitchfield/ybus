@@ -1,6 +1,7 @@
 // Set of tests for our initial data model parsing efforts
 
 mod common;
+use ybus_powerflow::case::go::GoFile;
 use ybus_powerflow::case::{Branch, BusType, Case, GenCost};
 use ybus_powerflow::powerflow_error::PowerflowError;
 
@@ -494,6 +495,17 @@ fn errors_display_readably() {
         err.to_string(),
         "gen row 3 refers to bus 42, which doesn't exist"
     );
+    // A GO instance's errors name the file of the four
+    let err = PowerflowError::GoParse {
+        file: GoFile::Raw,
+        line: 7,
+        message: "expected 13 fields, found 12".to_string(),
+    };
+    assert_eq!(
+        err.to_string(),
+        "case.raw line 7: expected 13 fields, found 12"
+    );
+    assert_eq!(GoFile::Con.to_string(), "case.con");
 }
 
 #[test]

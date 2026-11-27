@@ -713,9 +713,9 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
       one directory per bundle, SHA-256 checked, reusing a verified extraction and honoring a
       `GO_C1_DIR` override, as `scripts/fetch-matpower.sh` does. OEDI publishes no checksums,
       so the pins are from the first download (2026-11-26), which a second, separate download
-      matched. The README credits the data with the citation above. CI doesn't run it yet:
-      decided with the maintainer (2026-11-26), its cached fetch step comes with G4's tests,
-      the first that read the data.
+      matched. The README credits the data with the citation above. CI's cached fetch step
+      comes with the first tests that read the data, as decided with the maintainer
+      (2026-11-26). Those turned out to be G3's, which added it.
 - [x] **Inspect** the data and record it, before G3 and G4 rely on it: "What the data holds",
       under "The data" above. Decided with the maintainer (2026-11-26), from those findings:
       - **Bus types: copy IDE.** It's always filled, with one reference bus per file that has
@@ -736,30 +736,57 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
 
 ## Phase G3: The `.raw` reader
 
-- [ ] `PowerflowError::GoParse { file, line, message }`, where `file` is a new `GoFile` (Raw,
-      Rop, Inl or Con), displayed as `case.raw line {line}: …`. `ybus_ffi` maps it to
-      `YBUS_ERROR_PARSE`. The UTF-8 and Latin-1 decoding moves out of `Case::from_bytes` into a
-      helper both readers share.
-- [ ] A tokenizer for the comma format (single quotes, `/` starting a comment outside quotes,
-      `0` ending a section, `Q` ending the file), whose records keep their line numbers. From
-      G2's findings:
+- [x] `PowerflowError::GoParse { file, line, message }`, where `file` is a new `GoFile` (Raw,
+      Rop, Inl or Con), displayed as `case.raw line {line}: …`. The UTF-8 and Latin-1 decoding
+      moves out of `Case::from_bytes` into `decode`, a helper both readers share. `ybus_ffi` is
+      unchanged, as decided with the maintainer (2026-11-26). The C library can't read GO files
+      yet, so `GoParse` falls to `YBUS_ERROR_OTHER`, as `status.rs`'s test expects of a variant
+      added later, until the C library gains GO entry points. Mapping it to `YBUS_ERROR_PARSE`,
+      as first planned, would break that test's rule of one code per variant.
+- [x] A tokenizer for the comma format (single quotes, `/` starting a comment outside quotes,
+      `0` ending a section, `Q` ending the file), whose records keep their line numbers
+      (`case/go/text.rs`, with unit tests). Strict, as decided with the maintainer (2026-11-26):
+      what A.1.3 rules out, such as fields separated by blanks, double quotes and empty fields
+      left to defaults, is an error. From G2's findings:
       - Lines end with CRLF or LF, mixed within a file.
       - The case identification's lines 2 and 3 are free text.
       - A terminator is `0` alone or followed by a `/` comment, with or without a space.
       - `Q` may stand in for the terminators still owed, as when the induction machine section
         isn't terminated.
-- [ ] `RawCase`, with the used fields of each section in file order and the IDs and circuits
+- [x] `RawCase`, with the used fields of each section in file order and the IDs and circuits
       unquoted and trimmed (the data pads them, as in `'1 '`). Unused fields are checked for
       count but not kept, and unused sections are skipped by counting their terminators.
-      They can hold records: area data always does. Tests:
+      They can hold records: area data always does.
+      - **The types:** `RawCase` and its record types are `#[non_exhaustive]`, as decided with
+        the maintainer (2026-11-26), and each record keeps the line it came from, for G4's
+        errors (`case/go/raw.rs`).
+      - **Two checks moved here from G4,** since they're about single fields: IDE must be 1 to
+        4, and K must be 0, because a three-winding record is five lines.
+      - **The rest stays for G4:** the CW, CZ and CM rules, and what a nonzero line-end shunt
+        means (the data has none). So do all cross-record checks, such as duplicate keys and
+        unknown buses.
+
+      Tests:
       - hand-written fixtures in `ybus_powerflow/tests/data/go/` covering every section:
         several loads and shunts on one bus, elements out of service, a transformer with
         magnetizing admittance and an off-nominal ratio and shift, switched-shunt blocks, and
         skipped sections with records in them. They also cover the text G2 found: mixed line
         endings, padded IDs, both terminator spellings, and `Q` in place of the last
-        terminators.
-      - malformed input, checking the file and line named
+        terminators. The fixture is committed with LF endings, and `tests/go_raw_test.rs` builds
+        the CRLF and mixed variants in code, so git's line-ending handling can't change it.
+      - malformed input, checking the file and line named (`tests/go_raw_syntax_test.rs`, 23
+        edits of the fixture)
       - a `catch_unwind` fuzz test, as `tests/matpower_fuzz_test.rs` does
+        (`tests/go_raw_fuzz_test.rs`)
+- [x] **The real data,** in the tests and in CI, as decided with the maintainer (2026-11-26).
+      - **The test:** `tests/go_raw_data_test.rs` reads every fetched `case.raw`, through
+        `common::go_c1_dir`, which skips when the data isn't fetched unless
+        `YBUS_REQUIRE_CASES=1`. The totals and each network's size ranges must match what G2's
+        throwaway reader counted, so each reader checks the other. It took this to find that
+        G2's size table had one scenario's sizes per network, mislabeled as scenario 1's; that
+        table is now corrected.
+      - **CI** caches the 24 MB of archives, not the 194 MB extracted, keyed on the fetch
+        script's hash, and runs the script before `./check.sh`.
 
 ## Phase G4: Conversion to `Case`
 
@@ -771,8 +798,8 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
         - In-service switched shunts add BINIT to the susceptance, as given, even outside its
           C.9 range (decided in G2).
         - NVHI and NVLO become the voltage limits, and VM and VA are copied.
-        - The bus type is IDE's, copied (decided in G2). An IDE other than 1 to 4 is an error
-          naming the line.
+        - The bus type is IDE's, copied (decided in G2). G3's reader already refuses an IDE
+          other than 1 to 4.
       - **Generators:**
         - Copied: PG, QG, QT and QB for the reactive limits, PT and PB for the real limits, and
           STAT.
@@ -783,7 +810,7 @@ for scen in sorted(glob.glob('*/Original_Dataset_*/Network_*/scenario_*')):
         shift, MAG1 and MAG2 as `g_mag` and `b_mag`, and RATA1 and RATC1 as the ratings.
         CW and CM must be 1, and CZ 1, or 2 where that's equivalent (SBASE12 equal to SBASE,
         and NOMV1 and NOMV2 each 0 or their bus's BASKV, decided in G2). Anything else is an
-        error naming the line, as is a nonzero K.
+        error naming the line. G3's reader already refuses a nonzero K.
       - **Angle limits:** ±360.
 - [ ] Switched-shunt ranges by C.9's rule, and contingency voltage limits, on `RawCase`. Tests
       check them on the fixtures.

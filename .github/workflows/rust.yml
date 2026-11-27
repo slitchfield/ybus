@@ -23,6 +23,15 @@ jobs:
             !testdata/matpower/*-normalized
           key: matpower-${{ hashFiles('scripts/fetch-matpower.sh') }}
       - run: scripts/fetch-matpower.sh
+      # The GO Competition Challenge 1 data isn't committed either, so fetch its two pinned
+      #   bundles for the GO reader's tests. Only the archives are cached (24 MB, against 194 MB
+      #   extracted): on a hit the script finds them, checks their SHA-256s and extracts them,
+      #   without downloading. The key hashes the script, which holds the pins.
+      - uses: actions/cache@v6
+        with:
+          path: testdata/go-c1/*.zip
+          key: go-c1-${{ hashFiles('scripts/fetch-go-c1.sh') }}
+      - run: scripts/fetch-go-c1.sh
       # Cases that compute their data with code are evaluated by MATPOWER under Octave and
       #   written as literals. The key covers the MATPOWER pin and both normalization scripts.
       #   Octave is only installed on a cache miss; on a hit the script finds its complete,

@@ -22,6 +22,7 @@ use std::str::FromStr;
 
 use crate::powerflow_error::PowerflowError;
 
+pub mod go;
 mod matpower;
 
 /// A power system case: buses, generators, branches and optional cost data.
@@ -240,12 +241,7 @@ impl Case {
     /// can be affected, and a Windows-1252 byte outside Latin-1 becomes the corresponding
     /// control character rather than an error.
     pub fn from_bytes(bytes: &[u8]) -> Result<Case, PowerflowError> {
-        let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-        let text = match std::str::from_utf8(bytes) {
-            Ok(text) => Cow::Borrowed(text),
-            Err(_) => Cow::Owned(bytes.iter().map(|&byte| char::from(byte)).collect()),
-        };
-        Case::parse(&text)
+        Case::parse(&decode(bytes))
     }
 
     /// Parses the text of a MATPOWER case file (version 2 format) and validates it.
@@ -336,6 +332,17 @@ impl Case {
             .enumerate()
             .map(|(index, bus)| (bus.bus_label, index))
             .collect()
+    }
+}
+
+/// Decodes a case file's bytes as [`Case::from_bytes`] documents: UTF-8 without a leading byte
+/// order mark, or Latin-1 where the bytes aren't valid UTF-8. The MATPOWER and GO readers share
+/// it.
+pub(crate) fn decode(bytes: &[u8]) -> Cow<'_, str> {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Cow::Borrowed(text),
+        Err(_) => Cow::Owned(bytes.iter().map(|&byte| char::from(byte)).collect()),
     }
 }
 

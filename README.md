@@ -53,6 +53,9 @@ completed one that followed it: optimal power flow, interior-point solvers and a
   Competition Challenge 1 dataset bundles from OEDI (checksum verified) into the gitignored
   `testdata/go-c1/`, for the GO reader (goal 4, [`docs/GoParserChecklist.md`](docs/GoParserChecklist.md)).
   It needs `curl` and `unzip`. Set `GO_C1_DIR` to use an existing copy instead.
+  - **How tests use it:** `ybus_powerflow` tests find it through `ybus_powerflow/tests/common`
+    (`go_c1_dir`). As with MATPOWER's cases, they skip when it hasn't been fetched, unless
+    `YBUS_REQUIRE_CASES=1`. The Check CI job fetches it, caching the archives, and sets that.
 - **GPU tests:** the tests of `ybus_cuda` and of ybus_powerflow's `cuda` feature skip, saying so, on
   a machine without CUDA, as on CI. Set `YBUS_REQUIRE_CUDA=1` to make that a failure, when
   running `./check.sh` on a machine with a GPU.

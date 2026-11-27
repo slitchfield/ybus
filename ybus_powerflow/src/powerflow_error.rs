@@ -4,6 +4,8 @@ use std::{fmt, path::PathBuf};
 
 use ybus_ipm::interior_point_error::InteriorPointError;
 
+use crate::case::go::GoFile;
+
 /// Errors returned by `ybus_powerflow` operations.
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
@@ -193,6 +195,17 @@ pub enum PowerflowError {
         /// The solver's error.
         error: InteriorPointError,
     },
+    /// A GO Competition Challenge 1 input file is malformed, or uses syntax the reader doesn't
+    /// support ([`case::go`](crate::case::go)). Unlike [`PowerflowError::Parse`], it names the
+    /// file, since an instance is read from four.
+    GoParse {
+        /// Which of the instance's files.
+        file: GoFile,
+        /// The 1-based line the problem was found on.
+        line: usize,
+        /// What is wrong.
+        message: String,
+    },
     /// The GPU path (feature `cuda`) failed: the CUDA driver or cuSPARSE reported an error,
     /// or the kernels didn't compile.
     #[cfg(feature = "cuda")]
@@ -314,6 +327,11 @@ impl fmt::Display for PowerflowError {
                 write!(f, "generator row {row} can't be used: {reason}")
             }
             PowerflowError::Solver { error } => write!(f, "the OPF solver refused: {error}"),
+            PowerflowError::GoParse {
+                file,
+                line,
+                message,
+            } => write!(f, "{file} line {line}: {message}"),
             #[cfg(feature = "cuda")]
             PowerflowError::Gpu { reason } => write!(f, "the GPU path failed: {reason}"),
         }
